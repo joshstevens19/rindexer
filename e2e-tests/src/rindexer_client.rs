@@ -227,10 +227,7 @@ impl RindexerInstance {
             #[cfg(unix)]
             let child_pids: Vec<String> = pid
                 .and_then(|p| {
-                    std::process::Command::new("pgrep")
-                        .args(["-P", &p.to_string()])
-                        .output()
-                        .ok()
+                    std::process::Command::new("pgrep").args(["-P", &p.to_string()]).output().ok()
                 })
                 .map(|out| {
                     String::from_utf8_lossy(&out.stdout)
@@ -248,8 +245,7 @@ impl RindexerInstance {
             }
 
             // Wait up to 3s for graceful shutdown
-            let graceful =
-                tokio::time::timeout(Duration::from_secs(3), child.wait()).await;
+            let graceful = tokio::time::timeout(Duration::from_secs(3), child.wait()).await;
 
             match graceful {
                 Ok(Ok(status)) => {
@@ -268,9 +264,7 @@ impl RindexerInstance {
             {
                 for cpid in &child_pids {
                     info!("Killing orphaned child process {}", cpid);
-                    let _ = std::process::Command::new("kill")
-                        .args(["-9", cpid])
-                        .output();
+                    let _ = std::process::Command::new("kill").args(["-9", cpid]).output();
                 }
                 // Also kill any rindexer-graphql processes that may have survived.
                 // PostGraphile is spawned as `rindexer-graphql-<pid>` by the core.

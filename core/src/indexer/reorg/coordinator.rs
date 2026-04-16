@@ -7,7 +7,7 @@ use tracing::{info, warn};
 
 use crate::event::callback_registry::ReorgNotification;
 use crate::metrics::indexing as metrics;
-use crate::provider::JsonRpcCachedProvider;
+use crate::provider::{ChainProvider, JsonRpcCachedProvider};
 
 use super::persistence::ReorgBlockHashPersistence;
 use super::task::{DerivedTableInfo, EventTableInfo, ReorgTask};
@@ -33,7 +33,7 @@ impl ReorgCoordinator {
         network: String,
         window: BlockChainWindow,
         persistence: Arc<ReorgBlockHashPersistence>,
-        provider: Arc<JsonRpcCachedProvider>,
+        provider: Arc<dyn ChainProvider>,
         event_tables: Vec<EventTableInfo>,
         derived_tables: Vec<DerivedTableInfo>,
     ) -> anyhow::Result<Self> {
@@ -58,35 +58,126 @@ impl ReorgCoordinator {
         parent_hash: B256,
     ) -> anyhow::Result<Option<ReorgTask>> {
         match self.window.validate_parent(block_number, parent_hash) {
+            ParentValidation::Valid => {
+                self.window.insert(block_number, block_hash, parent_hash);
+                self.persist_and_maybe_prune(block_number, block_hash, parent_hash).await?;
+                Ok(None)
+            }
+            ParentValidation::NoPreviousBlock => {
+                if self.window.is_empty() || block_number == 0 {
+                    self.window.insert(block_number, block_hash, parent_hash);
+                    self.persist_and_maybe_prune(block_number, block_hash, parent_hash).await?;
+                    return Ok(None);
+                }
+
+                // Gap detected: the poller skipped one or more blocks. Fetch the
+                // missing blocks from the canonical chain, then validate each one
+                // against the window to detect reorgs that happened during the gap.
+                let window_latest = self.window.latest_block().unwrap(); // safe: window non-empty
+                let gap_start = window_latest + 1;
+                let gap_end = block_number; // exclusive — we don't fetch block_number itself
+                if gap_start < gap_end {
+                    info!(
+                        network = %self.network,
+                        block_number,
+                        window_latest,
+                        gap_size = gap_end - gap_start,
+                        "Filling block gap in reorg window"
+                    );
+                    if let Some(provider) = &self.provider {
+                        let missing: Vec<U64> = (gap_start..gap_end).map(U64::from).collect();
+                        if let Ok(blocks) =
+                            provider.get_block_by_number_batch(&missing, false).await
+                        {
+                            // Validate each fetched block against the window in order.
+                            // The first fetched block's parent_hash must match the
+                            // window's latest block hash — if it doesn't, a reorg
+                            // happened during the gap.
+                            for b in &blocks {
+                                match self
+                                    .window
+                                    .validate_parent(b.header.number, b.header.parent_hash)
+                                {
+                                    ParentValidation::Mismatch { expected, got } => {
+                                        return self
+                                            .handle_mismatch(block_number, expected, got)
+                                            .await;
+                                    }
+                                    _ => {
+                                        self.window.insert(
+                                            b.header.number,
+                                            b.header.hash,
+                                            b.header.parent_hash,
+                                        );
+                                        self.persist_and_maybe_prune(
+                                            b.header.number,
+                                            b.header.hash,
+                                            b.header.parent_hash,
+                                        )
+                                        .await?;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Re-validate the incoming block now that the gap is filled.
+                self.insert_or_detect_reorg(block_number, block_hash, parent_hash).await
+            }
+            ParentValidation::Mismatch { expected, got } => {
+                self.handle_mismatch(block_number, expected, got).await
+            }
+        }
+    }
+
+    /// Insert a block after validation, or trigger reorg detection on mismatch.
+    async fn insert_or_detect_reorg(
+        &mut self,
+        block_number: u64,
+        block_hash: B256,
+        parent_hash: B256,
+    ) -> anyhow::Result<Option<ReorgTask>> {
+        match self.window.validate_parent(block_number, parent_hash) {
             ParentValidation::Valid | ParentValidation::NoPreviousBlock => {
                 self.window.insert(block_number, block_hash, parent_hash);
                 self.persist_and_maybe_prune(block_number, block_hash, parent_hash).await?;
                 Ok(None)
             }
             ParentValidation::Mismatch { expected, got } => {
-                warn!(
-                    network = %self.network,
-                    block_number,
-                    %expected,
-                    %got,
-                    "Parent hash mismatch — reorg detected"
-                );
-                metrics::record_reorg_detection_source(&self.network, "rpc");
-
-                let (fork_point, canonical_blocks) = self.find_fork_point().await?;
-                let depth = block_number.saturating_sub(fork_point) + 1;
-                metrics::record_reorg(&self.network, depth);
-
-                Ok(Some(ReorgTask {
-                    network: self.network.clone(),
-                    fork_point,
-                    detection_point: block_number,
-                    event_tables: self.event_tables.clone(),
-                    derived_tables: self.derived_tables.clone(),
-                    canonical_blocks,
-                }))
+                self.handle_mismatch(block_number, expected, got).await
             }
         }
+    }
+
+    /// Common path for parent-hash mismatch: log, find fork point, return ReorgTask.
+    async fn handle_mismatch(
+        &mut self,
+        block_number: u64,
+        expected: B256,
+        got: B256,
+    ) -> anyhow::Result<Option<ReorgTask>> {
+        warn!(
+            network = %self.network,
+            block_number,
+            %expected,
+            %got,
+            "Parent hash mismatch — reorg detected"
+        );
+        metrics::record_reorg_detection_source(&self.network, "rpc");
+
+        let (fork_point, canonical_blocks) = self.find_fork_point().await?;
+        let depth = block_number.saturating_sub(fork_point) + 1;
+        metrics::record_reorg(&self.network, depth);
+
+        Ok(Some(ReorgTask {
+            network: self.network.clone(),
+            fork_point,
+            detection_point: block_number,
+            event_tables: self.event_tables.clone(),
+            derived_tables: self.derived_tables.clone(),
+            canonical_blocks,
+        }))
     }
 
     /// Called once on restart before indexing resumes.
@@ -448,7 +539,7 @@ mod tests {
             })
         }));
 
-        let ctx = super::super::ReorgContext {
+        let ctx = ReorgContext {
             postgres: None,
             clickhouse: None,
             registry: Some(&registry),
