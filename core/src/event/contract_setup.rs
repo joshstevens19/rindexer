@@ -10,7 +10,7 @@ use crate::{
         contract::{Contract, EventInputIndexedFilters},
         native_transfer::{NativeTransfers, TraceProcessingMethod},
     },
-    provider::{get_network_provider, CreateNetworkProvider, JsonRpcCachedProvider},
+    provider::{get_network_provider, ChainProvider, CreateNetworkProvider},
     types::single_or_array::StringOrArray,
 };
 use alloy::json_abi::{Event, JsonAbi};
@@ -28,7 +28,7 @@ pub struct NetworkContract {
     pub id: String,
     pub network: String,
     pub indexing_contract_setup: IndexingContractSetup,
-    pub cached_provider: Arc<JsonRpcCachedProvider>,
+    pub cached_provider: Arc<dyn ChainProvider>,
     pub block_clock: BlockClock,
     pub decoder: Decoder,
     pub start_block: Option<U64>,
@@ -46,7 +46,7 @@ impl NetworkContract {
     }
 
     pub fn chain_state_notification(&self) -> Option<Sender<ChainStateNotification>> {
-        self.cached_provider.chain_state_notification.clone()
+        self.cached_provider.chain_state_notification()
     }
 }
 
@@ -85,7 +85,7 @@ impl ContractInformation {
                     ));
                 }
                 Some(provider) => {
-                    let client = Arc::clone(&provider.client);
+                    let client: Arc<dyn ChainProvider> = provider.client.clone();
                     details.push(NetworkContract {
                         id: generate_random_id(10),
                         network: c.network.clone(),
@@ -118,7 +118,7 @@ impl ContractInformation {
 pub struct NetworkTrace {
     pub id: String,
     pub network: String,
-    pub cached_provider: Arc<JsonRpcCachedProvider>,
+    pub cached_provider: Arc<dyn ChainProvider>,
     pub start_block: Option<U64>,
     pub end_block: Option<U64>,
     pub method: TraceProcessingMethod,
@@ -130,7 +130,7 @@ impl NetworkTrace {
     }
 
     pub fn chain_state_notification(&self) -> Option<Sender<ChainStateNotification>> {
-        self.cached_provider.chain_state_notification.clone()
+        self.cached_provider.chain_state_notification()
     }
 }
 
@@ -160,10 +160,11 @@ impl TraceInformation {
                     ));
                 }
                 Some(provider) => {
+                    let client: Arc<dyn ChainProvider> = provider.client.clone();
                     details.push(NetworkTrace {
                         id: generate_random_id(10),
                         network: name,
-                        cached_provider: Arc::clone(&provider.client),
+                        cached_provider: client,
                         start_block: n.start_block,
                         end_block: n.end_block,
                         method: n.method,

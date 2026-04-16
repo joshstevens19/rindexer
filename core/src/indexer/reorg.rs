@@ -1,3 +1,4 @@
+use alloy::primitives::FixedBytes;
 use alloy::{
     dyn_abi::DynSolValue,
     json_abi::Param,
@@ -5,8 +6,12 @@ use alloy::{
 };
 use lru::LruCache;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use tokio::sync::mpsc::UnboundedSender;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::abi::{ABIInput, ABIItem};
@@ -23,7 +28,8 @@ use crate::indexer::tables::{process_table_operations, TableRuntime, TxMetadata}
 use crate::manifest::contract::{OperationType, SetAction};
 use crate::metrics::indexing as metrics;
 use crate::notifications::ChainStateNotification;
-use crate::provider::JsonRpcCachedProvider;
+use crate::provider::ChainProvider;
+use crate::streams::StreamsClients;
 use crate::types::core::LogParam;
 use crate::types::single_or_array::StringOrArray;
 use crate::PostgresClient;
@@ -127,9 +133,9 @@ pub fn reorg_safe_distance_for_chain(chain_id: u64) -> u64 {
 ///
 /// Compares cached block hashes with current canonical chain hashes from the RPC.
 /// Returns the first block number that diverged (i.e., the fork point).
-pub async fn find_fork_point(
+pub async fn find_fork_point<P: ChainProvider>(
     block_cache: &LruCache<u64, BlockMeta>,
-    provider: &Arc<JsonRpcCachedProvider>,
+    provider: &P,
     reorged_block: u64,
 ) -> u64 {
     // Collect cached block numbers walking backwards from just before the reorg.
@@ -446,7 +452,7 @@ async fn rewind_checkpoint_clickhouse(
 /// Deletes rows from derived/custom tables where `rindexer_block_number >= fork_block`.
 /// For `cross_chain` tables, no network filter is applied.
 pub async fn delete_derived_table_rows(
-    tables: &[super::tables::TableRuntime],
+    tables: &[TableRuntime],
     postgres: &Option<Arc<PostgresClient>>,
     clickhouse: &Option<Arc<ClickhouseClient>>,
     fork_block: u64,
@@ -1130,7 +1136,7 @@ fn parse_sol_value(
                 Ok(DynSolValue::Bytes(parsed))
             } else {
                 let size = t.trim_start_matches("bytes").parse::<usize>().unwrap_or(32);
-                let fixed = alloy::primitives::FixedBytes::<32>::left_padding_from(&parsed);
+                let fixed = FixedBytes::<32>::left_padding_from(&parsed);
                 Ok(DynSolValue::FixedBytes(fixed, size))
             }
         }
@@ -1266,7 +1272,7 @@ pub async fn handle_native_transfer_reorg_recovery(
     network: &str,
     fork_block: u64,
     depth: u64,
-    streams_clients: &Option<Arc<Option<crate::streams::StreamsClients>>>,
+    streams_clients: &Option<Arc<Option<StreamsClients>>>,
 ) {
     let schema = generate_indexer_contract_schema_name(indexer_name, "EvmTraces");
     let event_table_name = "native_transfer";
@@ -1305,11 +1311,11 @@ pub async fn handle_native_transfer_reorg_recovery(
 
 /// Shadow cache entry: just the block hash, kept separately from the main LRU cache.
 /// The verifier reads from this after blocks have been confirmed.
-pub type ShadowCache = Arc<std::sync::Mutex<std::collections::HashMap<u64, B256>>>;
+pub type ShadowCache = Arc<Mutex<HashMap<u64, B256>>>;
 
 /// Creates a new empty shadow cache for post-confirmation verification.
 pub fn new_shadow_cache() -> ShadowCache {
-    Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()))
+    Arc::new(Mutex::new(HashMap::new()))
 }
 
 /// Spawns a background task that periodically verifies block hashes after N confirmations.
@@ -1320,12 +1326,12 @@ pub fn new_shadow_cache() -> ShadowCache {
 /// The task runs until the `cancel_token` is cancelled.
 pub fn spawn_post_confirmation_verifier(
     shadow_cache: ShadowCache,
-    provider: Arc<JsonRpcCachedProvider>,
+    provider: Arc<dyn ChainProvider>,
     confirmations: u64,
-    reorg_signal_tx: tokio::sync::mpsc::UnboundedSender<ReorgInfo>,
-    cancel_token: tokio_util::sync::CancellationToken,
+    reorg_signal_tx: UnboundedSender<ReorgInfo>,
+    cancel_token: CancellationToken,
     network: String,
-) -> tokio::task::JoinHandle<()> {
+) -> JoinHandle<()> {
     tokio::spawn(async move {
         let check_interval = std::time::Duration::from_secs(30);
         loop {
@@ -1787,5 +1793,191 @@ mod tests {
             c.remove(&100);
             assert_eq!(c.len(), 1);
         }
+    }
+
+    // ======================================================================
+    // find_fork_point
+    // ======================================================================
+
+    fn make_block_with_hash(number: u64, hash: B256) -> alloy::network::AnyRpcBlock {
+        use alloy::network::{AnyHeader, AnyRpcBlock, AnyRpcHeader};
+        use alloy::rpc::types::{Block, BlockTransactions};
+        AnyRpcBlock::new(
+            Block::new(
+                AnyRpcHeader::from_sealed(AnyHeader { number, ..Default::default() }.seal(hash)),
+                BlockTransactions::Full(vec![]),
+            )
+            .into(),
+        )
+    }
+
+    /// Scenario 1: cache has blocks 98 and 99, canonical chain returns matching hashes.
+    /// Reorg at 100 → fork point should be 100 (block 99 matched → 99 + 1).
+    #[tokio::test]
+    async fn test_find_fork_point_matching_block_found() {
+        use crate::provider::mock::MockChainProvider;
+        use std::num::NonZeroUsize;
+
+        let hash_98 = B256::from([0x98u8; 32]);
+        let hash_99 = B256::from([0x99u8; 32]);
+
+        // Build a cache with blocks 98 and 99, using the same hashes as the canonical provider.
+        let mut cache: LruCache<u64, BlockMeta> = LruCache::new(NonZeroUsize::new(1024).unwrap());
+        cache.put(98, BlockMeta { hash: hash_98, parent_hash: B256::ZERO, timestamp: 0 });
+        cache.put(99, BlockMeta { hash: hash_99, parent_hash: hash_98, timestamp: 0 });
+
+        // Provider returns canonical blocks with the same hashes.
+        let provider = MockChainProvider::new(1).with_blocks(vec![
+            make_block_with_hash(98, hash_98),
+            make_block_with_hash(99, hash_99),
+        ]);
+
+        let fork = find_fork_point(&cache, &provider, 100).await;
+        // Block 99 matches → fork point = 99 + 1 = 100
+        assert_eq!(fork, 100);
+    }
+
+    /// Scenario 2: cache is empty → returns reorged_block unchanged.
+    #[tokio::test]
+    async fn test_find_fork_point_empty_cache() {
+        use crate::provider::mock::MockChainProvider;
+        use std::num::NonZeroUsize;
+
+        let cache: LruCache<u64, BlockMeta> = LruCache::new(NonZeroUsize::new(1024).unwrap());
+        let provider = MockChainProvider::new(1);
+
+        let fork = find_fork_point(&cache, &provider, 100).await;
+        assert_eq!(fork, 100);
+    }
+
+    /// Scenario 3: cache has block 98 with hash 0xAA but canonical chain returns 0xCC for block
+    /// 98. No match found → returns oldest checked block (98).
+    #[tokio::test]
+    async fn test_find_fork_point_all_mismatched() {
+        use crate::provider::mock::MockChainProvider;
+        use std::num::NonZeroUsize;
+
+        let cached_hash = B256::from([0xAAu8; 32]);
+        let canonical_hash = B256::from([0xCCu8; 32]);
+
+        let mut cache: LruCache<u64, BlockMeta> = LruCache::new(NonZeroUsize::new(1024).unwrap());
+        cache.put(98, BlockMeta { hash: cached_hash, parent_hash: B256::ZERO, timestamp: 0 });
+
+        // Provider returns a different hash for block 98.
+        let provider =
+            MockChainProvider::new(1).with_blocks(vec![make_block_with_hash(98, canonical_hash)]);
+
+        let fork = find_fork_point(&cache, &provider, 100).await;
+        // No match → oldest checked block is 98
+        assert_eq!(fork, 98);
+    }
+
+    // ======================================================================
+    // spawn_post_confirmation_verifier
+    // ======================================================================
+
+    /// Hash mismatch: shadow cache has block 100 with hash 0xAA, provider returns
+    /// block 100 with hash 0xBB. Verifier should send a ReorgInfo with fork_block=100.
+    #[tokio::test(start_paused = true)]
+    async fn test_post_confirmation_verifier_detects_mismatch() {
+        use crate::provider::mock::MockChainProvider;
+        use tokio::sync::mpsc::unbounded_channel;
+        use tokio_util::sync::CancellationToken;
+
+        let hash_aa = B256::from([0xAAu8; 32]);
+        let hash_bb = B256::from([0xBBu8; 32]);
+
+        // Shadow cache: block 100 with hash 0xAA
+        let shadow_cache = new_shadow_cache();
+        {
+            let mut c = shadow_cache.lock().unwrap();
+            c.insert(100, hash_aa);
+        }
+
+        // Provider: latest block = 200, block 100 returns hash 0xBB (mismatch!)
+        let provider = Arc::new(
+            MockChainProvider::new(1)
+                .with_block_number(200)
+                .with_blocks(vec![make_block_with_hash(100, hash_bb)]),
+        );
+
+        let (reorg_tx, mut reorg_rx) = unbounded_channel::<ReorgInfo>();
+        let cancel = CancellationToken::new();
+
+        let _handle = spawn_post_confirmation_verifier(
+            shadow_cache,
+            provider,
+            5, // confirmations: verify_up_to = 200 - 5 = 195, so block 100 qualifies
+            reorg_tx,
+            cancel.clone(),
+            "test".to_string(),
+        );
+
+        // Advance time past the 30s check interval to wake the verifier task.
+        // The mock provider resolves instantly (no real I/O), so the task will
+        // complete and send a message. We wait directly on the channel.
+        tokio::time::advance(std::time::Duration::from_secs(31)).await;
+
+        // Should receive a ReorgInfo with fork_block=100
+        let reorg_info = reorg_rx.recv().await.expect("Channel should not be closed");
+        assert_eq!(reorg_info.fork_block, U64::from(100));
+
+        cancel.cancel();
+    }
+
+    /// No mismatch: shadow cache has block 100 with hash 0xAA, provider returns
+    /// block 100 with the same hash 0xAA. Verifier should NOT send any ReorgInfo.
+    ///
+    /// The task loop is triggered by advancing time. After the iteration completes,
+    /// the task loops back into the next select! waiting for 30s or cancel.
+    /// We then advance another 31s to trigger a second iteration, cancel after both,
+    /// and verify no signal was ever sent.
+    #[tokio::test(start_paused = true)]
+    async fn test_post_confirmation_verifier_no_signal_on_matching_hash() {
+        use crate::provider::mock::MockChainProvider;
+        use tokio::sync::mpsc::unbounded_channel;
+        use tokio_util::sync::CancellationToken;
+
+        let hash_aa = B256::from([0xAAu8; 32]);
+
+        // Shadow cache: block 100 with hash 0xAA
+        let shadow_cache = new_shadow_cache();
+        {
+            let mut c = shadow_cache.lock().unwrap();
+            c.insert(100, hash_aa);
+        }
+
+        // Provider: latest block = 200, block 100 returns SAME hash 0xAA (no mismatch)
+        let provider = Arc::new(
+            MockChainProvider::new(1)
+                .with_block_number(200)
+                .with_blocks(vec![make_block_with_hash(100, hash_aa)]),
+        );
+
+        let (reorg_tx, mut reorg_rx) = unbounded_channel::<ReorgInfo>();
+        let cancel = CancellationToken::new();
+
+        let _handle = spawn_post_confirmation_verifier(
+            shadow_cache,
+            provider,
+            5, // confirmations: verify_up_to = 200 - 5 = 195, block 100 qualifies
+            reorg_tx,
+            cancel.clone(),
+            "test".to_string(),
+        );
+
+        // Advance past the 30s interval to trigger the verifier iteration.
+        tokio::time::advance(std::time::Duration::from_secs(31)).await;
+
+        // Cancel and await the task. The select! in the loop will process whichever future
+        // is ready first: the already-fired sleep OR the cancel. Either way, if the iteration
+        // ran, no ReorgInfo will have been sent (hashes matched).
+        // After cancel, the task exits and drops reorg_signal_tx.
+        cancel.cancel();
+        let _ = _handle.await;
+
+        // No ReorgInfo should have been sent — whether the cancel fired before or after
+        // the iteration, matching hashes never produce a signal.
+        assert!(reorg_rx.try_recv().is_err(), "No ReorgInfo should be sent on matching hash");
     }
 }

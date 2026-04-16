@@ -106,12 +106,12 @@ fn get_reth_config(reth_config: Option<RethConfig>) -> Option<RethConfig> {
                 None
             };
 
-        if datadir.is_some() {
-            new_args.push(format!("--datadir {}", datadir.unwrap()));
+        if let Some(datadir) = datadir {
+            new_args.push(format!("--datadir {}", datadir));
         }
 
-        if chain.is_some() {
-            new_args.push(format!("--chain {}", chain.unwrap()));
+        if let Some(chain) = chain {
+            new_args.push(format!("--chain {}", chain));
         }
 
         if enable_http.is_some() && enable_http.unwrap() == "yes" {

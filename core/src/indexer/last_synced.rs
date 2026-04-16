@@ -274,7 +274,7 @@ pub async fn update_progress_and_last_synced_task(
     let update_last_synced_block_result = tokio::time::timeout(
         Duration::from_millis(100),
         config.progress().update_last_synced_block(
-            config.network_contract().cached_provider.chain.id(),
+            config.network_contract().cached_provider.chain().id(),
             config.id(),
             to_block,
         ),

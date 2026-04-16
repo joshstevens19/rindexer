@@ -1,5 +1,3 @@
-use std::{any::Any, sync::Arc, time::Duration};
-
 use alloy::consensus::Transaction;
 use alloy::network::{AnyRpcTransaction, TransactionResponse};
 use alloy::{
@@ -12,13 +10,20 @@ use alloy::{
 use chrono::Utc;
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::{any::Any, sync::Arc, time::Duration};
+use tokio::sync::broadcast::Sender;
 use tokio::time::sleep;
 use tracing::{debug, error, info};
 
+use crate::indexer::tables::TableRuntime;
+use crate::manifest::core::Constants;
+use crate::provider::ChainProvider;
+use crate::streams::StreamsClients;
 use crate::{
     event::contract_setup::{ContractInformation, NetworkContract, TraceInformation},
     indexer::start::ProcessedNetworkContract,
-    is_running,
+    is_running, ReorgEvent,
 };
 
 pub type Decoder = Arc<dyn Fn(Vec<TxHash>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync>;
@@ -98,7 +103,7 @@ impl EventResult {
             log: log.clone(),
             decoded_data: network_contract.decode_log(log.inner),
             tx_information: TxInformation {
-                chain_id: network_contract.cached_provider.chain.id(),
+                chain_id: network_contract.cached_provider.chain().id(),
                 network: network_contract.network.to_string(),
                 address: log_address,
                 block_hash: log.block_hash.expect("log should contain block_hash"),
@@ -133,18 +138,17 @@ pub struct EventCallbackRegistryInformation {
     pub contract: ContractInformation,
     pub callback: EventCallbackType,
     /// Derived/custom tables for this event (for reorg cleanup).
-    pub tables: Arc<Vec<crate::indexer::tables::TableRuntime>>,
+    pub tables: Arc<Vec<TableRuntime>>,
     /// Broadcast sender for reorg events (code-gen mode).
-    pub reorg_sender: Option<tokio::sync::broadcast::Sender<crate::indexer::reorg::ReorgEvent>>,
+    pub reorg_sender: Option<Sender<ReorgEvent>>,
     /// Streams clients for reorg retraction.
-    pub streams_clients: Arc<Option<crate::streams::StreamsClients>>,
+    pub streams_clients: Arc<Option<StreamsClients>>,
     /// RPC providers by network, required for replaying table operations with view calls.
-    pub providers:
-        Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>>,
+    pub providers: Arc<HashMap<String, Arc<dyn ChainProvider>>>,
     /// Manifest constants used by table expressions.
-    pub constants: Arc<crate::manifest::core::Constants>,
+    pub constants: Arc<Constants>,
     /// Multicall address overrides by network.
-    pub multicall_addresses: Arc<std::collections::HashMap<String, Option<String>>>,
+    pub multicall_addresses: Arc<HashMap<String, Option<String>>>,
 }
 
 impl EventCallbackRegistryInformation {
