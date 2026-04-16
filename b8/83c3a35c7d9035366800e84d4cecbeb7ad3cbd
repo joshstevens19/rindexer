@@ -1,0 +1,23 @@
+core/src/indexer/reorg/coordinator.rs
+  dd2bbb8fd7b76f6f 61-142,151,156-183
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "b883c3a35c7d9035366800e84d4cecbeb7ad3cbd",
+  "prompts": {
+    "dd2bbb8fd7b76f6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a59f7324-f9b3-4615-8017-04e82b67d47c",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 142,
+      "overriden_lines": 0
+    }
+  }
+}
