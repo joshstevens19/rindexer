@@ -79,6 +79,7 @@ fn native_transfer_csv_no_panic_test(
                 name: "anvil".to_string(),
                 chain_id: 31337,
                 rpc: context.anvil.rpc_url.clone(),
+                reorg_handling: None,
             }],
             global: GlobalConfig { health_port: context.health_port },
             storage: StorageConfig {
@@ -107,6 +108,7 @@ fn native_transfer_csv_no_panic_test(
                 reorg_safe_distance: None,
                 include_events: Some(vec![EventConfig { name: "Transfer".to_string() }]),
                 tables: None,
+                streams: None,
             }],
         };
 

@@ -47,8 +47,7 @@ pub enum CallbackResult {
 }
 
 impl CallbackResult {
-    ///return the (from_block, to_block, network) entry regardless of variant
-
+    /// return the (from_block, to_block, network) entry regardless of variant
     pub fn first_metadata(&self) -> Option<(U64, U64, String)> {
         match self {
             Self::Event(events) => events.first().map(|e| {
