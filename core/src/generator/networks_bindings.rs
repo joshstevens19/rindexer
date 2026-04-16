@@ -218,6 +218,7 @@ mod tests {
             disable_logs_bloom_checks: None,
             multicall3_address: None,
             reth: None,
+            reorg_handling: None,
         }
     }
 

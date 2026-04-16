@@ -880,9 +880,6 @@ mod tests {
     use alloy::primitives::B256;
     use serde_json::json;
 
-    use super::{FinalizedBuffer, StreamsClients};
-    use crate::manifest::stream::StreamEvent;
-
     // ---- helpers ----
 
     fn stream_event(name: &str) -> StreamEvent {
@@ -1180,6 +1177,7 @@ mod tests {
             shared_secret: "s".to_string(),
             networks: vec!["polygon".to_string()],
             events: vec![stream_event("Transfer")],
+            delivery: None,
         };
         let msg = sample_event_message(); // network: ethereum
         let result =
@@ -1194,6 +1192,7 @@ mod tests {
             shared_secret: "s".to_string(),
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Approval")],
+            delivery: None,
         };
         let msg = sample_event_message(); // event: Transfer
         let result =
@@ -1216,6 +1215,7 @@ mod tests {
             shared_secret: "secret".to_string(),
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Transfer")],
+            delivery: None,
         };
 
         let msg = sample_event_message();
@@ -1236,6 +1236,7 @@ mod tests {
             shared_secret: "s".to_string(),
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Transfer")],
+            delivery: None,
         };
 
         let msg = sample_event_message();
@@ -1256,6 +1257,7 @@ mod tests {
             shared_secret: "s".to_string(),
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Transfer")], // does not include NativeTransfer
+            delivery: None,
         };
 
         let msg = EventMessage {
@@ -1283,6 +1285,7 @@ mod tests {
             shared_secret: "s".to_string(),
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Transfer")],
+            delivery: None,
         };
 
         let msg = sample_event_message();
@@ -1312,6 +1315,7 @@ mod tests {
             shared_secret: "s".to_string(),
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Transfer")], // doesn't matter, force_send
+            delivery: None,
         };
 
         let result =
@@ -1336,6 +1340,7 @@ mod tests {
             queue_id: "q-456".to_string(),
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Transfer")],
+            delivery: None,
         };
 
         let msg = sample_event_message();
@@ -1353,6 +1358,7 @@ mod tests {
             queue_id: "q-456".to_string(),
             networks: vec!["polygon".to_string()],
             events: vec![stream_event("Transfer")],
+            delivery: None,
         };
 
         let msg = sample_event_message(); // network: ethereum
@@ -1361,33 +1367,5 @@ mod tests {
             .await;
 
         assert_eq!(result.unwrap(), 0);
-    }
-
-    #[test]
-    fn test_finalized_buffer_flush() {
-        let mut buf = FinalizedBuffer::new(10);
-        buf.add(100, vec![json!({"event": "a"})]);
-        buf.add(105, vec![json!({"event": "b"})]);
-
-        let flushed = buf.flush(112);
-        assert_eq!(flushed.len(), 1);
-        assert_eq!(flushed[0].0, 100);
-
-        let flushed2 = buf.flush(120);
-        assert_eq!(flushed2.len(), 1);
-    }
-
-    #[test]
-    fn test_finalized_buffer_discard_range() {
-        let mut buf = FinalizedBuffer::new(10);
-        buf.add(98, vec![json!({"event": "a"})]);
-        buf.add(99, vec![json!({"event": "b"})]);
-        buf.add(100, vec![json!({"event": "c"})]);
-
-        buf.discard_range(99, 100);
-
-        let flushed = buf.flush(200);
-        assert_eq!(flushed.len(), 1);
-        assert_eq!(flushed[0].0, 98);
     }
 }

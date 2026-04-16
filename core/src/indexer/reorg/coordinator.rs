@@ -7,7 +7,7 @@ use tracing::{info, warn};
 
 use crate::event::callback_registry::ReorgNotification;
 use crate::metrics::indexing as metrics;
-use crate::provider::{ChainProvider, JsonRpcCachedProvider};
+use crate::provider::ChainProvider;
 
 use super::persistence::ReorgBlockHashPersistence;
 use super::task::{DerivedTableInfo, EventTableInfo, ReorgTask};
@@ -22,7 +22,7 @@ pub struct ReorgCoordinator {
     network: String,
     window: BlockChainWindow,
     persistence: Arc<ReorgBlockHashPersistence>,
-    provider: Option<Arc<JsonRpcCachedProvider>>,
+    provider: Option<Arc<dyn ChainProvider>>,
     event_tables: Vec<EventTableInfo>,
     derived_tables: Vec<DerivedTableInfo>,
     blocks_since_flush: u64,

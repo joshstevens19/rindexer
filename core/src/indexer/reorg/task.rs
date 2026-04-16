@@ -7,7 +7,7 @@ use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::postgres::client::PostgresClient;
 use crate::manifest::contract::SetAction;
 use crate::metrics::indexing as metrics;
-use crate::provider::JsonRpcCachedProvider;
+use crate::provider::ChainProvider;
 
 use super::validate_sql_condition;
 use super::window::BlockChainWindow;
@@ -680,7 +680,7 @@ impl ReorgTask {
         window: &mut BlockChainWindow,
         postgres: Option<&PostgresClient>,
         clickhouse: Option<&Arc<ClickhouseClient>>,
-        provider: Option<&Arc<JsonRpcCachedProvider>>,
+        provider: Option<&Arc<dyn ChainProvider>>,
     ) -> anyhow::Result<ReorgTaskResult> {
         // Validate network before any SQL interpolation
         super::validate_sql_value(&self.network, "reorg task network")?;
