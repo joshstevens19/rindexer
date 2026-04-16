@@ -1,0 +1,11 @@
+core/src/helpers/file.rs
+  74765553b8c9673c 99
+core/src/generator/mod.rs
+  74765553b8c9673c 11-13,18-20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "8d0e9798c1ccc374074492644c7130791efbf851",
+  "prompts": {}
+}

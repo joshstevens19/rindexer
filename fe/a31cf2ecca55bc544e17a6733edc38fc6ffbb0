@@ -1,0 +1,27 @@
+core/src/streams/clients.rs
+  c959855a4a26db76 872-878,880,886-908,913-953,955-956,989-1137,1139-1194,1196-1207,1209-1229,1231-1238,1244-1252,1254-1261,1267-1292,1299-1326,1332-1339,1343-1387
+core/src/streams/cloudflare_queues.rs
+  c959855a4a26db76 20-21,27,32-43,53-54,100-101,137-252
+core/src/streams/webhook.rs
+  c959855a4a26db76 52-95,102-106
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "fea31cf2ecca55bc544e17a6733edc38fc6ffbb0",
+  "prompts": {
+    "c959855a4a26db76": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "68642d89-79f7-477a-bd06-8a8f974e834e",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 689,
+      "total_deletions": 13,
+      "accepted_lines": 628,
+      "overriden_lines": 0
+    }
+  }
+}

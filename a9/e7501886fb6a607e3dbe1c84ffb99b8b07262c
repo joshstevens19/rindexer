@@ -1,0 +1,23 @@
+.github/workflows/release.yml
+  f44a22254aeb45ef 144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "a9e7501886fb6a607e3dbe1c84ffb99b8b07262c",
+  "prompts": {
+    "f44a22254aeb45ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "126fb240-9ee8-4059-b629-3ea21864317c",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    }
+  }
+}

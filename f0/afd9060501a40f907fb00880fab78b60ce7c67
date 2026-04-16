@@ -1,0 +1,40 @@
+core/src/indexer/reorg.rs
+  847014acdc95bfaf 1,11-14,31-32,136,138,1139,1314,1331-1332,1334
+  8eb93b81bc1ec27e 1796
+core/src/indexer/fetch_logs.rs
+  847014acdc95bfaf 9,181,184,440,654,1278-1287,1291-1292,1298-1320,1323-1348,1352-1374,1376-1400,1402-1426,1428-1452,1454-1476,1478-1491,1493
+  8eb93b81bc1ec27e 1492
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "f0afd9060501a40f907fb00880fab78b60ce7c67",
+  "prompts": {
+    "847014acdc95bfaf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ba97b2b6-c1ec-4c31-8b29-a4cc233ccc5c",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 226,
+      "total_deletions": 8,
+      "accepted_lines": 216,
+      "overriden_lines": 0
+    },
+    "8eb93b81bc1ec27e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "edca3c59-b30f-4bf9-9917-3ad3d23245f6",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 293,
+      "total_deletions": 6,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    }
+  }
+}

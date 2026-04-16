@@ -1,0 +1,39 @@
+cli/src/commands/new.rs
+  9fdfcbbd02b88ab6 109-110,113-114
+core/src/blockclock/mod.rs
+  847014acdc95bfaf 42,86,88,143
+  8eb93b81bc1ec27e 218-264,357
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "74a787202cb9bafc29ac3969234b50807b2f2fc4",
+  "prompts": {
+    "8eb93b81bc1ec27e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "edca3c59-b30f-4bf9-9917-3ad3d23245f6",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 370,
+      "total_deletions": 110,
+      "accepted_lines": 14,
+      "overriden_lines": 0
+    },
+    "9fdfcbbd02b88ab6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "872225f2-fad4-4cd6-9da2-bd89a6ce6efc",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 4,
+      "total_deletions": 4,
+      "accepted_lines": 4,
+      "overriden_lines": 0
+    }
+  }
+}

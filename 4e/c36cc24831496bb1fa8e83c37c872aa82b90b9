@@ -1,0 +1,24 @@
+core/src/indexer/tables.rs
+  847014acdc95bfaf 177,428,840,962,1129,1257,2130,2305,2553,3502,4285,4312
+  8eb93b81bc1ec27e 5186-5272,5274-5277,5280-5382,5387-5516,5521-5548,5552,5554,5556-5593,5596-5597
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "4ec36cc24831496bb1fa8e83c37c872aa82b90b9",
+  "prompts": {
+    "8eb93b81bc1ec27e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "edca3c59-b30f-4bf9-9917-3ad3d23245f6",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 394,
+      "overriden_lines": 0
+    }
+  }
+}

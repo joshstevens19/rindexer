@@ -1,0 +1,24 @@
+core/src/generator/events_bindings.rs
+  b44b22da986211af 1050-1051,1052-1064,1066-1081
+  74765553b8c9673c 19,404,713,721
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "77eeef40a01746395065911ff7cf64ad12282c98",
+  "prompts": {
+    "b44b22da986211af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "df83240b-4c45-438d-b5d0-182f0b37699a",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 29,
+      "overriden_lines": 0
+    }
+  }
+}
