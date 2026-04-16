@@ -1,0 +1,306 @@
+# OpsGenie
+
+OpsGenie is an alert and incident management platform by Atlassian. rindexer can create OpsGenie alerts when on-chain events occur.
+
+:::info
+Due to rate limits out of rindexer control ChatBots will only send messages with max block range of 10 blocks.
+Most people who will use rindexer Chatbots will only want to start sending messages of the live data anyway.
+The ChatBots are really only meant to be ran sending live data not historic data.
+:::
+
+## Setup an OpsGenie integration
+
+1. Log into your OpsGenie account at [opsgenie.com](https://www.opsgenie.com/).
+2. Navigate to **Settings** > **Integration list**.
+3. Search for **API** and click **Add**.
+4. Copy the **API Key** from the integration settings. This is what you will use to create alerts.
+5. Make sure the integration is enabled and saved.
+
+## Configure rindexer
+
+`opsgenie` property accepts an array allowing you to split up the alerts any way you wish.
+
+## Example
+
+:::code-group
+
+```yaml [contract events]
+name: RocketPoolETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  chat: // [!code focus]
+    opsgenie: // [!code focus]
+      - api_key: ${OPSGENIE_API_KEY} // [!code focus]
+        priority: P1 // [!code focus]
+        networks: // [!code focus]
+          - ethereum // [!code focus]
+        messages:
+          - event_name: Transfer // [!code focus]
+            # filter_expression is optional // [!code focus]
+            filter_expression: "from = '0x0338ce5020c447f7e668dc2ef778025ce3982662' || from = '0x0338ce5020c447f7e668dc2ef778025ce398266u' && value >= 10 && value <= 2000000000000000000" // [!code focus]
+            template_inline: "New RETH Transfer Event // [!code focus]
+
+                              from: {{from}} // [!code focus]
+
+                              to: {{to}} // [!code focus]
+
+                              amount: {{format_value(value, 18)}} // [!code focus]
+
+                              RETH contract: {{transaction_information.address}} // [!code focus]
+
+                              etherscan: https://etherscan.io/tx/{{transaction_information.transaction_hash}} // [!code focus]
+                              " // [!code focus]
+```
+
+```yaml [native transfers]
+name: ETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+native_transfers:
+  networks:
+    - network: ethereum
+  chat: // [!code focus]
+    opsgenie: // [!code focus]
+      - api_key: ${OPSGENIE_API_KEY} // [!code focus]
+        priority: P1 // [!code focus]
+        networks: // [!code focus]
+          - ethereum // [!code focus]
+        messages:
+          - event_name: NativeTransfer // [!code focus]
+            template_inline: "New ETH Transfer Event // [!code focus]
+
+                              from: {{from}} // [!code focus]
+
+                              to: {{to}} // [!code focus]
+
+                              amount: {{format_value(value, 18)}} // [!code focus]
+
+                              Token address: {{transaction_information.address}} // [!code focus]
+
+                              etherscan: https://etherscan.io/tx/{{transaction_information.transaction_hash}} // [!code focus]
+                              " // [!code focus]
+```
+
+:::
+
+## api_key
+
+This is your OpsGenie API integration key. You can find it in your integration settings.
+
+:::info
+We advise you to put this in a environment variables.
+:::
+
+```yaml
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  chat: // [!code focus]
+    opsgenie: // [!code focus]
+      - api_key: ${OPSGENIE_API_KEY} // [!code focus]
+```
+
+## priority
+
+The priority level for the OpsGenie alert. Must be one of: `P1`, `P2`, `P3`, `P4`, `P5`. Defaults to `P1`.
+
+- `P1` - Critical
+- `P2` - High
+- `P3` - Moderate
+- `P4` - Low
+- `P5` - Informational
+
+```yaml
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  chat: // [!code focus]
+    opsgenie: // [!code focus]
+      - api_key: ${OPSGENIE_API_KEY}
+        priority: P1 // [!code focus]
+```
+
+## networks
+
+This is an array of networks you want to create OpsGenie alerts for.
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  chat: // [!code focus]
+    opsgenie: // [!code focus]
+      - api_key: ${OPSGENIE_API_KEY}
+        priority: P1
+        networks: // [!code focus]
+          - ethereum // [!code focus]
+```
+
+## messages
+
+This is an array of messages you want to create as OpsGenie alerts. It is an array as you can define many different
+messages with different conditions.
+
+### event_name
+
+This is the name of the event you want to send a message for, must match the ABI event name.
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  chat: // [!code focus]
+    opsgenie: // [!code focus]
+      - api_key: ${OPSGENIE_API_KEY}
+        priority: P1
+        networks:
+          - ethereum
+        messages:
+          - event_name: Transfer // [!code focus]
+```
+
+### filter_expression
+
+This accepts a filter expression to filter the events before creating an OpsGenie alert.
+
+:::info
+This is optional, if you do not provide any filter expression all the events will create OpsGenie alerts.
+:::
+
+Filter expressions allow for condition checking of the event data and support logical operators to combine multiple conditions.
+
+### conditions
+
+This accepts an array of conditions you want to apply to the event data before creating an OpsGenie alert.
+
+:::warning
+Conditions are supported for backwards compatibility. It is recommended to use `filter_expression` instead of `conditions`.
+:::
+
+:::info
+This is optional, if you do not provide any conditions all the events will create OpsGenie alerts.
+:::
+
+### template_inline
+
+You can then write your own template inline, this is the template used as the OpsGenie alert message.
+You have to use the ABI input names in object notation for example if i wanted to put value in the template
+i just have to write `{{value}}` in the template and it will be replaced with the value of the event itself.
+
+:::info
+OpsGenie alert messages are plain text only.
+:::
+
+#### transaction_information
+
+You also can use the `transaction_information` object to get common information about the transaction, this is the
+transaction information for the event.
+
+```rs
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TxInformation {
+    pub network: String,
+    pub address: Address,
+    pub block_hash: BlockHash,
+    pub block_number: U64,
+    pub transaction_hash: TxHash,
+    pub log_index: U256,
+    pub transaction_index: U64,
+}
+```
+
+:::info
+To avoid confusion `address` in `transaction_information` is the address of the contract the event was emitted from.
+:::
+
+#### format_value
+
+You can use the `format_value` function to format the value of the event to a decimal value with the specified decimals.
+
+Lets put it all together:
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  chat: // [!code focus]
+    opsgenie: // [!code focus]
+      - api_key: ${OPSGENIE_API_KEY}
+        priority: P1
+        networks:
+          - ethereum
+        messages:
+          - event_name: Transfer // [!code focus]
+            template_inline: "New RETH Transfer Event // [!code focus]
+
+                              from: {{from}} // [!code focus]
+
+                              to: {{to}} // [!code focus]
+
+                              amount: {{format_value(value, 18)}} // [!code focus]
+
+                              RETH contract: {{transaction_information.address}} // [!code focus]
+
+                              etherscan: https://etherscan.io/tx/{{transaction_information.transaction_hash}} // [!code focus]
+                              " // [!code focus]
+```
