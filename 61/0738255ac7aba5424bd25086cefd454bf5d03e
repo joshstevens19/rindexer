@@ -1,0 +1,25 @@
+e2e-tests/src/rindexer_client.rs
+  dd2bbb8fd7b76f6f 223-247,250-252,254,256,258-261,263-273,275-279
+e2e-tests/Cargo.toml
+  dd2bbb8fd7b76f6f 25-27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "610738255ac7aba5424bd25086cefd454bf5d03e",
+  "prompts": {
+    "dd2bbb8fd7b76f6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a59f7324-f9b3-4615-8017-04e82b67d47c",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 300,
+      "total_deletions": 138,
+      "accepted_lines": 198,
+      "overriden_lines": 0
+    }
+  }
+}
