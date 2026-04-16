@@ -29,3 +29,51 @@ pub fn is_solidity_static_bytes_type(solidity_type: &str) -> bool {
         && solidity_type.len() > 5
         && solidity_type[5..].chars().all(char::is_numeric)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Base types — sanity checks
+    #[test]
+    fn test_parse_uint256() {
+        assert_eq!(parse_solidity_integer_type("uint256"), ("uint", 256));
+    }
+
+    #[test]
+    fn test_parse_int128() {
+        assert_eq!(parse_solidity_integer_type("int128"), ("int", 128));
+    }
+
+    // Array types — the fix: these would panic with ParseIntError before
+    #[test]
+    fn test_parse_uint256_dynamic_array() {
+        assert_eq!(parse_solidity_integer_type("uint256[]"), ("uint", 256));
+    }
+
+    #[test]
+    fn test_parse_int128_dynamic_array() {
+        assert_eq!(parse_solidity_integer_type("int128[]"), ("int", 128));
+    }
+
+    #[test]
+    fn test_parse_uint8_dynamic_array() {
+        assert_eq!(parse_solidity_integer_type("uint8[]"), ("uint", 8));
+    }
+
+    #[test]
+    fn test_parse_uint256_fixed_array() {
+        assert_eq!(parse_solidity_integer_type("uint256[3]"), ("uint", 256));
+    }
+
+    #[test]
+    fn test_parse_int64_fixed_array() {
+        assert_eq!(parse_solidity_integer_type("int64[10]"), ("int", 64));
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid Solidity type")]
+    fn test_parse_invalid_type_panics() {
+        parse_solidity_integer_type("string");
+    }
+}
