@@ -338,31 +338,9 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                 return Ok(());
             }
 
-            // event_length > 0 check above guarantees at least one entry. Both trace
-            // variants carry the same metadata in found_in_request/tx_information, so
-            // we extract from whichever variant is first without discriminating.
-            let (from_block, to_block, network) = match &results {
-                CallbackResult::Event(event) => {
-                    let first = event.first().expect("event_length > 0");
-                    (
-                        first.found_in_request.from_block,
-                        first.found_in_request.to_block,
-                        first.tx_information.network.clone(),
-                    )
-                }
-                CallbackResult::Trace(event) => {
-                    let first = event.first().expect("event_length > 0");
-                    let (fir, tx_info) = match first {
-                        TraceResult::NativeTransfer {
-                            found_in_request, tx_information, ..
-                        } => (found_in_request, tx_information),
-                        TraceResult::Block { found_in_request, tx_information, .. } => {
-                            (found_in_request, tx_information)
-                        }
-                    };
-                    (fir.from_block, fir.to_block, tx_info.network.clone())
-                }
-            };
+            //guarantees non empty batch
+            let (from_block, to_block, network) =
+                results.first_metadata().expect("event_length > 0 guarantees at least one entry");
 
             let mut indexed_count = 0;
             let mut sql_bulk_data: Vec<Vec<EthereumSqlTypeWrapper>> = Vec::new();
