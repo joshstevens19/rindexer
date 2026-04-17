@@ -585,10 +585,16 @@ async fn start_indexing_contract_events(
                 generate_indexer_contract_schema_name(&event.indexer_name, &event.contract.name);
             let table_name = camel_to_snake(&event.event_name);
             let checkpoint_table = generate_internal_event_table_name(&schema, &event.event_name);
-            network_event_tables
-                .entry(network_contract.network.clone())
-                .or_default()
-                .push(EventTableInfo::try_new(schema, table_name, checkpoint_table)?);
+            network_event_tables.entry(network_contract.network.clone()).or_default().push(
+                EventTableInfo::try_new(
+                    schema,
+                    table_name,
+                    checkpoint_table,
+                    event.indexer_name.clone(),
+                    event.contract.name.clone(),
+                    event.event_name.clone(),
+                )?,
+            );
 
             build_derived_tables_for_event(
                 &event.event_name,
@@ -613,10 +619,16 @@ async fn start_indexing_contract_events(
                 let table_name = camel_to_snake("NativeTransfer");
                 let checkpoint_table =
                     generate_internal_event_table_name(&schema, "NativeTransfer");
-                network_event_tables
-                    .entry(nt_detail.network.clone())
-                    .or_default()
-                    .push(EventTableInfo::try_new(schema, table_name, checkpoint_table)?);
+                network_event_tables.entry(nt_detail.network.clone()).or_default().push(
+                    EventTableInfo::try_new(
+                        schema,
+                        table_name,
+                        checkpoint_table,
+                        manifest.name.clone(),
+                        NATIVE_TRANSFER_CONTRACT_NAME.to_string(),
+                        "NativeTransfer".to_string(),
+                    )?,
+                );
             }
         }
 

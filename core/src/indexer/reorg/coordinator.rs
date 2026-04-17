@@ -387,7 +387,10 @@ impl ReorgCoordinator {
             // Clone, but the callers always have it behind Arc<Option<StreamsClients>>.
             // Since we only have a reference here, we cannot move it into a spawn.
             // Keep the await inline (the method is fast — it just publishes to queues).
-            if let Err(e) = clients.stream_reorg(&network, fork_point, depth, &tx_hashes).await {
+            if let Err(e) = clients
+                .stream_reorg(&network, fork_point, depth, &tx_hashes, &result.affected_tables)
+                .await
+            {
                 tracing::error!(
                     network = %network,
                     fork_point,
@@ -766,6 +769,9 @@ mod tests {
                 "schema".to_string(),
                 "table".to_string(),
                 "schema_table".to_string(),
+                "test_indexer".to_string(),
+                "TestContract".to_string(),
+                "TestEvent".to_string(),
             )
             .unwrap()],
             derived_tables: vec![],
