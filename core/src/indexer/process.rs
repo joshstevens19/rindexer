@@ -103,7 +103,7 @@ async fn process_event_logs(
     let mut tasks = Vec::new();
     let mut pending_error: Option<Box<dyn std::error::Error + Send>> = None;
 
-    while let Some(result) = logs_stream.next().await {
+    'outer: while let Some(result) = logs_stream.next().await {
         // Check for a deferred error from previous coalescing iteration
         if let Some(e) = pending_error.take() {
             return Err(Box::new(ProviderError::CustomError(e.to_string())));
@@ -111,11 +111,9 @@ async fn process_event_logs(
 
         // Process the first result. Reorg-bearing batches are forwarded as-is
         // (no coalescing) so the coordinator's rollback semantics are preserved.
-        let (mut coalesced_logs, mut final_from_block, mut final_to_block, had_reorg) = match result
-        {
+        let (mut coalesced_logs, mut final_from_block, mut final_to_block) = match result {
             Ok(fetch_result) => {
-                let had_reorg = fetch_result.reorg.is_some();
-                if had_reorg {
+                if fetch_result.reorg.is_some() {
                     let task = handle_logs_result(
                         Arc::clone(&config),
                         callback_permits.clone(),
@@ -132,13 +130,12 @@ async fn process_event_logs(
                     continue;
                 }
                 let logs: Vec<Log> = fetch_result.logs;
-                (logs, fetch_result.from_block, fetch_result.to_block, had_reorg)
+                (logs, fetch_result.from_block, fetch_result.to_block)
             }
             Err(e) => {
                 return Err(Box::new(ProviderError::CustomError(e.to_string())));
             }
         };
-        let _ = had_reorg;
 
         // Drain any additional READY results (non-blocking via now_or_never).
         // SAFETY: tokio mpsc Receiver::recv/poll_recv is cancel-safe — dropping the
@@ -151,8 +148,13 @@ async fn process_event_logs(
             match logs_stream.next().now_or_never() {
                 Some(Some(Ok(fetch_result))) => {
                     if fetch_result.reorg.is_some() {
-                        // Flush the coalesced batch first, then forward the reorg
-                        // batch standalone on the next outer iteration.
+                        // Flush the coalesced batch first (preserving its captured
+                        // block range), then forward the reorg batch standalone,
+                        // then `continue 'outer` so the next coalescing cycle
+                        // starts with fresh final_from_block/final_to_block state
+                        // — otherwise the stale range would poison subsequent
+                        // min/max arithmetic and report a bogus `from_block` to
+                        // callbacks.
                         let coalesced_result = FetchLogsResult {
                             logs: std::mem::take(&mut coalesced_logs),
                             from_block: final_from_block,
@@ -187,7 +189,7 @@ async fn process_event_logs(
                         } else {
                             tasks.push(reorg_task);
                         }
-                        continue;
+                        continue 'outer;
                     }
                     final_from_block = final_from_block.min(fetch_result.from_block);
                     final_to_block = final_to_block.max(fetch_result.to_block);

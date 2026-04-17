@@ -190,6 +190,9 @@ pub fn fetch_logs_stream(
                         next_from = sub_to + U64::from(1);
                         sequence_id = sequence_id.saturating_add(1);
                     }
+                    // Drop the dispatcher's sender clone so worker_rx.recv()
+                    // returns None once the last worker's clone is dropped —
+                    // this is load-bearing for the reorder task to terminate.
                     drop(worker_tx);
                 });
 
@@ -751,17 +754,6 @@ impl Drop for WorkerDropGuard {
             self.worker_done_notify.notify_one();
         }
     }
-}
-
-/// Classify whether an error is a rate limit error for adaptive concurrency.
-#[allow(dead_code)]
-fn is_rate_limit_error(error: &(dyn Error + Send)) -> bool {
-    let msg = error.to_string().to_lowercase();
-    msg.contains("rate limit")
-        || msg.contains("too many requests")
-        || msg.contains("429")
-        || (msg.contains("exceeded") && msg.contains("limit"))
-        || msg.contains("request rate exceeded")
 }
 
 async fn parallel_worker(
@@ -2610,28 +2602,6 @@ mod tests {
             assert!(result.is_none(), "no logs emitted for inverted range");
             let next = next.expect("self-correction returns a fixed next filter");
             assert_eq!(next.next.from_block(), U64::from(200));
-        }
-
-        #[test]
-        fn is_rate_limit_error_recognizes_common_messages() {
-            let cases = [
-                ("Error: rate limit exceeded", true),
-                ("Error: too many requests", true),
-                ("HTTP 429: slow down", true),
-                ("Request rate exceeded", true),
-                ("monthly quota exceeded: call limit hit", true),
-                ("connection reset", false),
-                ("block range too large", false),
-            ];
-            for (msg, expected) in cases {
-                let err: Box<dyn Error + Send> = Box::new(std::io::Error::other(msg));
-                assert_eq!(
-                    is_rate_limit_error(err.as_ref()),
-                    expected,
-                    "classification failed for {:?}",
-                    msg
-                );
-            }
         }
     }
 }
