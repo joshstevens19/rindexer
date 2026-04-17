@@ -1,0 +1,27 @@
+core/tests/e2e_parallel_fetch.rs
+  1c310fb5324a32f8 291-305,308-309,313-322,389,422,424,427,430,433-434,438-446,448-449,452-458,516-523,529-532,534-535,537
+core/src/indexer/fetch_logs.rs
+  1c310fb5324a32f8 192-194
+core/src/indexer/process.rs
+  1c310fb5324a32f8 105,113,115,132,150-156,191
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.0",
+  "base_commit_sha": "0a42e3f705bb3c350c76c02a1916d962b9eaafc2",
+  "prompts": {
+    "1c310fb5324a32f8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3a6e88e9-e1d4-4670-a53c-5571d0e432d8",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 82,
+      "total_deletions": 63,
+      "accepted_lines": 1276,
+      "overriden_lines": 0
+    }
+  }
+}
