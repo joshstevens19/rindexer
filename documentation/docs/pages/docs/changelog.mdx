@@ -6,6 +6,7 @@
 
 ### Bug fixes
 -------------------------------------------------
+- fix: Handle int/uint array types (e.g. `uint256[]`) in `parse_solidity_integer_type` to prevent ParseIntError during codegen
 
 - fix: ClickHouse hash serialization so String are stored as proper strings instead of corrupted scientific-notation values.
 
