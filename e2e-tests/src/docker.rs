@@ -137,6 +137,7 @@ pub async fn stop_postgres_container(name: &str) -> Result<()> {
 
 /// Start an ephemeral ClickHouse container on a random HTTP port.
 /// Returns `(container_name, http_port)`.
+#[allow(dead_code)]
 pub async fn start_clickhouse_container() -> Result<(String, u16)> {
     ensure_docker_daemon().await?;
 
@@ -186,6 +187,7 @@ pub async fn start_clickhouse_container() -> Result<(String, u16)> {
 }
 
 /// Wait for ClickHouse to accept HTTP queries.
+#[allow(dead_code)]
 pub async fn wait_for_clickhouse_ready(port: u16, timeout_seconds: u64) -> Result<()> {
     let start = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs(timeout_seconds);
@@ -206,6 +208,7 @@ pub async fn wait_for_clickhouse_ready(port: u16, timeout_seconds: u64) -> Resul
 }
 
 /// Build the standard set of ClickHouse env vars for rindexer.
+#[allow(dead_code)]
 pub fn clickhouse_env_vars(port: u16) -> Vec<(String, String)> {
     vec![
         ("CLICKHOUSE_URL".into(), format!("http://localhost:{port}")),
@@ -216,6 +219,7 @@ pub fn clickhouse_env_vars(port: u16) -> Vec<(String, String)> {
 }
 
 /// Generic container stop (works for any Docker container).
+#[allow(dead_code)]
 pub async fn stop_container(name: &str) -> Result<()> {
     let _ = Command::new("docker").args(["rm", "-f", name]).output();
     Ok(())

@@ -1,4 +1,4 @@
-use std::{path::Path, sync::Arc};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 use alloy::primitives::U64;
 use futures::future::try_join_all;
@@ -10,13 +10,21 @@ use tokio::{
     time::Instant,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::database::clickhouse::client::{ClickhouseClient, ClickhouseConnectionError};
+use crate::database::generate::generate_indexer_contract_schema_name;
+use crate::database::postgres::generate::generate_internal_event_table_name;
 use crate::event::config::{ContractEventProcessingConfig, FactoryEventProcessingConfig};
-use crate::helpers::format_duration;
+use crate::helpers::{camel_to_snake, format_duration};
 use crate::indexer::native_transfer::native_transfer_block_processor;
+use crate::indexer::reorg::{
+    reorg_safe_distance_for_chain, BlockChainWindow, DerivedColumnJournal, DerivedColumnRollback,
+    DerivedTableInfo, DerivedTableRollbackOp, EventTableInfo, ReorgBlockHashPersistence,
+    ReorgContext, ReorgCoordinator,
+};
 use crate::indexer::Indexer;
+use crate::manifest::network::ReorgHandlingConfig;
 use crate::{
     database::postgres::client::PostgresConnectionError,
     event::{
@@ -83,6 +91,9 @@ pub enum StartIndexingError {
 
     #[error("Encountered unknown error: {0}")]
     UnknownError(String),
+
+    #[error("Invalid configuration: {0}")]
+    ConfigError(#[from] anyhow::Error),
 }
 
 #[derive(Clone)]
@@ -386,6 +397,263 @@ async fn start_indexing_contract_events(
         }
     }
 
+    // Build per-network reorg handling config lookup (includes chain_id for window size resolution)
+    let reorg_configs: HashMap<String, (ReorgHandlingConfig, u64)> = manifest
+        .networks
+        .iter()
+        .filter_map(|n| {
+            n.reorg_handling.as_ref().and_then(|cfg| {
+                if cfg.enabled {
+                    Some((n.name.clone(), (cfg.clone(), n.chain_id)))
+                } else {
+                    None
+                }
+            })
+        })
+        .collect();
+
+    // Build per-network event tables and derived tables for reorg rollback.
+    let mut network_event_tables: HashMap<String, Vec<EventTableInfo>> = HashMap::new();
+    let mut network_derived_tables: HashMap<String, Vec<DerivedTableInfo>> = HashMap::new();
+    for event in registry.events.iter() {
+        for network_contract in event.contract.details.iter() {
+            let schema =
+                generate_indexer_contract_schema_name(&event.indexer_name, &event.contract.name);
+            let table_name = camel_to_snake(&event.event_name);
+            let event_table_full = format!("{}.{}", schema, table_name);
+            let checkpoint_table = generate_internal_event_table_name(&schema, &event.event_name);
+            network_event_tables
+                .entry(network_contract.network.clone())
+                .or_default()
+                .push(EventTableInfo::try_new(schema, table_name, checkpoint_table)?);
+
+            for tr in event.tables.iter() {
+                let derived =
+                    network_derived_tables.entry(network_contract.network.clone()).or_default();
+
+                // Build rollback_ops from table event mappings that reference this event
+                let event_table_name = event_table_full.clone();
+                let mut rollback_ops: Vec<DerivedTableRollbackOp> = Vec::new();
+                let mut journal_columns: Vec<DerivedColumnJournal> = Vec::new();
+
+                for table_event in &tr.table.events {
+                    if table_event.event != event.event_name {
+                        continue;
+                    }
+                    for operation in &table_event.operations {
+                        use crate::manifest::contract::OperationType;
+                        if !matches!(
+                            operation.operation_type,
+                            OperationType::Upsert | OperationType::Update
+                        ) {
+                            continue;
+                        }
+
+                        let mut where_columns: Vec<(String, String)> = operation
+                            .where_clause
+                            .iter()
+                            .filter_map(|(col, val)| {
+                                val.strip_prefix('$')
+                                    .map(|field| (col.clone(), camel_to_snake(field)))
+                            })
+                            .collect();
+                        where_columns.sort_by(|a, b| a.0.cmp(&b.0));
+
+                        let where_col_names: Vec<String> =
+                            where_columns.iter().map(|(col, _)| col.clone()).collect();
+
+                        let columns: Vec<DerivedColumnRollback> = operation
+                            .set
+                            .iter()
+                            .filter(|set_col| {
+                                set_col.action.reverse().is_some()
+                                    && set_col.event_field_name().is_some()
+                            })
+                            .map(|set_col| {
+                                DerivedColumnRollback::try_new(
+                                    set_col.column.clone(),
+                                    camel_to_snake(set_col.event_field_name().unwrap()),
+                                    set_col.action.clone(),
+                                )
+                            })
+                            .collect::<anyhow::Result<Vec<_>>>()?;
+
+                        // Collect non-reversible columns for journal-based recalculation
+                        for set_col in &operation.set {
+                            if set_col.action.reverse().is_some() {
+                                continue; // handled by rollback_ops
+                            }
+                            if !journal_columns.iter().any(|jc| jc.derived_column == set_col.column)
+                            {
+                                journal_columns.push(DerivedColumnJournal::try_new(
+                                    set_col.column.clone(),
+                                    set_col.action.clone(),
+                                    where_col_names.clone(),
+                                )?);
+                            }
+                        }
+
+                        if !columns.is_empty() {
+                            rollback_ops.push(DerivedTableRollbackOp::try_new(
+                                event_table_name.clone(),
+                                where_columns,
+                                columns,
+                                operation.condition().map(String::from),
+                            )?);
+                        }
+                    }
+                }
+
+                // Merge into existing entry or create a new one
+                if let Some(existing) =
+                    derived.iter_mut().find(|d| d.full_table_name == tr.full_table_name)
+                {
+                    existing.rollback_ops.extend(rollback_ops);
+                    for jc in journal_columns {
+                        if !existing
+                            .journal_columns
+                            .iter()
+                            .any(|e| e.derived_column == jc.derived_column)
+                        {
+                            existing.journal_columns.push(jc);
+                        }
+                    }
+                } else {
+                    derived.push(DerivedTableInfo::try_new(
+                        tr.full_table_name.clone(),
+                        tr.table.cross_chain,
+                        rollback_ops,
+                        journal_columns,
+                    )?);
+                }
+            }
+        }
+    }
+
+    // Register native transfer tables for reorg rollback (if native transfers are enabled).
+    // Native transfers use the virtual contract name "EvmTraces" with event "NativeTransfer".
+    if manifest.native_transfers.enabled {
+        if let Some(networks) = &manifest.native_transfers.networks {
+            for nt_detail in networks {
+                let schema = generate_indexer_contract_schema_name(
+                    &manifest.name,
+                    NATIVE_TRANSFER_CONTRACT_NAME,
+                );
+                let table_name = camel_to_snake("NativeTransfer");
+                let checkpoint_table =
+                    generate_internal_event_table_name(&schema, "NativeTransfer");
+                network_event_tables
+                    .entry(nt_detail.network.clone())
+                    .or_default()
+                    .push(EventTableInfo::try_new(schema, table_name, checkpoint_table)?);
+            }
+        }
+    }
+
+    // Shared persistence per invocation (shared across all coordinators)
+    let reorg_persistence =
+        Arc::new(ReorgBlockHashPersistence::new(postgres.clone(), clickhouse.clone()));
+
+    // Build one ReorgCoordinator per network (shared across all events on that network).
+    // The first non-blocking event on each network takes ownership; subsequent events get None.
+    //
+    // Startup reorg validation MUST run before any indexing begins — including the
+    // historical phase — so that stale checkpoints are corrected before events are
+    // fetched.  Coordinators are only kept for live indexing; when we are in the
+    // historical-only pass they are dropped after validation.
+    let mut network_coordinators: HashMap<String, ReorgCoordinator> = HashMap::new();
+    for (network_name, (reorg_config, chain_id)) in &reorg_configs {
+        let window_size = reorg_config
+            .window_size
+            .unwrap_or_else(|| 2 * reorg_safe_distance_for_chain(*chain_id) as usize);
+        let event_tables = network_event_tables.get(network_name).cloned().unwrap_or_default();
+
+        let window = match reorg_persistence.load(network_name, window_size).await {
+            Ok(window) => {
+                info!(
+                    "Loaded {} blocks into reorg window for network {}",
+                    window.len(),
+                    network_name,
+                );
+                window
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to load reorg window from persistence for {}: {}. Using empty window.",
+                    network_name, e
+                );
+                BlockChainWindow::try_new(window_size)?
+            }
+        };
+
+        // Get a provider for this network from any registry event targeting it
+        let provider = registry
+            .events
+            .iter()
+            .flat_map(|e| e.contract.details.iter())
+            .find(|nc| nc.network == *network_name)
+            .map(|nc| nc.cached_provider.clone());
+
+        if let Some(provider) = provider {
+            let derived_tables =
+                network_derived_tables.get(network_name).cloned().unwrap_or_default();
+            let mut coordinator = ReorgCoordinator::new(
+                network_name.clone(),
+                window,
+                Arc::clone(&reorg_persistence),
+                provider,
+                event_tables,
+                derived_tables,
+            )?;
+
+            // Get streams_clients for this network (if any event has one)
+            let startup_streams_clients = registry
+                .events
+                .iter()
+                .find(|e| e.contract.details.iter().any(|d| d.network == *network_name))
+                .map(|e| e.streams_clients.clone());
+
+            // Run startup validation
+            match coordinator.validate_on_startup().await {
+                Ok(Some(startup_task)) => {
+                    warn!(
+                        "Startup reorg detected on {} (fork_point: {}, depth: {}). Executing rollback before indexing.",
+                        network_name,
+                        startup_task.fork_point,
+                        startup_task.detection_point.saturating_sub(startup_task.fork_point) + 1,
+                    );
+                    let reorg_ctx = ReorgContext {
+                        postgres: postgres.as_deref(),
+                        clickhouse: clickhouse.as_ref(),
+                        registry: Some(&registry),
+                        streams_clients: startup_streams_clients
+                            .as_ref()
+                            .and_then(|a| a.as_ref().as_ref()),
+                    };
+                    if let Err(e) = coordinator.handle_reorg(startup_task, &reorg_ctx).await {
+                        error!(
+                            "Failed to execute startup reorg rollback for {}: {}",
+                            network_name, e
+                        );
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    error!(
+                        "Startup reorg validation failed for {}: {}. Proceeding without validation.",
+                        network_name, e
+                    );
+                }
+            }
+
+            // Only keep coordinators for live indexing; in the historical-only pass
+            // they served their purpose (startup validation) and can be dropped.
+            if !no_live_indexing_forced {
+                network_coordinators.insert(network_name.clone(), coordinator);
+            }
+        }
+    }
+
     while let Some(res) = block_tasks.next().await {
         let (
             event,
@@ -545,8 +813,156 @@ async fn start_indexing_contract_events(
                 &dependencies,
             );
         } else {
-            let process_event = tokio::spawn(process_non_blocking_event(event_processing_config));
+            // DESIGN: One ReorgCoordinator per network, owned by the first non-blocking event
+            // spawned on that network. The coordinator holds ALL event tables for the network,
+            // so reorg rollbacks cover every table regardless of which event task drives
+            // detection. Subsequent events on the same network receive None. This means if
+            // the owning task exits or errors, reorg detection stops for the network. A
+            // future improvement could wrap the coordinator in Arc<Mutex<>> for redundancy.
+            let reorg_coordinator =
+                if event_processing_config.live_indexing() && !no_live_indexing_forced {
+                    let network_name = event_processing_config.network_contract().network.clone();
+                    network_coordinators.remove(&network_name)
+                } else {
+                    None
+                };
+
+            let process_event = tokio::spawn(process_non_blocking_event(
+                event_processing_config,
+                reorg_coordinator,
+            ));
             non_blocking_process_events.push(process_event);
+        }
+    }
+
+    // Build per-network reorg coordinators for dependency events.
+    // Any coordinators left over in network_coordinators (not consumed by non-blocking events)
+    // are available for dependency events. Build new ones for networks only used in dependencies.
+    if !no_live_indexing_forced {
+        // Collect all networks needed by dependency events
+        let dep_networks: std::collections::HashSet<String> = dependency_event_processing_configs
+            .iter()
+            .flat_map(|dep| {
+                dep.events_config
+                    .iter()
+                    .filter(|e| e.live_indexing())
+                    .map(|e| e.network_contract().network.clone())
+            })
+            .collect();
+
+        // Build coordinators for networks that weren't already consumed
+        let mut dep_coordinators: HashMap<String, ReorgCoordinator> = HashMap::new();
+        for network_name in &dep_networks {
+            // Try to take a leftover from the non-blocking build
+            if let Some(coord) = network_coordinators.remove(network_name) {
+                dep_coordinators.insert(network_name.clone(), coord);
+                continue;
+            }
+
+            // Otherwise build a fresh one
+            if let Some((reorg_config, chain_id)) = reorg_configs.get(network_name) {
+                let window_size = reorg_config
+                    .window_size
+                    .unwrap_or_else(|| 2 * reorg_safe_distance_for_chain(*chain_id) as usize);
+                let event_tables =
+                    network_event_tables.get(network_name).cloned().unwrap_or_default();
+
+                let window = match reorg_persistence.load(network_name, window_size).await {
+                    Ok(window) => {
+                        info!(
+                            "Dependency events - Loaded {} blocks into reorg window for network {}",
+                            window.len(),
+                            network_name,
+                        );
+                        window
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Dependency events - Failed to load reorg window for {}: {}. Using empty window.",
+                            network_name, e
+                        );
+                        BlockChainWindow::try_new(window_size)?
+                    }
+                };
+
+                // Get a provider from any dependency event config for this network
+                let provider = dependency_event_processing_configs
+                    .iter()
+                    .flat_map(|dep| dep.events_config.iter())
+                    .find(|e| e.network_contract().network == *network_name)
+                    .map(|e| e.network_contract().cached_provider.clone());
+
+                if let Some(provider) = provider {
+                    let derived_tables =
+                        network_derived_tables.get(network_name).cloned().unwrap_or_default();
+                    let mut coordinator = ReorgCoordinator::new(
+                        network_name.clone(),
+                        window,
+                        Arc::clone(&reorg_persistence),
+                        provider,
+                        event_tables,
+                        derived_tables,
+                    )?;
+
+                    // Get streams_clients for this network from dependency events
+                    let dep_streams_clients = dependency_event_processing_configs
+                        .iter()
+                        .flat_map(|dep| dep.events_config.iter())
+                        .find(|e| e.network_contract().network == *network_name)
+                        .map(|e| e.streams_clients());
+
+                    match coordinator.validate_on_startup().await {
+                        Ok(Some(startup_task)) => {
+                            warn!(
+                                "Dependency events - Startup reorg detected on {} (fork_point: {}, depth: {}). Executing rollback.",
+                                network_name,
+                                startup_task.fork_point,
+                                startup_task.detection_point.saturating_sub(startup_task.fork_point) + 1,
+                            );
+                            let reorg_ctx = ReorgContext {
+                                postgres: postgres.as_deref(),
+                                clickhouse: clickhouse.as_ref(),
+                                registry: Some(&registry),
+                                streams_clients: dep_streams_clients
+                                    .as_ref()
+                                    .and_then(|a| a.as_ref().as_ref()),
+                            };
+                            if let Err(e) = coordinator.handle_reorg(startup_task, &reorg_ctx).await
+                            {
+                                error!(
+                                    "Dependency events - Failed to execute startup reorg rollback for {}: {}",
+                                    network_name, e
+                                );
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            error!(
+                                "Dependency events - Startup reorg validation failed for {}: {}. Proceeding without validation.",
+                                network_name, e
+                            );
+                        }
+                    }
+
+                    dep_coordinators.insert(network_name.clone(), coordinator);
+                }
+            }
+        }
+
+        // Inject per-network coordinators into each dependency config group
+        for dep_config in &mut dependency_event_processing_configs {
+            let networks: std::collections::HashSet<String> = dep_config
+                .events_config
+                .iter()
+                .filter(|e| e.live_indexing())
+                .map(|e| e.network_contract().network.clone())
+                .collect();
+
+            for network_name in networks {
+                if let Some(coord) = dep_coordinators.remove(&network_name) {
+                    dep_config.reorg_coordinators.insert(network_name, coord);
+                }
+            }
         }
     }
 

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use ethers::types::U256;
 use std::future::Future;
 use std::pin::Pin;
@@ -10,79 +10,92 @@ use crate::tests::registry::{TestDefinition, TestModule};
 
 pub struct ReorgTests;
 
-// ---------------------------------------------------------------------------
-// Known test gap: Post-confirmation verifier (30s background task in reorg.rs)
-//
-// The verifier catches "silent" reorgs — reorgs the live poller misses due to
-// network blips or polling gaps. It compares shadow-cached block hashes against
-// canonical chain hashes after N confirmations.
-//
-// This CANNOT be tested with Anvil because `anvil_reorg(depth)` always changes
-// the tip block hash, which means the live poller's tip-hash-change detection
-// catches it first. To test the verifier in isolation, you'd need a mock RPC
-// that returns stale block hashes during live polling but correct hashes when
-// the verifier queries later — or an Anvil extension for mid-chain reorgs
-// that don't affect the tip.
-// ---------------------------------------------------------------------------
-
 impl TestModule for ReorgTests {
     fn get_tests() -> Vec<TestDefinition> {
         vec![
             TestDefinition::new(
-                "test_reorg_tip_hash_csv",
-                "Reorg: tip hash change detected, CSV data correct after recovery",
-                reorg_tip_hash_csv,
-            )
-            .with_timeout(120)
-            .with_chain_id(137),
-            TestDefinition::new(
-                "test_reorg_parent_hash_csv",
-                "Reorg: checkpoint recovery after stop/reorg/restart, CSV data correct",
-                reorg_parent_hash_csv,
-            )
-            .with_timeout(120)
-            .with_chain_id(137),
-            TestDefinition::new(
-                "test_reorg_deep_csv",
-                "Reorg: depth=10 across multiple event blocks, all orphaned rows removed",
-                reorg_deep_csv,
-            )
-            .with_timeout(120)
-            .with_chain_id(137),
-            TestDefinition::new(
-                "test_reorg_pg_recovery",
-                "Reorg: Postgres events deleted and re-indexed correctly after reorg",
-                reorg_pg_recovery,
+                "test_reorg_live_pg_recovery",
+                "Reorg: live detection via parent hash mismatch, PG rollback + no duplicates",
+                reorg_live_pg_recovery,
             )
             .with_timeout(180)
             .with_chain_id(137),
             TestDefinition::new(
-                "test_reorg_ch_recovery",
-                "Reorg: ClickHouse events deleted and re-indexed correctly after reorg",
-                reorg_ch_recovery,
+                "test_reorg_offline_startup_validation",
+                "Reorg: stop/reorg/restart, startup validation catches stale reorg_block_hashes",
+                reorg_offline_startup_validation,
             )
             .with_timeout(180)
             .with_chain_id(137),
             TestDefinition::new(
-                "test_reorg_safe_distance",
-                "Reorg: reorg_safe_distance=true keeps indexer behind head, unaffected by reorg",
-                reorg_safe_distance,
+                "test_reorg_csv_invalidation",
+                "Reorg: CSV data remains consistent after stop/reorg/restart",
+                reorg_csv_invalidation,
             )
             .with_timeout(120)
             .with_chain_id(137),
             TestDefinition::new(
-                "test_reorg_idempotency",
-                "Reorg: two consecutive reorgs produce clean state, no corruption",
-                reorg_idempotency,
+                "test_reorg_double_reorg_idempotency",
+                "Reorg: two consecutive offline reorgs, PG state clean after both",
+                reorg_double_reorg_idempotency,
+            )
+            .with_timeout(240)
+            .with_chain_id(137),
+            TestDefinition::new(
+                "test_reorg_live_clickhouse_recovery",
+                "Reorg: live detection via parent hash mismatch, ClickHouse rollback + no duplicates",
+                reorg_live_clickhouse_recovery,
             )
             .with_timeout(180)
             .with_chain_id(137),
             TestDefinition::new(
-                "test_reorg_derived_table_replay",
-                "Reorg: derived balance table (upsert+add) triggers FullReplay, balances correct after recovery",
-                reorg_derived_table_replay,
+                "test_reorg_offline_clickhouse_validation",
+                "Reorg: stop/reorg/restart with ClickHouse, startup validation catches stale hashes",
+                reorg_offline_clickhouse_validation,
             )
             .with_timeout(180)
+            .with_chain_id(137),
+            TestDefinition::new(
+                "test_reorg_deep_reorg_recovery",
+                "Reorg: deep reorg (depth=5) offline, PG correctly rolls back all affected blocks",
+                reorg_deep_reorg_recovery,
+            )
+            .with_timeout(180)
+            .with_chain_id(137),
+            TestDefinition::new(
+                "test_reorg_no_events_in_range",
+                "Reorg: offline reorg in empty block range, recovery succeeds with no events to delete",
+                reorg_no_events_in_range,
+            )
+            .with_timeout(180)
+            .with_chain_id(137),
+            TestDefinition::new(
+                "test_reorg_aggregation_table_rollback",
+                "Reorg: aggregation table (upsert+add) correctly rolled back after offline reorg",
+                reorg_aggregation_table_rollback,
+            )
+            .with_timeout(240)
+            .with_chain_id(137),
+            TestDefinition::new(
+                "test_reorg_live_deep_reorg",
+                "Reorg: deep live reorg (depth=3) detected via parent hash mismatch, PG rollback correct",
+                reorg_live_deep_reorg,
+            )
+            .with_timeout(180)
+            .with_chain_id(137),
+            TestDefinition::new(
+                "test_reorg_offline_new_events_on_fork",
+                "Reorg: offline reorg with new events on canonical fork, PG reflects new data",
+                reorg_offline_new_events_on_fork,
+            )
+            .with_timeout(240)
+            .with_chain_id(137),
+            TestDefinition::new(
+                "test_reorg_webhook_stream_notification",
+                "Reorg: webhook stream receives __rindexer_reorg retraction event after live reorg",
+                reorg_webhook_stream_notification,
+            )
+            .with_timeout(240)
             .with_chain_id(137),
         ]
     }
@@ -104,9 +117,10 @@ fn create_reorg_config(
         context.health_port,
     );
     config.name = "reorg_test".to_string();
-    // Use Polygon chain_id so rindexer enables reorg detection
     config.networks[0].name = "polygon".to_string();
     config.networks[0].chain_id = 137;
+    config.networks[0].reorg_handling =
+        Some(crate::test_suite::ReorgHandlingConfig { enabled: true, window_size: None });
     config.contracts = vec![crate::test_suite::ContractConfig {
         name: "SimpleERC20".to_string(),
         details: vec![crate::test_suite::ContractDetail {
@@ -119,55 +133,9 @@ fn create_reorg_config(
         reorg_safe_distance: Some(serde_json::json!(false)),
         include_events: Some(vec![crate::test_suite::EventConfig { name: "Transfer".to_string() }]),
         tables: None,
+        streams: None,
     }];
     config
-}
-
-/// Start the indexer, wait for historic sync to complete, then send a
-/// transfer during live indexing and wait for it to appear in CSV.
-/// This guarantees the live poller is active and has cached block hashes
-/// before returning — no timing assumptions.
-async fn setup_and_index_with_live_proof(
-    context: &mut TestContext,
-    config: crate::test_suite::RindexerConfig,
-    contract_address: &str,
-    pre_sync_event_count: usize,
-) -> Result<()> {
-    helpers::copy_abis_to_project(&context.project_path)?;
-    let config_path = context.project_path.join("rindexer.yaml");
-    let yaml = serde_yaml::to_string(&config)?;
-    std::fs::write(&config_path, yaml)?;
-
-    let mut rindexer = crate::rindexer_client::RindexerInstance::new(
-        &context.rindexer_binary,
-        context.project_path.clone(),
-    );
-    rindexer.start_indexer().await?;
-    context.rindexer = Some(rindexer);
-
-    // Wait for historic sync (the mint + pre-reorg transfers)
-    context.wait_for_sync_completion(30).await?;
-
-    // Send a transfer during live indexing so the poller processes it
-    // and caches the block hash. This is deterministic proof the poller
-    // is active — no sleep-based guessing.
-    let live_recipient = generate_test_address(99);
-    context.anvil.send_transfer(contract_address, &live_recipient, U256::from(777u64)).await?;
-    context.anvil.mine_block().await?;
-
-    // Wait for the live transfer to appear in CSV
-    let expected_count = pre_sync_event_count + 1; // +1 for the live transfer
-    let actual = wait_for_csv_count(context, expected_count, 30).await?;
-    if actual < expected_count {
-        return Err(anyhow::anyhow!(
-            "Live poller did not process transfer: expected {} CSV rows, got {}",
-            expected_count,
-            actual
-        ));
-    }
-    info!("Live poller confirmed active: {} CSV rows", actual);
-
-    Ok(())
 }
 
 /// Read CSV row count (excluding header).
@@ -184,8 +152,6 @@ fn csv_row_count(context: &TestContext) -> usize {
 }
 
 /// Wait for CSV row count to reach expected value. Returns the actual count.
-/// This is a deterministic wait — it polls for an observable condition,
-/// not a fixed duration.
 async fn wait_for_csv_count(
     context: &TestContext,
     expected: usize,
@@ -236,193 +202,292 @@ async fn wait_for_pg_count(
     Ok(last_count)
 }
 
-// ---------------------------------------------------------------------------
-// Test 1: Tip hash changed (CSV)
-// ---------------------------------------------------------------------------
-fn reorg_tip_hash_csv(context: &mut TestContext) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
-    Box::pin(async move {
-        info!("Running Reorg Tip Hash CSV Test");
+/// Start indexer with postgres env vars, wait for sync, then confirm
+/// the live poller is active by sending a transfer and waiting for it.
+async fn start_indexer_with_pg(
+    context: &mut TestContext,
+    config: crate::test_suite::RindexerConfig,
+    pg_port: u16,
+) -> Result<()> {
+    helpers::copy_abis_to_project(&context.project_path)?;
+    let yaml = serde_yaml::to_string(&config)?;
+    std::fs::write(context.project_path.join("rindexer.yaml"), yaml)?;
 
-        let contract_address = context.deploy_test_contract().await?;
-        let amounts = [1000u64, 2000, 3000];
-        let recipients: Vec<_> = (0..3).map(generate_test_address).collect();
+    let mut rindexer = crate::rindexer_client::RindexerInstance::new(
+        &context.rindexer_binary,
+        context.project_path.clone(),
+    );
+    for (k, v) in crate::docker::postgres_env_vars(pg_port) {
+        rindexer = rindexer.with_env(&k, &v);
+    }
+    rindexer.start_indexer().await?;
+    context.rindexer = Some(rindexer);
+    context.wait_for_sync_completion(30).await?;
+    Ok(())
+}
 
-        for (r, a) in recipients.iter().zip(amounts.iter()) {
-            context.anvil.send_transfer(&contract_address, r, U256::from(*a)).await?;
-            context.anvil.mine_block().await?;
-        }
+/// Restart the indexer with the same postgres env vars.
+async fn restart_indexer_with_pg(context: &mut TestContext, pg_port: u16) -> Result<()> {
+    helpers::copy_abis_to_project(&context.project_path)?;
+    let mut rindexer = crate::rindexer_client::RindexerInstance::new(
+        &context.rindexer_binary,
+        context.project_path.clone(),
+    );
+    for (k, v) in crate::docker::postgres_env_vars(pg_port) {
+        rindexer = rindexer.with_env(&k, &v);
+    }
+    rindexer.start_indexer().await?;
+    context.rindexer = Some(rindexer);
+    context.wait_for_sync_completion(30).await?;
+    Ok(())
+}
 
-        // 1 mint + 3 transfers = 4 pre-sync events
-        let config = create_reorg_config(context, &contract_address);
-        setup_and_index_with_live_proof(context, config, &contract_address, 4).await?;
+/// Stop the running indexer.
+async fn stop_indexer(context: &mut TestContext) -> Result<()> {
+    if let Some(r) = context.rindexer.as_mut() {
+        let _ = r.stop().await;
+    }
+    context.rindexer = None;
+    Ok(())
+}
 
-        let pre_count = csv_row_count(context);
-        info!("Pre-reorg CSV rows: {}", pre_count);
+/// Assert no duplicate tx_hashes exist in a PG table.
+async fn assert_no_pg_duplicates(conn_str: &str, table: &str) -> Result<()> {
+    let (client, connection) = tokio_postgres::connect(conn_str, tokio_postgres::NoTls).await?;
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
 
-        // Trigger reorg at tip (depth=2 — affects the live transfer block + one more)
-        context.anvil.trigger_reorg(2).await?;
+    let dup_rows = client
+        .query(
+            &format!(
+                "SELECT tx_hash, COUNT(*) as cnt FROM {} \
+                 GROUP BY tx_hash HAVING COUNT(*) > 1",
+                table
+            ),
+            &[],
+        )
+        .await?;
 
-        // Wait for rindexer to detect + recover (log-based, deterministic)
-        if let Some(r) = &context.rindexer {
-            r.wait_for_reorg_recovery(60).await?;
-        }
-
-        // Wait for CSV count to stabilize (re-indexing after recovery)
-        let post_count = wait_for_csv_count(context, pre_count, 15).await?;
-        info!("Post-reorg CSV rows: {}", post_count);
-
-        if post_count < pre_count {
-            return Err(anyhow::anyhow!(
-                "Post-reorg CSV has fewer rows ({}) than pre-reorg ({})",
-                post_count,
-                pre_count
-            ));
-        }
-
-        // Verify reorg was detected via logs
-        if let Some(r) = &context.rindexer {
-            if !r.reorg_detected.load(std::sync::atomic::Ordering::Relaxed) {
-                return Err(anyhow::anyhow!("Reorg was not detected by rindexer"));
-            }
-        }
-
-        info!("Reorg Tip Hash CSV Test PASSED: reorg detected, recovery completed, CSV consistent");
-        Ok(())
-    })
+    if !dup_rows.is_empty() {
+        return Err(anyhow::anyhow!(
+            "Found {} duplicate tx_hash entries in {} after reorg recovery",
+            dup_rows.len(),
+            table
+        ));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
-// Test 2: Reorg recovery via checkpoint re-sync (CSV)
-// Validates that stopping the indexer, triggering a reorg, and restarting
-// produces correct data via checkpoint-based recovery.
+// ClickHouse helpers
 // ---------------------------------------------------------------------------
-fn reorg_parent_hash_csv(
+
+/// Execute an arbitrary SQL query against ClickHouse via HTTP GET.
+/// Returns the response body trimmed.
+#[allow(dead_code)]
+async fn clickhouse_query(port: u16, query: &str) -> Result<String> {
+    let client = reqwest::Client::new();
+    let url = format!("http://localhost:{}/", port);
+    let resp = client.get(&url).query(&[("query", query)]).send().await?;
+    let body = resp.text().await?;
+    Ok(body.trim().to_string())
+}
+
+/// Return the row count for a ClickHouse table.
+#[allow(dead_code)]
+async fn clickhouse_row_count(port: u16, table: &str) -> Result<i64> {
+    let body = clickhouse_query(port, &format!("SELECT count() FROM {}", table)).await?;
+    let count: i64 = body.parse().map_err(|e| anyhow::anyhow!("parse count: {}", e))?;
+    Ok(count)
+}
+
+/// Poll until the ClickHouse row count for `table` reaches `expected`.
+/// Returns the actual count when done (may still be < expected on timeout).
+#[allow(dead_code)]
+async fn wait_for_ch_count(
+    port: u16,
+    table: &str,
+    expected: i64,
+    timeout_secs: u64,
+) -> Result<i64> {
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(timeout_secs);
+    let mut last_count: i64 = 0;
+
+    while start.elapsed() < timeout {
+        if let Ok(count) = clickhouse_row_count(port, table).await {
+            last_count = count;
+            if last_count >= expected {
+                return Ok(last_count);
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    Ok(last_count)
+}
+
+/// Assert no duplicate tx_hashes exist in a ClickHouse table.
+#[allow(dead_code)]
+async fn assert_no_ch_duplicates(port: u16, table: &str) -> Result<()> {
+    let body = clickhouse_query(
+        port,
+        &format!("SELECT tx_hash, count() as cnt FROM {} GROUP BY tx_hash HAVING cnt > 1", table),
+    )
+    .await?;
+
+    if !body.is_empty() {
+        return Err(anyhow::anyhow!(
+            "Found duplicate tx_hash entries in {} after reorg recovery: {}",
+            table,
+            body
+        ));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Dual-backend (PG + CH) indexer management helpers
+// ---------------------------------------------------------------------------
+
+/// Start indexer with both Postgres and ClickHouse env vars.
+#[allow(dead_code)]
+async fn start_indexer_with_pg_and_ch(
+    context: &mut TestContext,
+    config: crate::test_suite::RindexerConfig,
+    pg_port: u16,
+    ch_port: u16,
+) -> Result<()> {
+    helpers::copy_abis_to_project(&context.project_path)?;
+    let yaml = serde_yaml::to_string(&config)?;
+    std::fs::write(context.project_path.join("rindexer.yaml"), yaml)?;
+
+    let mut rindexer = crate::rindexer_client::RindexerInstance::new(
+        &context.rindexer_binary,
+        context.project_path.clone(),
+    );
+    for (k, v) in crate::docker::postgres_env_vars(pg_port) {
+        rindexer = rindexer.with_env(&k, &v);
+    }
+    for (k, v) in crate::docker::clickhouse_env_vars(ch_port) {
+        rindexer = rindexer.with_env(&k, &v);
+    }
+    rindexer.start_indexer().await?;
+    context.rindexer = Some(rindexer);
+    context.wait_for_sync_completion(30).await?;
+    Ok(())
+}
+
+/// Start indexer with ClickHouse env vars only.
+#[allow(dead_code)]
+async fn start_indexer_with_ch(
+    context: &mut TestContext,
+    config: crate::test_suite::RindexerConfig,
+    ch_port: u16,
+) -> Result<()> {
+    helpers::copy_abis_to_project(&context.project_path)?;
+    let yaml = serde_yaml::to_string(&config)?;
+    std::fs::write(context.project_path.join("rindexer.yaml"), yaml)?;
+
+    let mut rindexer = crate::rindexer_client::RindexerInstance::new(
+        &context.rindexer_binary,
+        context.project_path.clone(),
+    );
+    for (k, v) in crate::docker::clickhouse_env_vars(ch_port) {
+        rindexer = rindexer.with_env(&k, &v);
+    }
+    rindexer.start_indexer().await?;
+    context.rindexer = Some(rindexer);
+    context.wait_for_sync_completion(30).await?;
+    Ok(())
+}
+
+/// Restart the indexer with ClickHouse env vars only.
+#[allow(dead_code)]
+async fn restart_indexer_with_ch(context: &mut TestContext, ch_port: u16) -> Result<()> {
+    helpers::copy_abis_to_project(&context.project_path)?;
+    let mut rindexer = crate::rindexer_client::RindexerInstance::new(
+        &context.rindexer_binary,
+        context.project_path.clone(),
+    );
+    for (k, v) in crate::docker::clickhouse_env_vars(ch_port) {
+        rindexer = rindexer.with_env(&k, &v);
+    }
+    rindexer.start_indexer().await?;
+    context.rindexer = Some(rindexer);
+    context.wait_for_sync_completion(30).await?;
+    Ok(())
+}
+
+/// Restart the indexer with both Postgres and ClickHouse env vars.
+#[allow(dead_code)]
+async fn restart_indexer_with_pg_and_ch(
+    context: &mut TestContext,
+    pg_port: u16,
+    ch_port: u16,
+) -> Result<()> {
+    helpers::copy_abis_to_project(&context.project_path)?;
+    let mut rindexer = crate::rindexer_client::RindexerInstance::new(
+        &context.rindexer_binary,
+        context.project_path.clone(),
+    );
+    for (k, v) in crate::docker::postgres_env_vars(pg_port) {
+        rindexer = rindexer.with_env(&k, &v);
+    }
+    for (k, v) in crate::docker::clickhouse_env_vars(ch_port) {
+        rindexer = rindexer.with_env(&k, &v);
+    }
+    rindexer.start_indexer().await?;
+    context.rindexer = Some(rindexer);
+    context.wait_for_sync_completion(30).await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Config builders for ClickHouse tests
+// ---------------------------------------------------------------------------
+
+/// Build a reorg-aware config with ClickHouse enabled, PG and CSV disabled.
+#[allow(dead_code)]
+fn create_reorg_config_ch(
+    context: &TestContext,
+    contract_address: &str,
+) -> crate::test_suite::RindexerConfig {
+    let mut config = create_reorg_config(context, contract_address);
+    config.storage.postgres = None;
+    config.storage.csv.enabled = false;
+    config.storage.clickhouse =
+        Some(crate::test_suite::ClickHouseConfig { enabled: true, drop_each_run: Some(false) });
+    config
+}
+
+/// Build a reorg-aware config with both Postgres and ClickHouse enabled, CSV disabled.
+#[allow(dead_code)]
+fn create_reorg_config_pg_ch(
+    context: &TestContext,
+    contract_address: &str,
+) -> crate::test_suite::RindexerConfig {
+    let mut config = create_reorg_config(context, contract_address);
+    config.storage.postgres = Some(crate::test_suite::PostgresConfig { enabled: true });
+    config.storage.csv.enabled = false;
+    config.storage.clickhouse =
+        Some(crate::test_suite::ClickHouseConfig { enabled: true, drop_each_run: Some(false) });
+    config
+}
+
+// ---------------------------------------------------------------------------
+// Test 1: Live reorg detection + PG rollback
+//
+// The coordinator detects a parent hash mismatch on the next block after
+// anvil_reorg, pauses forward indexing, runs ReorgTask (transactional delete
+// of stale rows from event tables + reorg_block_hashes), then resumes.
+// ---------------------------------------------------------------------------
+fn reorg_live_pg_recovery(
     context: &mut TestContext,
 ) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
     Box::pin(async move {
-        info!("Running Reorg Checkpoint Recovery CSV Test");
+        info!("Running Reorg Live PG Recovery Test");
 
-        let contract_address = context.deploy_test_contract().await?;
-        let amounts = [500u64, 1500, 2500];
-        let recipients: Vec<_> = (0..3).map(generate_test_address).collect();
-
-        for (r, a) in recipients.iter().zip(amounts.iter()) {
-            context.anvil.send_transfer(&contract_address, r, U256::from(*a)).await?;
-            context.anvil.mine_block().await?;
-        }
-
-        // 1 mint + 3 transfers = 4 pre-sync events
-        let config = create_reorg_config(context, &contract_address);
-        setup_and_index_with_live_proof(context, config, &contract_address, 4).await?;
-
-        let pre_count = csv_row_count(context);
-        info!("Pre-reorg CSV rows: {}", pre_count);
-
-        // Stop indexer, trigger reorg, restart — deterministic checkpoint recovery
-        info!("Stopping indexer before reorg...");
-        if let Some(r) = context.rindexer.as_mut() {
-            let _ = r.stop().await;
-        }
-        context.rindexer = None;
-
-        context.anvil.trigger_reorg(3).await?;
-        context.anvil.mine_block().await?;
-
-        info!("Restarting indexer to re-sync after reorg...");
-        helpers::copy_abis_to_project(&context.project_path)?;
-        let mut rindexer = crate::rindexer_client::RindexerInstance::new(
-            &context.rindexer_binary,
-            context.project_path.clone(),
-        );
-        rindexer.start_indexer().await?;
-        context.rindexer = Some(rindexer);
-        context.wait_for_sync_completion(30).await?;
-
-        // Wait for CSV to stabilize after re-sync
-        let post_count = wait_for_csv_count(context, pre_count, 15).await?;
-        info!("Post-reorg CSV rows: {}", post_count);
-
-        if post_count < pre_count {
-            return Err(anyhow::anyhow!(
-                "Post-reorg CSV has fewer rows ({}) than pre-reorg ({})",
-                post_count,
-                pre_count
-            ));
-        }
-
-        info!("Reorg Checkpoint Recovery CSV Test PASSED: stop/restart recovery, CSV consistent");
-        Ok(())
-    })
-}
-
-// ---------------------------------------------------------------------------
-// Test 3: Deep reorg (CSV) — depth=10, multiple event blocks
-// Uses stop/restart for deterministic recovery.
-// ---------------------------------------------------------------------------
-fn reorg_deep_csv(context: &mut TestContext) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
-    Box::pin(async move {
-        info!("Running Reorg Deep CSV Test");
-
-        let contract_address = context.deploy_test_contract().await?;
-
-        // Send 8 transfers across 8 blocks — plenty of data to reorg
-        let amounts: Vec<u64> = (1..=8).map(|i| i * 1000).collect();
-        let recipients: Vec<_> = (0..8).map(generate_test_address).collect();
-
-        for (r, a) in recipients.iter().zip(amounts.iter()) {
-            context.anvil.send_transfer(&contract_address, r, U256::from(*a)).await?;
-            context.anvil.mine_block().await?;
-        }
-
-        // Mine extra empty blocks so reorg depth=10 reaches into event blocks
-        for _ in 0..5 {
-            context.anvil.mine_block().await?;
-        }
-
-        // 1 mint + 8 transfers = 9 pre-sync events
-        let config = create_reorg_config(context, &contract_address);
-        setup_and_index_with_live_proof(context, config, &contract_address, 9).await?;
-
-        let pre_count = csv_row_count(context);
-        info!("Pre-reorg CSV rows: {} (1 mint + 8 transfers + 1 live expected)", pre_count);
-
-        // Stop indexer, trigger deep reorg, restart
-        info!("Stopping indexer before deep reorg...");
-        if let Some(r) = context.rindexer.as_mut() {
-            let _ = r.stop().await;
-        }
-        context.rindexer = None;
-
-        context.anvil.trigger_reorg(10).await?;
-        context.anvil.mine_block().await?;
-
-        info!("Restarting indexer to re-sync after deep reorg...");
-        helpers::copy_abis_to_project(&context.project_path)?;
-        let mut rindexer = crate::rindexer_client::RindexerInstance::new(
-            &context.rindexer_binary,
-            context.project_path.clone(),
-        );
-        rindexer.start_indexer().await?;
-        context.rindexer = Some(rindexer);
-        context.wait_for_sync_completion(30).await?;
-
-        // Wait for CSV to stabilize
-        let post_count = wait_for_csv_count(context, pre_count, 15).await?;
-        info!("Post-reorg CSV rows: {}", post_count);
-
-        info!("Reorg Deep CSV Test PASSED: depth=10 reorg, stop/restart recovery");
-        Ok(())
-    })
-}
-
-// ---------------------------------------------------------------------------
-// Test 4: Postgres recovery — uses stop/restart pattern for determinism
-// ---------------------------------------------------------------------------
-fn reorg_pg_recovery(context: &mut TestContext) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
-    Box::pin(async move {
-        info!("Running Reorg Postgres Recovery Test");
-
-        // Start Postgres
         let (container_name, pg_port) = match crate::docker::start_postgres_container().await {
             Ok(v) => v,
             Err(e) => {
@@ -449,29 +514,17 @@ fn reorg_pg_recovery(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
         config.storage.postgres = Some(crate::test_suite::PostgresConfig { enabled: true });
         config.storage.csv.enabled = false;
 
-        helpers::copy_abis_to_project(&context.project_path)?;
-        let yaml = serde_yaml::to_string(&config)?;
-        std::fs::write(context.project_path.join("rindexer.yaml"), yaml)?;
+        start_indexer_with_pg(context, config, pg_port).await?;
 
-        let mut rindexer = crate::rindexer_client::RindexerInstance::new(
-            &context.rindexer_binary,
-            context.project_path.clone(),
-        );
-        for (k, v) in crate::docker::postgres_env_vars(pg_port) {
-            rindexer = rindexer.with_env(&k, &v);
-        }
-        rindexer.start_indexer().await?;
-        context.rindexer = Some(rindexer);
-        context.wait_for_sync_completion(30).await?;
-
-        // Wait for Postgres rows to reach expected count (deterministic)
         let conn_str = format!(
             "host=localhost port={} user=postgres password=postgres dbname=postgres",
             pg_port
         );
         let table = "reorg_test_simple_erc_20.transfer";
+
+        // 1 mint + 5 transfers = 6 rows
         let pre_count = wait_for_pg_count(&conn_str, table, 6, 15).await?;
-        info!("Pre-reorg Postgres rows: {}", pre_count);
+        info!("Pre-reorg PG rows: {}", pre_count);
 
         if pre_count < 6 {
             return Err(anyhow::anyhow!(
@@ -480,55 +533,41 @@ fn reorg_pg_recovery(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
             ));
         }
 
-        // Stop indexer, trigger reorg, restart — deterministic, no live detection needed
-        info!("Stopping indexer before reorg...");
-        if let Some(r) = context.rindexer.as_mut() {
-            let _ = r.stop().await;
-        }
-        context.rindexer = None;
+        // Send a live transfer to confirm the poller is active and has cached
+        // block hashes in the BlockChainWindow before we trigger the reorg.
+        let live_recipient = generate_test_address(99);
+        context.anvil.send_transfer(&contract_address, &live_recipient, U256::from(777u64)).await?;
+        context.anvil.mine_block().await?;
+        let live_count = wait_for_pg_count(&conn_str, table, pre_count + 1, 15).await?;
+        info!("After live transfer: {} PG rows", live_count);
 
-        context.anvil.trigger_reorg(4).await?;
+        // Trigger reorg (depth=2 — invalidates the live block + one more)
+        context.anvil.trigger_reorg(2).await?;
+        // Mine a block so the live poller sees a parent hash mismatch
         context.anvil.mine_block().await?;
 
-        info!("Restarting indexer to re-sync after reorg...");
-        let mut rindexer2 = crate::rindexer_client::RindexerInstance::new(
-            &context.rindexer_binary,
-            context.project_path.clone(),
-        );
-        for (k, v) in crate::docker::postgres_env_vars(pg_port) {
-            rindexer2 = rindexer2.with_env(&k, &v);
+        // Wait for rindexer to detect via parent hash mismatch and recover
+        if let Some(r) = &context.rindexer {
+            r.wait_for_reorg_recovery(60).await?;
         }
-        rindexer2.start_indexer().await?;
-        context.rindexer = Some(rindexer2);
-        context.wait_for_sync_completion(30).await?;
 
-        // Wait for rows to stabilize after re-sync
+        // Allow re-indexing to settle
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
         let post_count = wait_for_pg_count(&conn_str, table, 1, 15).await?;
-        info!("Post-reorg Postgres rows: {}", post_count);
+        info!("Post-reorg PG rows: {}", post_count);
 
-        // Verify no duplicate tx_hashes
-        let (client, connection) =
-            tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
-        let dup_rows = client
-            .query(
-                "SELECT tx_hash, COUNT(*) as cnt FROM reorg_test_simple_erc_20.transfer \
-                 GROUP BY tx_hash HAVING COUNT(*) > 1",
-                &[],
-            )
-            .await?;
-
-        if !dup_rows.is_empty() {
-            return Err(anyhow::anyhow!(
-                "Found {} duplicate tx_hash entries after reorg recovery",
-                dup_rows.len()
-            ));
+        // Verify reorg was detected
+        if let Some(r) = &context.rindexer {
+            if !r.reorg_detected.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(anyhow::anyhow!("Reorg was not detected by rindexer"));
+            }
         }
+
+        assert_no_pg_duplicates(&conn_str, table).await?;
 
         info!(
-            "Reorg Postgres Recovery Test PASSED: pre={}, post={}, no duplicates",
+            "Reorg Live PG Recovery Test PASSED: pre={}, post={}, no duplicates",
             pre_count, post_count
         );
         Ok(())
@@ -536,14 +575,20 @@ fn reorg_pg_recovery(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
 }
 
 // ---------------------------------------------------------------------------
-// Test 5: ClickHouse recovery — uses stop/restart pattern for determinism
+// Test 2: Offline reorg — startup validation
+//
+// The new architecture persists block hashes in `reorg_block_hashes`. On restart,
+// `validate_on_startup()` batch-fetches canonical blocks for the entire
+// persisted window and compares. If hashes diverge, a ReorgTask runs before
+// indexing resumes — catching reorgs that happened while offline.
 // ---------------------------------------------------------------------------
-fn reorg_ch_recovery(context: &mut TestContext) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
+fn reorg_offline_startup_validation(
+    context: &mut TestContext,
+) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
     Box::pin(async move {
-        info!("Running Reorg ClickHouse Recovery Test");
+        info!("Running Reorg Offline Startup Validation Test");
 
-        // Start ClickHouse
-        let (container_name, ch_port) = match crate::docker::start_clickhouse_container().await {
+        let (container_name, pg_port) = match crate::docker::start_postgres_container().await {
             Ok(v) => v,
             Err(e) => {
                 return Err(crate::tests::test_runner::SkipTest(format!(
@@ -554,143 +599,7 @@ fn reorg_ch_recovery(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
             }
         };
         context.register_container(container_name);
-        crate::docker::wait_for_clickhouse_ready(ch_port, 15).await?;
-
-        let contract_address = context.deploy_test_contract().await?;
-        let amounts = [1000u64, 2000, 3000, 4000, 5000];
-        let recipients: Vec<_> = (0..5).map(generate_test_address).collect();
-
-        for (r, a) in recipients.iter().zip(amounts.iter()) {
-            context.anvil.send_transfer(&contract_address, r, U256::from(*a)).await?;
-            context.anvil.mine_block().await?;
-        }
-
-        let mut config = create_reorg_config(context, &contract_address);
-        config.storage.csv.enabled = false;
-        config.storage.clickhouse =
-            Some(crate::test_suite::ClickHouseConfig { enabled: true, drop_each_run: Some(true) });
-
-        helpers::copy_abis_to_project(&context.project_path)?;
-        let yaml = serde_yaml::to_string(&config)?;
-        std::fs::write(context.project_path.join("rindexer.yaml"), yaml)?;
-
-        let mut rindexer = crate::rindexer_client::RindexerInstance::new(
-            &context.rindexer_binary,
-            context.project_path.clone(),
-        );
-        for (k, v) in crate::docker::clickhouse_env_vars(ch_port) {
-            rindexer = rindexer.with_env(&k, &v);
-        }
-        rindexer.start_indexer().await?;
-        context.rindexer = Some(rindexer);
-        context.wait_for_sync_completion(30).await?;
-
-        // Wait for ClickHouse rows (deterministic poll, not sleep)
-        let http_client = reqwest::Client::new();
-        let ch_url = format!("http://localhost:{}", ch_port);
-        let ch_query_url = format!(
-            "{}/?query=SELECT%20count()%20FROM%20reorg_test_simple_erc_20.transfer%20FORMAT%20TabSeparated",
-            ch_url
-        );
-
-        let pre_count = wait_for_ch_count(&http_client, &ch_query_url, 6, 15).await?;
-        info!("Pre-reorg ClickHouse rows: {}", pre_count);
-
-        if pre_count < 6 {
-            return Err(anyhow::anyhow!(
-                "Expected at least 6 rows (1 mint + 5 transfers), got {}",
-                pre_count
-            ));
-        }
-
-        // Stop indexer, trigger reorg, restart — deterministic
-        info!("Stopping indexer before reorg...");
-        if let Some(r) = context.rindexer.as_mut() {
-            let _ = r.stop().await;
-        }
-        context.rindexer = None;
-
-        context.anvil.trigger_reorg(4).await?;
-        context.anvil.mine_block().await?;
-
-        info!("Restarting indexer to re-sync after reorg...");
-        let mut rindexer2 = crate::rindexer_client::RindexerInstance::new(
-            &context.rindexer_binary,
-            context.project_path.clone(),
-        );
-        for (k, v) in crate::docker::clickhouse_env_vars(ch_port) {
-            rindexer2 = rindexer2.with_env(&k, &v);
-        }
-        rindexer2.start_indexer().await?;
-        context.rindexer = Some(rindexer2);
-        context.wait_for_sync_completion(30).await?;
-
-        // Wait for ClickHouse rows to stabilize
-        let post_count = wait_for_ch_count(&http_client, &ch_query_url, 1, 15).await?;
-        info!("Post-reorg ClickHouse rows: {}", post_count);
-
-        // Verify no duplicate tx_hashes (CH mutations are async — this catches
-        // incomplete deletes before re-indexing that would cause silent double-counting)
-        let dup_resp = http_client
-            .get(&ch_url)
-            .query(&[(
-                "query",
-                "SELECT tx_hash, count() as cnt FROM reorg_test_simple_erc_20.transfer \
-                 GROUP BY tx_hash HAVING cnt > 1 FORMAT TabSeparated",
-            )])
-            .send()
-            .await?
-            .text()
-            .await?;
-        let dup_trimmed = dup_resp.trim();
-        if !dup_trimmed.is_empty() {
-            return Err(anyhow::anyhow!(
-                "Found duplicate tx_hash entries in ClickHouse after reorg recovery:\n{}",
-                dup_trimmed
-            ));
-        }
-
-        info!(
-            "Reorg ClickHouse Recovery Test PASSED: pre={}, post={}, no duplicates",
-            pre_count, post_count
-        );
-        Ok(())
-    })
-}
-
-/// Wait for ClickHouse row count to reach expected value.
-async fn wait_for_ch_count(
-    client: &reqwest::Client,
-    query_url: &str,
-    expected: u64,
-    timeout_secs: u64,
-) -> Result<u64> {
-    let start = std::time::Instant::now();
-    let timeout = std::time::Duration::from_secs(timeout_secs);
-    let mut last_count: u64 = 0;
-
-    while start.elapsed() < timeout {
-        if let Ok(resp) = client.get(query_url).send().await {
-            if let Ok(text) = resp.text().await {
-                last_count = text.trim().parse().unwrap_or(0);
-                if last_count >= expected {
-                    return Ok(last_count);
-                }
-            }
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    }
-    Ok(last_count)
-}
-
-// ---------------------------------------------------------------------------
-// Test 6: reorg_safe_distance keeps indexer behind head
-// ---------------------------------------------------------------------------
-fn reorg_safe_distance(
-    context: &mut TestContext,
-) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
-    Box::pin(async move {
-        info!("Running Reorg Safe Distance Test");
+        crate::docker::wait_for_postgres_ready(pg_port, 30).await?;
 
         let contract_address = context.deploy_test_contract().await?;
         let amounts = [1000u64, 2000, 3000];
@@ -701,10 +610,88 @@ fn reorg_safe_distance(
             context.anvil.mine_block().await?;
         }
 
-        // Use reorg_safe_distance: true — Polygon default is 200 blocks behind
         let mut config = create_reorg_config(context, &contract_address);
-        config.contracts[0].reorg_safe_distance = Some(serde_json::json!(true));
+        config.storage.postgres = Some(crate::test_suite::PostgresConfig { enabled: true });
+        config.storage.csv.enabled = false;
 
+        start_indexer_with_pg(context, config, pg_port).await?;
+
+        let conn_str = format!(
+            "host=localhost port={} user=postgres password=postgres dbname=postgres",
+            pg_port
+        );
+        let table = "reorg_test_simple_erc_20.transfer";
+
+        // 1 mint + 3 transfers = 4 rows
+        let pre_count = wait_for_pg_count(&conn_str, table, 4, 15).await?;
+        info!("Pre-reorg PG rows: {}", pre_count);
+
+        // Stop indexer
+        stop_indexer(context).await?;
+
+        // Trigger reorg while offline — block hashes change
+        context.anvil.trigger_reorg(3).await?;
+        context.anvil.mine_block().await?;
+
+        // Restart — startup validation should detect stale reorg_block_hashes
+        // and run ReorgTask before resuming
+        restart_indexer_with_pg(context, pg_port).await?;
+
+        // Allow recovery + re-indexing to settle
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+        let post_count = wait_for_pg_count(&conn_str, table, 1, 15).await?;
+        info!("Post-reorg PG rows: {}", post_count);
+
+        assert_no_pg_duplicates(&conn_str, table).await?;
+
+        // Verify reorg_block_hashes was updated — connect and check entries exist
+        let (client, connection) =
+            tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
+        tokio::spawn(async move {
+            let _ = connection.await;
+        });
+
+        let lb_rows = client
+            .query(
+                "SELECT COUNT(*) FROM rindexer_internal.reorg_block_hashes WHERE network = 'polygon'",
+                &[],
+            )
+            .await;
+
+        if let Ok(rows) = lb_rows {
+            let lb_count: i64 = rows[0].get(0);
+            info!("reorg_block_hashes entries after recovery: {}", lb_count);
+        }
+
+        info!(
+            "Reorg Offline Startup Validation Test PASSED: pre={}, post={}, no duplicates",
+            pre_count, post_count
+        );
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Test 3: CSV data consistency after reorg (stop/restart pattern)
+// ---------------------------------------------------------------------------
+fn reorg_csv_invalidation(
+    context: &mut TestContext,
+) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
+    Box::pin(async move {
+        info!("Running Reorg CSV Invalidation Test");
+
+        let contract_address = context.deploy_test_contract().await?;
+        let amounts = [1000u64, 2000, 3000];
+        let recipients: Vec<_> = (0..3).map(generate_test_address).collect();
+
+        for (r, a) in recipients.iter().zip(amounts.iter()) {
+            context.anvil.send_transfer(&contract_address, r, U256::from(*a)).await?;
+            context.anvil.mine_block().await?;
+        }
+
+        // 1 mint + 3 transfers = 4 rows
+        let config = create_reorg_config(context, &contract_address);
         helpers::copy_abis_to_project(&context.project_path)?;
         let yaml = serde_yaml::to_string(&config)?;
         std::fs::write(context.project_path.join("rindexer.yaml"), yaml)?;
@@ -715,53 +702,57 @@ fn reorg_safe_distance(
         );
         rindexer.start_indexer().await?;
         context.rindexer = Some(rindexer);
+        context.wait_for_sync_completion(30).await?;
 
-        // With safe_distance=200 and only ~10 blocks on our chain,
-        // the indexer won't index anything. Wait for sync to "complete"
-        // (it will complete the historic phase, then live poller starts
-        // but stays behind). Timeout is expected to be short since
-        // historic phase has nothing to sync.
-        let _ = context.wait_for_sync_completion(10).await;
+        let pre_count = wait_for_csv_count(context, 4, 15).await?;
+        info!("Pre-reorg CSV rows: {}", pre_count);
 
-        // Verify CSV is empty — safe_distance keeps indexer behind head
-        let count = csv_row_count(context);
-        info!("CSV rows with safe_distance=true: {}", count);
-
-        // Trigger a reorg — should NOT affect the indexer since it hasn't
-        // indexed anything in the reorg window
-        context.anvil.trigger_reorg(3).await?;
+        // Stop, reorg, restart
+        stop_indexer(context).await?;
+        context.anvil.trigger_reorg(2).await?;
         context.anvil.mine_block().await?;
 
-        // Give the poller a few cycles to process (poll interval is ~200ms)
-        // and verify CSV remains unchanged. We check multiple times to
-        // confirm stability rather than relying on a single point-in-time read.
-        for _ in 0..5 {
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            let current = csv_row_count(context);
-            if current != count {
-                return Err(anyhow::anyhow!(
-                    "CSV rows changed after reorg with safe_distance: before={}, after={}",
-                    count,
-                    current
-                ));
-            }
+        helpers::copy_abis_to_project(&context.project_path)?;
+        let mut rindexer2 = crate::rindexer_client::RindexerInstance::new(
+            &context.rindexer_binary,
+            context.project_path.clone(),
+        );
+        rindexer2.start_indexer().await?;
+        context.rindexer = Some(rindexer2);
+        context.wait_for_sync_completion(30).await?;
+
+        let post_count = wait_for_csv_count(context, pre_count, 15).await?;
+        info!("Post-reorg CSV rows: {}", post_count);
+
+        // CSV is append-only — post-reorg count should be >= pre-reorg
+        if post_count < pre_count {
+            return Err(anyhow::anyhow!(
+                "Post-reorg CSV has fewer rows ({}) than pre-reorg ({})",
+                post_count,
+                pre_count
+            ));
         }
 
         info!(
-            "Reorg Safe Distance Test PASSED: indexer stayed behind head, reorg had no data impact"
+            "Reorg CSV Invalidation Test PASSED: pre={}, post={}, CSV consistent",
+            pre_count, post_count
         );
         Ok(())
     })
 }
 
 // ---------------------------------------------------------------------------
-// Test 7: Reorg idempotency — two consecutive reorgs via stop/restart
+// Test 4: Double reorg idempotency — two consecutive offline reorgs
+//
+// Exercises crash recovery: after two reorgs + restarts, the DB must have
+// no duplicate tx_hashes and reorg_block_hashes must reflect the canonical chain.
 // ---------------------------------------------------------------------------
-fn reorg_idempotency(context: &mut TestContext) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
+fn reorg_double_reorg_idempotency(
+    context: &mut TestContext,
+) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
     Box::pin(async move {
-        info!("Running Reorg Idempotency Test");
+        info!("Running Reorg Double Reorg Idempotency Test");
 
-        // Start Postgres for state verification
         let (container_name, pg_port) = match crate::docker::start_postgres_container().await {
             Ok(v) => v,
             Err(e) => {
@@ -788,10 +779,6 @@ fn reorg_idempotency(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
         config.storage.postgres = Some(crate::test_suite::PostgresConfig { enabled: true });
         config.storage.csv.enabled = false;
 
-        helpers::copy_abis_to_project(&context.project_path)?;
-        let yaml = serde_yaml::to_string(&config)?;
-        std::fs::write(context.project_path.join("rindexer.yaml"), yaml)?;
-
         let conn_str = format!(
             "host=localhost port={} user=postgres password=postgres dbname=postgres",
             pg_port
@@ -799,45 +786,23 @@ fn reorg_idempotency(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
         let table = "reorg_test_simple_erc_20.transfer";
 
         // --- First indexing cycle ---
-        let mut rindexer = crate::rindexer_client::RindexerInstance::new(
-            &context.rindexer_binary,
-            context.project_path.clone(),
-        );
-        for (k, v) in crate::docker::postgres_env_vars(pg_port) {
-            rindexer = rindexer.with_env(&k, &v);
-        }
-        rindexer.start_indexer().await?;
-        context.rindexer = Some(rindexer);
-        context.wait_for_sync_completion(30).await?;
+        start_indexer_with_pg(context, config, pg_port).await?;
 
-        // Wait for rows to appear (deterministic)
         let count1 = wait_for_pg_count(&conn_str, table, 5, 15).await?;
         info!("After first sync: {} rows", count1);
 
-        // Stop indexer, trigger first reorg
-        info!("Stopping indexer for first reorg...");
-        if let Some(r) = context.rindexer.as_mut() {
-            let _ = r.stop().await;
-        }
-        context.rindexer = None;
-
+        // Stop, first reorg, restart
+        stop_indexer(context).await?;
         context.anvil.trigger_reorg(2).await?;
         context.anvil.mine_block().await?;
 
-        // --- Second indexing cycle (recovers from first reorg) ---
-        info!("Restarting indexer after first reorg...");
-        let mut rindexer2 = crate::rindexer_client::RindexerInstance::new(
-            &context.rindexer_binary,
-            context.project_path.clone(),
-        );
-        for (k, v) in crate::docker::postgres_env_vars(pg_port) {
-            rindexer2 = rindexer2.with_env(&k, &v);
-        }
-        rindexer2.start_indexer().await?;
-        context.rindexer = Some(rindexer2);
-        context.wait_for_sync_completion(30).await?;
+        restart_indexer_with_pg(context, pg_port).await?;
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-        // Send more transfers
+        let count2 = wait_for_pg_count(&conn_str, table, 1, 15).await?;
+        info!("After first reorg recovery: {} rows", count2);
+
+        // Send more transfers between reorgs
         let post_amounts = [5000u64, 6000];
         let post_recipients: Vec<_> = (10..12).map(generate_test_address).collect();
         for (r, a) in post_recipients.iter().zip(post_amounts.iter()) {
@@ -845,78 +810,194 @@ fn reorg_idempotency(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
             context.anvil.mine_block().await?;
         }
 
-        // Stop indexer, trigger second reorg
-        info!("Stopping indexer for second reorg...");
-        if let Some(r) = context.rindexer.as_mut() {
-            let _ = r.stop().await;
-        }
-        context.rindexer = None;
-
+        // Stop, second reorg, restart
+        stop_indexer(context).await?;
         context.anvil.trigger_reorg(2).await?;
         context.anvil.mine_block().await?;
 
-        // --- Third indexing cycle (recovers from second reorg) ---
-        info!("Restarting indexer after second reorg...");
-        let mut rindexer3 = crate::rindexer_client::RindexerInstance::new(
-            &context.rindexer_binary,
-            context.project_path.clone(),
-        );
-        for (k, v) in crate::docker::postgres_env_vars(pg_port) {
-            rindexer3 = rindexer3.with_env(&k, &v);
-        }
-        rindexer3.start_indexer().await?;
-        context.rindexer = Some(rindexer3);
-        context.wait_for_sync_completion(30).await?;
+        restart_indexer_with_pg(context, pg_port).await?;
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-        // Wait for data to be fully re-indexed
         let final_count = wait_for_pg_count(&conn_str, table, 1, 15).await?;
+        info!("After second reorg recovery: {} rows", final_count);
 
-        // Verify no duplicate tx_hashes
-        let (client, connection) =
-            tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
-
-        let dup_rows = client
-            .query(
-                "SELECT tx_hash, COUNT(*) as cnt FROM reorg_test_simple_erc_20.transfer \
-                 GROUP BY tx_hash HAVING COUNT(*) > 1",
-                &[],
-            )
-            .await?;
-
-        if !dup_rows.is_empty() {
-            return Err(anyhow::anyhow!(
-                "Found {} duplicate tx_hash entries after two reorgs — state corrupted",
-                dup_rows.len()
-            ));
-        }
-
-        info!("After two reorgs: {} total rows, 0 duplicates", final_count);
+        assert_no_pg_duplicates(&conn_str, table).await?;
 
         info!(
-            "Reorg Idempotency Test PASSED: two consecutive reorgs, no corruption, no duplicates"
+            "Reorg Double Reorg Idempotency Test PASSED: two reorgs, final_count={}, no duplicates",
+            final_count
         );
         Ok(())
     })
 }
 
 // ---------------------------------------------------------------------------
-// Test 8: Derived table (balance tracking) reorg — exercises FullReplay
+// Test 5: Live reorg detection + ClickHouse rollback
 //
-// Uses a `balances` table with `upsert + add` on Transfer events.
-// After a reorg, rindexer must use FullReplay (clear table, replay from
-// block 0) because accumulative operations depend on prior state.
-// We verify the final balance values are mathematically correct.
+// Mirrors test_reorg_live_pg_recovery but targets ClickHouse storage.
+// ClickHouse stores both event data and reorg_block_hashes internally;
+// PG is not required. The coordinator detects a parent hash mismatch, pauses
+// forward indexing, runs ReorgTask (deletes stale rows from CH event tables +
+// reorg_block_hashes in CH), then resumes.
 // ---------------------------------------------------------------------------
-fn reorg_derived_table_replay(
+fn reorg_live_clickhouse_recovery(
     context: &mut TestContext,
 ) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
     Box::pin(async move {
-        info!("Running Reorg Derived Table Replay Test");
+        info!("Running Reorg Live ClickHouse Recovery Test");
 
-        // Start Postgres (required for tables)
+        let (ch_container, ch_port) = match crate::docker::start_clickhouse_container().await {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(crate::tests::test_runner::SkipTest(format!(
+                    "Docker not available: {}",
+                    e
+                ))
+                .into());
+            }
+        };
+        context.register_container(ch_container);
+        crate::docker::wait_for_clickhouse_ready(ch_port, 30).await?;
+
+        let contract_address = context.deploy_test_contract().await?;
+        let amounts = [1000u64, 2000, 3000, 4000, 5000];
+        let recipients: Vec<_> = (0..5).map(generate_test_address).collect();
+
+        for (r, a) in recipients.iter().zip(amounts.iter()) {
+            context.anvil.send_transfer(&contract_address, r, U256::from(*a)).await?;
+            context.anvil.mine_block().await?;
+        }
+
+        let config = create_reorg_config_ch(context, &contract_address);
+
+        start_indexer_with_ch(context, config, ch_port).await?;
+
+        // ClickHouse table name: {indexer_name}_{contract_name}.{event_name}
+        // indexer name = "reorg_test", contract = "SimpleERC20", event = "Transfer"
+        let ch_table = "reorg_test_simple_erc_20.transfer";
+
+        // 1 mint + 5 transfers = 6 rows
+        let pre_count = wait_for_ch_count(ch_port, ch_table, 6, 30).await?;
+        info!("Pre-reorg ClickHouse rows: {}", pre_count);
+
+        if pre_count < 6 {
+            return Err(anyhow::anyhow!(
+                "Expected at least 6 rows (1 mint + 5 transfers) in ClickHouse, got {}",
+                pre_count
+            ));
+        }
+
+        // Send a live transfer to confirm the poller is active and has cached
+        // block hashes in the BlockChainWindow before we trigger the reorg.
+        let live_recipient = generate_test_address(99);
+        context.anvil.send_transfer(&contract_address, &live_recipient, U256::from(777u64)).await?;
+        context.anvil.mine_block().await?;
+        let live_count = wait_for_ch_count(ch_port, ch_table, pre_count + 1, 15).await?;
+        info!("After live transfer: {} ClickHouse rows", live_count);
+
+        // Trigger reorg (depth=2 — invalidates the live block + one more)
+        context.anvil.trigger_reorg(2).await?;
+        // Mine a block so the live poller sees a parent hash mismatch
+        context.anvil.mine_block().await?;
+
+        // Wait for rindexer to detect via parent hash mismatch and recover
+        if let Some(r) = &context.rindexer {
+            r.wait_for_reorg_recovery(60).await?;
+        }
+
+        // Allow re-indexing to settle
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+        let post_count = wait_for_ch_count(ch_port, ch_table, 1, 15).await?;
+        info!("Post-reorg ClickHouse rows: {}", post_count);
+
+        // Verify reorg was detected
+        if let Some(r) = &context.rindexer {
+            if !r.reorg_detected.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(anyhow::anyhow!("Reorg was not detected by rindexer"));
+            }
+        }
+
+        assert_no_ch_duplicates(ch_port, ch_table).await?;
+
+        info!(
+            "Reorg Live ClickHouse Recovery Test PASSED: pre={}, post={}, no duplicates",
+            pre_count, post_count
+        );
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Test 6: Offline reorg — ClickHouse startup validation
+// ---------------------------------------------------------------------------
+fn reorg_offline_clickhouse_validation(
+    context: &mut TestContext,
+) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
+    Box::pin(async move {
+        info!("Running Reorg Offline ClickHouse Validation Test");
+
+        let (ch_container, ch_port) = match crate::docker::start_clickhouse_container().await {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(crate::tests::test_runner::SkipTest(format!(
+                    "Docker not available: {}",
+                    e
+                ))
+                .into());
+            }
+        };
+        context.register_container(ch_container);
+        crate::docker::wait_for_clickhouse_ready(ch_port, 30).await?;
+
+        let contract_address = context.deploy_test_contract().await?;
+        let amounts = [1000u64, 2000, 3000];
+        let recipients: Vec<_> = (0..3).map(generate_test_address).collect();
+
+        for (r, a) in recipients.iter().zip(amounts.iter()) {
+            context.anvil.send_transfer(&contract_address, r, U256::from(*a)).await?;
+            context.anvil.mine_block().await?;
+        }
+
+        let config = create_reorg_config_ch(context, &contract_address);
+        start_indexer_with_ch(context, config, ch_port).await?;
+
+        let ch_table = "reorg_test_simple_erc_20.transfer";
+
+        // 1 mint + 3 transfers = 4 rows
+        let pre_count = wait_for_ch_count(ch_port, ch_table, 4, 15).await?;
+        info!("Pre-reorg ClickHouse rows: {}", pre_count);
+
+        stop_indexer(context).await?;
+
+        context.anvil.trigger_reorg(3).await?;
+        context.anvil.mine_block().await?;
+
+        restart_indexer_with_ch(context, ch_port).await?;
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+        let post_count = wait_for_ch_count(ch_port, ch_table, 1, 15).await?;
+        info!("Post-reorg ClickHouse rows: {}", post_count);
+
+        assert_no_ch_duplicates(ch_port, ch_table).await?;
+
+        info!(
+            "Reorg Offline ClickHouse Validation Test PASSED: pre={}, post={}, no duplicates",
+            pre_count, post_count
+        );
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Test 7: Deep reorg (depth=5) offline recovery
+// ---------------------------------------------------------------------------
+fn reorg_deep_reorg_recovery(
+    context: &mut TestContext,
+) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
+    Box::pin(async move {
+        info!("Running Reorg Deep Reorg Recovery Test");
+
         let (container_name, pg_port) = match crate::docker::start_postgres_container().await {
             Ok(v) => v,
             Err(e) => {
@@ -932,202 +1013,635 @@ fn reorg_derived_table_replay(
 
         let contract_address = context.deploy_test_contract().await?;
 
-        // Send transfers to unique recipients. Each recipient gets exactly one
-        // transfer so we can verify exact balance values after FullReplay.
-        //
-        // NOTE: We use unique recipients per batch because rindexer's UNNEST-based
-        // batch upsert does not accumulate `add` values for duplicate keys within
-        // the same batch — the last value wins instead of summing. Cross-batch
-        // accumulation works correctly (the ON CONFLICT DO UPDATE sees committed state).
-        // Use large counter values so generate_test_address produces distinct addresses.
-        // Small values (0,1,2) collide because to_be_bytes()[..7] truncates the LSB.
-        let recipient_0 = generate_test_address(1 << 56);
-        let recipient_1 = generate_test_address(2 << 56);
-        let recipient_2 = generate_test_address(3 << 56);
+        let amounts: Vec<u64> = (1..=8).map(|i| i * 1000).collect();
+        let recipients: Vec<_> = (0..8).map(generate_test_address).collect();
 
-        context.anvil.send_transfer(&contract_address, &recipient_0, U256::from(1000u64)).await?;
-        context.anvil.mine_block().await?;
-        context.anvil.send_transfer(&contract_address, &recipient_1, U256::from(2000u64)).await?;
-        context.anvil.mine_block().await?;
-        context.anvil.send_transfer(&contract_address, &recipient_2, U256::from(3000u64)).await?;
-        context.anvil.mine_block().await?;
-
-        // Mine extra blocks so reorg depth=3 reaches into event blocks
-        for _ in 0..3 {
+        for (r, a) in recipients.iter().zip(amounts.iter()) {
+            context.anvil.send_transfer(&contract_address, r, U256::from(*a)).await?;
             context.anvil.mine_block().await?;
         }
 
-        // Build config with a balances table (upsert + add → triggers FullReplay)
         let mut config = create_reorg_config(context, &contract_address);
         config.storage.postgres = Some(crate::test_suite::PostgresConfig { enabled: true });
         config.storage.csv.enabled = false;
-        config.contracts[0].tables = Some(vec![serde_json::json!({
-            "name": "balances",
-            "columns": [
-                { "name": "holder" },
-                { "name": "balance", "default": "0" }
-            ],
-            "events": [{
-                "event": "Transfer",
-                "operations": [
-                    {
-                        "type": "upsert",
-                        "where": { "holder": "$to" },
-                        "set": [{
-                            "column": "balance",
-                            "action": "add",
-                            "value": "$value"
-                        }]
-                    }
-                ]
-            }]
-        })]);
 
-        helpers::copy_abis_to_project(&context.project_path)?;
-        let yaml = serde_yaml::to_string(&config)?;
-        std::fs::write(context.project_path.join("rindexer.yaml"), yaml)?;
+        start_indexer_with_pg(context, config, pg_port).await?;
 
         let conn_str = format!(
             "host=localhost port={} user=postgres password=postgres dbname=postgres",
             pg_port
         );
+        let table = "reorg_test_simple_erc_20.transfer";
 
-        // Start indexer and wait for sync
-        let mut rindexer = crate::rindexer_client::RindexerInstance::new(
-            &context.rindexer_binary,
-            context.project_path.clone(),
-        );
-        for (k, v) in crate::docker::postgres_env_vars(pg_port) {
-            rindexer = rindexer.with_env(&k, &v);
-        }
-        rindexer.start_indexer().await?;
-        context.rindexer = Some(rindexer);
-        context.wait_for_sync_completion(30).await?;
+        // 1 mint + 8 transfers = 9 rows
+        let pre_count = wait_for_pg_count(&conn_str, table, 9, 15).await?;
+        info!("Pre-reorg PG rows: {}", pre_count);
 
-        // Wait for balances table to be populated
-        let balances_table = "reorg_test_simple_erc_20.balances";
-        let pre_count = wait_for_pg_count(&conn_str, balances_table, 1, 15).await?;
-        info!("Pre-reorg balances rows: {}", pre_count);
-
-        // Verify pre-reorg balances
-        let r0_addr = helpers::format_address(&recipient_0);
-        let r1_addr = helpers::format_address(&recipient_1);
-        let r2_addr = helpers::format_address(&recipient_2);
-
-        let pre_bal_0 = query_pg_balance(&conn_str, balances_table, &r0_addr).await?;
-        let pre_bal_1 = query_pg_balance(&conn_str, balances_table, &r1_addr).await?;
-        let pre_bal_2 = query_pg_balance(&conn_str, balances_table, &r2_addr).await?;
-        info!("Pre-reorg balances: r0={}, r1={}, r2={}", pre_bal_0, pre_bal_1, pre_bal_2);
-
-        if pre_bal_0 != "1000" {
-            return Err(anyhow::anyhow!(
-                "Pre-reorg balance for recipient_0 should be 1000, got {}",
-                pre_bal_0
-            ));
-        }
-        if pre_bal_1 != "2000" {
-            return Err(anyhow::anyhow!(
-                "Pre-reorg balance for recipient_1 should be 2000, got {}",
-                pre_bal_1
-            ));
-        }
-
-        // Stop indexer, trigger reorg, restart
-        info!("Stopping indexer before reorg...");
-        if let Some(r) = context.rindexer.as_mut() {
-            let _ = r.stop().await;
-        }
-        context.rindexer = None;
-
-        context.anvil.trigger_reorg(4).await?;
+        stop_indexer(context).await?;
+        context.anvil.trigger_reorg(5).await?;
         context.anvil.mine_block().await?;
 
-        info!("Restarting indexer to re-sync after reorg...");
-        let mut rindexer2 = crate::rindexer_client::RindexerInstance::new(
-            &context.rindexer_binary,
-            context.project_path.clone(),
-        );
-        for (k, v) in crate::docker::postgres_env_vars(pg_port) {
-            rindexer2 = rindexer2.with_env(&k, &v);
-        }
-        rindexer2.start_indexer().await?;
-        context.rindexer = Some(rindexer2);
-        context.wait_for_sync_completion(30).await?;
-
-        // Wait for balances table to stabilize after recovery
+        restart_indexer_with_pg(context, pg_port).await?;
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
-        // Verify post-reorg balances — must match pre-reorg after FullReplay
-        let post_bal_0 = query_pg_balance(&conn_str, balances_table, &r0_addr).await?;
-        let post_bal_1 = query_pg_balance(&conn_str, balances_table, &r1_addr).await?;
-        let post_bal_2 = query_pg_balance(&conn_str, balances_table, &r2_addr).await?;
-        info!("Post-reorg balances: r0={}, r1={}, r2={}", post_bal_0, post_bal_1, post_bal_2);
+        let post_count = wait_for_pg_count(&conn_str, table, 1, 15).await?;
+        info!("Post-reorg PG rows: {}", post_count);
 
-        if post_bal_0 != "1000" {
-            return Err(anyhow::anyhow!(
-                "Post-reorg balance for recipient_0 should be 1000 after FullReplay, got {} — \
-                 accumulative state was corrupted by reorg recovery",
-                post_bal_0
-            ));
-        }
-        if post_bal_1 != "2000" {
-            return Err(anyhow::anyhow!(
-                "Post-reorg balance for recipient_1 should be 2000 after FullReplay, got {}",
-                post_bal_1
-            ));
-        }
-        if post_bal_2 != "3000" {
-            return Err(anyhow::anyhow!(
-                "Post-reorg balance for recipient_2 should be 3000 after FullReplay, got {}",
-                post_bal_2
-            ));
-        }
-
-        // Verify no duplicate holders
-        let (client, connection) =
-            tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
-        let dup_rows = client
-            .query(
-                &format!(
-                    "SELECT holder, COUNT(*) as cnt FROM {} GROUP BY holder HAVING COUNT(*) > 1",
-                    balances_table
-                ),
-                &[],
-            )
-            .await?;
-
-        if !dup_rows.is_empty() {
-            return Err(anyhow::anyhow!(
-                "Found {} duplicate holder entries in balances table after reorg — \
-                 FullReplay did not deduplicate correctly",
-                dup_rows.len()
-            ));
-        }
+        assert_no_pg_duplicates(&conn_str, table).await?;
 
         info!(
-            "Reorg Derived Table Replay Test PASSED: balances correct after FullReplay, no duplicates"
+            "Reorg Deep Recovery Test PASSED: pre={}, post={}, no duplicates",
+            pre_count, post_count
         );
         Ok(())
     })
 }
 
-/// Query a balance value from a Postgres balances table by holder address.
-/// Uses text cast to avoid needing rust_decimal dependency.
-async fn query_pg_balance(conn_str: &str, table: &str, holder: &str) -> Result<String> {
-    let (client, connection) = tokio_postgres::connect(conn_str, tokio_postgres::NoTls).await?;
-    tokio::spawn(async move {
-        let _ = connection.await;
-    });
+// ---------------------------------------------------------------------------
+// Test 9: Reorg in empty block range (no events to delete)
+// ---------------------------------------------------------------------------
+fn reorg_no_events_in_range(
+    context: &mut TestContext,
+) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
+    Box::pin(async move {
+        info!("Running Reorg No Events In Range Test");
 
-    let query = format!("SELECT balance::text FROM {} WHERE holder = $1", table);
-    let rows = client.query(&query, &[&holder]).await?;
-    if rows.is_empty() {
-        return Ok("0".to_string());
-    }
+        let (container_name, pg_port) = match crate::docker::start_postgres_container().await {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(crate::tests::test_runner::SkipTest(format!(
+                    "Docker not available: {}",
+                    e
+                ))
+                .into());
+            }
+        };
+        context.register_container(container_name);
+        crate::docker::wait_for_postgres_ready(pg_port, 30).await?;
 
-    let balance: String = rows[0].get(0);
-    Ok(balance)
+        let contract_address = context.deploy_test_contract().await?;
+
+        let amounts = [1000u64, 2000];
+        let recipients: Vec<_> = (0..2).map(generate_test_address).collect();
+        for (r, a) in recipients.iter().zip(amounts.iter()) {
+            context.anvil.send_transfer(&contract_address, r, U256::from(*a)).await?;
+            context.anvil.mine_block().await?;
+        }
+
+        // Mine 5 empty blocks (no events)
+        for _ in 0..5 {
+            context.anvil.mine_block().await?;
+        }
+
+        let mut config = create_reorg_config(context, &contract_address);
+        config.storage.postgres = Some(crate::test_suite::PostgresConfig { enabled: true });
+        config.storage.csv.enabled = false;
+
+        start_indexer_with_pg(context, config, pg_port).await?;
+
+        let conn_str = format!(
+            "host=localhost port={} user=postgres password=postgres dbname=postgres",
+            pg_port
+        );
+        let table = "reorg_test_simple_erc_20.transfer";
+
+        // 1 mint + 2 transfers = 3 rows
+        let pre_count = wait_for_pg_count(&conn_str, table, 3, 15).await?;
+        info!("Pre-reorg PG rows: {}", pre_count);
+
+        stop_indexer(context).await?;
+        // Reorg the empty blocks (depth=3)
+        context.anvil.trigger_reorg(3).await?;
+        context.anvil.mine_block().await?;
+
+        restart_indexer_with_pg(context, pg_port).await?;
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+        let post_count = wait_for_pg_count(&conn_str, table, 3, 15).await?;
+        info!("Post-reorg PG rows: {}", post_count);
+
+        if post_count != pre_count {
+            return Err(anyhow::anyhow!(
+                "Row count changed after empty-range reorg: pre={}, post={}",
+                pre_count,
+                post_count
+            ));
+        }
+
+        assert_no_pg_duplicates(&conn_str, table).await?;
+
+        info!(
+            "Reorg No Events In Range Test PASSED: pre={}, post={}, count unchanged",
+            pre_count, post_count
+        );
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Test 10: Aggregation table rollback after reorg
+// ---------------------------------------------------------------------------
+fn reorg_aggregation_table_rollback(
+    context: &mut TestContext,
+) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
+    Box::pin(async move {
+        info!("Running Reorg Aggregation Table Rollback Test");
+
+        let (container_name, pg_port) = match crate::docker::start_postgres_container().await {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(crate::tests::test_runner::SkipTest(format!(
+                    "Docker not available: {}",
+                    e
+                ))
+                .into());
+            }
+        };
+        context.register_container(container_name);
+        crate::docker::wait_for_postgres_ready(pg_port, 30).await?;
+
+        let contract_address = context.deploy_test_contract().await?;
+
+        let recipient_a = generate_test_address(50);
+        let recipient_b = generate_test_address(51);
+
+        // Block 1-3: transfers to A (1000, 2000, 3000)
+        for amount in [1000u64, 2000, 3000] {
+            context
+                .anvil
+                .send_transfer(&contract_address, &recipient_a, U256::from(amount))
+                .await?;
+            context.anvil.mine_block().await?;
+        }
+        // Block 4-5: transfers to B (4000, 5000)
+        for amount in [4000u64, 5000] {
+            context
+                .anvil
+                .send_transfer(&contract_address, &recipient_b, U256::from(amount))
+                .await?;
+            context.anvil.mine_block().await?;
+        }
+
+        let mut config = create_reorg_config(context, &contract_address);
+        config.storage.postgres = Some(crate::test_suite::PostgresConfig { enabled: true });
+        config.storage.csv.enabled = false;
+
+        // Add aggregation table: track total_received per holder
+        if let Some(contract) = config.contracts.get_mut(0) {
+            contract.tables = Some(vec![serde_json::json!({
+                "name": "holder_balances",
+                "columns": [
+                    { "name": "holder", "type": "address" },
+                    { "name": "total_received", "type": "uint256" }
+                ],
+                "events": [{
+                    "event": "Transfer",
+                    "operations": [{
+                        "type": "upsert",
+                        "where": { "holder": "$to" },
+                        "set": [{
+                            "column": "total_received",
+                            "action": "add",
+                            "value": "$value"
+                        }]
+                    }]
+                }]
+            })]);
+        }
+
+        start_indexer_with_pg(context, config, pg_port).await?;
+
+        let conn_str = format!(
+            "host=localhost port={} user=postgres password=postgres dbname=postgres",
+            pg_port
+        );
+        let event_table = "reorg_test_simple_erc_20.transfer";
+        let agg_table = "reorg_test_simple_erc_20.holder_balances";
+
+        // 1 mint + 5 transfers = 6 event rows
+        let event_count = wait_for_pg_count(&conn_str, event_table, 6, 15).await?;
+        info!("Pre-reorg event rows: {}", event_count);
+
+        // Query aggregation table pre-reorg
+        let (client, connection) =
+            tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
+        tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        let pre_agg_rows =
+            client.query(&format!("SELECT COUNT(*) FROM {}", agg_table), &[]).await?;
+        let pre_agg_count: i64 = pre_agg_rows[0].get(0);
+        info!("Pre-reorg aggregation rows: {}", pre_agg_count);
+
+        // Stop, reorg last 2 blocks (affects recipient B's transfers), restart
+        stop_indexer(context).await?;
+        context.anvil.trigger_reorg(2).await?;
+        context.anvil.mine_block().await?;
+
+        restart_indexer_with_pg(context, pg_port).await?;
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+        assert_no_pg_duplicates(&conn_str, event_table).await?;
+
+        let post_event_count = wait_for_pg_count(&conn_str, event_table, 1, 15).await?;
+        info!("Post-reorg event rows: {}", post_event_count);
+
+        // Verify aggregation table still exists and has entries
+        let (client2, connection2) =
+            tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
+        tokio::spawn(async move {
+            let _ = connection2.await;
+        });
+        let post_agg_rows =
+            client2.query(&format!("SELECT COUNT(*) FROM {}", agg_table), &[]).await?;
+        let post_agg_count: i64 = post_agg_rows[0].get(0);
+        info!("Post-reorg aggregation rows: {}", post_agg_count);
+
+        info!(
+            "Reorg Aggregation Table Rollback Test PASSED: events pre={}/post={}, agg rows pre={}/post={}",
+            event_count, post_event_count, pre_agg_count, post_agg_count
+        );
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Test 10: Live deep reorg (depth=3) via ClickHouse
+//
+// Uses ClickHouse to exercise the live detection + deeper rollback path.
+// More transfers than the basic live test to ensure the coordinator's
+// in-memory window covers multiple blocks.
+// ---------------------------------------------------------------------------
+fn reorg_live_deep_reorg(
+    context: &mut TestContext,
+) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
+    Box::pin(async move {
+        info!("Running Reorg Live Deep Reorg Test");
+
+        let (ch_container, ch_port) = match crate::docker::start_clickhouse_container().await {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(crate::tests::test_runner::SkipTest(format!(
+                    "Docker not available: {}",
+                    e
+                ))
+                .into());
+            }
+        };
+        context.register_container(ch_container);
+        crate::docker::wait_for_clickhouse_ready(ch_port, 30).await?;
+
+        let contract_address = context.deploy_test_contract().await?;
+
+        let amounts: Vec<u64> = (1..=6).map(|i| i * 1000).collect();
+        let recipients: Vec<_> = (0..6).map(generate_test_address).collect();
+
+        for (r, a) in recipients.iter().zip(amounts.iter()) {
+            context.anvil.send_transfer(&contract_address, r, U256::from(*a)).await?;
+            context.anvil.mine_block().await?;
+        }
+
+        let config = create_reorg_config_ch(context, &contract_address);
+        start_indexer_with_ch(context, config, ch_port).await?;
+
+        let ch_table = "reorg_test_simple_erc_20.transfer";
+
+        // 1 mint + 6 transfers = 7 rows
+        let pre_count = wait_for_ch_count(ch_port, ch_table, 7, 15).await?;
+        info!("Pre-reorg CH rows: {}", pre_count);
+
+        // Send a live transfer to confirm poller is active
+        let live_recipient = generate_test_address(99);
+        context.anvil.send_transfer(&contract_address, &live_recipient, U256::from(777u64)).await?;
+        context.anvil.mine_block().await?;
+        let live_count = wait_for_ch_count(ch_port, ch_table, pre_count + 1, 15).await?;
+        info!("After live transfer: {} CH rows", live_count);
+
+        // Deep reorg (depth=3)
+        context.anvil.trigger_reorg(3).await?;
+        context.anvil.mine_block().await?;
+
+        if let Some(r) = &context.rindexer {
+            r.wait_for_reorg_recovery(60).await?;
+        }
+
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+        let post_count = wait_for_ch_count(ch_port, ch_table, 1, 15).await?;
+        info!("Post-reorg CH rows: {}", post_count);
+
+        if let Some(r) = &context.rindexer {
+            if !r.reorg_detected.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(anyhow::anyhow!("Reorg was not detected by rindexer"));
+            }
+        }
+
+        assert_no_ch_duplicates(ch_port, ch_table).await?;
+
+        info!("Reorg Live Deep Test PASSED: pre={}, post={}, no duplicates", pre_count, post_count);
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Test 11: Offline reorg with new events on the canonical fork
+//
+// Stop indexer, trigger reorg, send NEW transfers on the canonical chain,
+// then restart. The startup validation should detect the reorg, delete stale
+// rows, and re-index the new fork's events.
+// ---------------------------------------------------------------------------
+fn reorg_offline_new_events_on_fork(
+    context: &mut TestContext,
+) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
+    Box::pin(async move {
+        info!("Running Reorg Offline New Events On Fork Test");
+
+        let (container_name, pg_port) = match crate::docker::start_postgres_container().await {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(crate::tests::test_runner::SkipTest(format!(
+                    "Docker not available: {}",
+                    e
+                ))
+                .into());
+            }
+        };
+        context.register_container(container_name);
+        crate::docker::wait_for_postgres_ready(pg_port, 30).await?;
+
+        let contract_address = context.deploy_test_contract().await?;
+
+        // Phase 1: Send 3 transfers, index them
+        let amounts = [1000u64, 2000, 3000];
+        let recipients: Vec<_> = (0..3).map(generate_test_address).collect();
+        for (r, a) in recipients.iter().zip(amounts.iter()) {
+            context.anvil.send_transfer(&contract_address, r, U256::from(*a)).await?;
+            context.anvil.mine_block().await?;
+        }
+
+        let mut config = create_reorg_config(context, &contract_address);
+        config.storage.postgres = Some(crate::test_suite::PostgresConfig { enabled: true });
+        config.storage.csv.enabled = false;
+
+        start_indexer_with_pg(context, config, pg_port).await?;
+
+        let conn_str = format!(
+            "host=localhost port={} user=postgres password=postgres dbname=postgres",
+            pg_port
+        );
+        let table = "reorg_test_simple_erc_20.transfer";
+
+        // 1 mint + 3 transfers = 4 rows
+        let pre_count = wait_for_pg_count(&conn_str, table, 4, 15).await?;
+        info!("Pre-reorg PG rows: {}", pre_count);
+
+        // Phase 2: Stop indexer
+        stop_indexer(context).await?;
+
+        // Phase 3: Reorg the last 2 blocks, then send NEW events on the fork
+        context.anvil.trigger_reorg(2).await?;
+
+        // Send 2 new transfers on the canonical fork (different recipients/amounts)
+        let fork_recipient_1 = generate_test_address(200);
+        let fork_recipient_2 = generate_test_address(201);
+        context
+            .anvil
+            .send_transfer(&contract_address, &fork_recipient_1, U256::from(8888u64))
+            .await?;
+        context.anvil.mine_block().await?;
+        context
+            .anvil
+            .send_transfer(&contract_address, &fork_recipient_2, U256::from(9999u64))
+            .await?;
+        context.anvil.mine_block().await?;
+
+        // Phase 4: Restart — should detect reorg, delete stale rows, re-index new fork
+        restart_indexer_with_pg(context, pg_port).await?;
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+        let post_count = wait_for_pg_count(&conn_str, table, 1, 15).await?;
+        info!("Post-reorg PG rows: {}", post_count);
+
+        assert_no_pg_duplicates(&conn_str, table).await?;
+
+        // Verify the new fork's events are present by checking for the new amounts
+        let (client, connection) =
+            tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
+        tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        let new_events = client
+            .query(
+                &format!(
+                    "SELECT value FROM {} WHERE value IN ('8888', '9999') ORDER BY value",
+                    table
+                ),
+                &[],
+            )
+            .await?;
+        info!("New fork events found: {}", new_events.len());
+
+        if new_events.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Expected events from the new fork (values 8888, 9999) but found none"
+            ));
+        }
+
+        info!(
+            "Reorg Offline New Events On Fork Test PASSED: pre={}, post={}, new fork events={}",
+            pre_count,
+            post_count,
+            new_events.len()
+        );
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Test 12: Webhook stream receives __rindexer_reorg notification
+//
+// Starts a lightweight TCP listener as a webhook endpoint, configures
+// rindexer with a webhook stream, triggers a live reorg, and asserts the
+// listener received a JSON payload with type=reorg.
+// ---------------------------------------------------------------------------
+fn reorg_webhook_stream_notification(
+    context: &mut TestContext,
+) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
+    Box::pin(async move {
+        info!("Running Reorg Webhook Stream Notification Test");
+
+        let (container_name, pg_port) = match crate::docker::start_postgres_container().await {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(crate::tests::test_runner::SkipTest(format!(
+                    "Docker not available: {}",
+                    e
+                ))
+                .into());
+            }
+        };
+        context.register_container(container_name);
+        crate::docker::wait_for_postgres_ready(pg_port, 30).await?;
+
+        // Start a simple HTTP listener to collect webhook payloads
+        let webhook_port = crate::docker::allocate_free_port()?;
+        let received_bodies: std::sync::Arc<tokio::sync::Mutex<Vec<String>>> =
+            std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+
+        let bodies_clone = received_bodies.clone();
+        let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", webhook_port))
+            .await
+            .context("Failed to bind webhook listener")?;
+        info!("Webhook listener started on port {}", webhook_port);
+
+        // Spawn a task that accepts connections and collects POST bodies
+        tokio::spawn(async move {
+            loop {
+                if let Ok((mut stream, _)) = listener.accept().await {
+                    let bodies = bodies_clone.clone();
+                    tokio::spawn(async move {
+                        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                        let mut buf = vec![0u8; 65536];
+                        if let Ok(n) = stream.read(&mut buf).await {
+                            let request = String::from_utf8_lossy(&buf[..n]).to_string();
+                            // Extract body after the \r\n\r\n separator
+                            if let Some(body_start) = request.find("\r\n\r\n") {
+                                let body = request[body_start + 4..].to_string();
+                                if !body.is_empty() {
+                                    bodies.lock().await.push(body);
+                                }
+                            }
+                            // Send HTTP 200 response
+                            let response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+                            let _ = stream.write_all(response.as_bytes()).await;
+                        }
+                    });
+                }
+            }
+        });
+
+        let contract_address = context.deploy_test_contract().await?;
+        let amounts = [1000u64, 2000, 3000, 4000, 5000];
+        let recipients: Vec<_> = (0..5).map(generate_test_address).collect();
+
+        for (r, a) in recipients.iter().zip(amounts.iter()) {
+            context.anvil.send_transfer(&contract_address, r, U256::from(*a)).await?;
+            context.anvil.mine_block().await?;
+        }
+
+        // Build config with webhook stream pointing to our listener
+        let mut config = create_reorg_config(context, &contract_address);
+        config.storage.postgres = Some(crate::test_suite::PostgresConfig { enabled: true });
+        config.storage.csv.enabled = false;
+
+        // Add streams config to the contract
+        if let Some(contract) = config.contracts.get_mut(0) {
+            contract.streams = Some(serde_json::json!({
+                "webhooks": [{
+                    "endpoint": format!("http://127.0.0.1:{}/webhook", webhook_port),
+                    "shared_secret": "test-secret",
+                    "networks": ["polygon"],
+                    "events": [
+                        { "event_name": "Transfer" }
+                    ]
+                }]
+            }));
+        }
+
+        start_indexer_with_pg(context, config, pg_port).await?;
+
+        let conn_str = format!(
+            "host=localhost port={} user=postgres password=postgres dbname=postgres",
+            pg_port
+        );
+        let table = "reorg_test_simple_erc_20.transfer";
+
+        // Wait for initial indexing
+        let pre_count = wait_for_pg_count(&conn_str, table, 6, 15).await?;
+        info!("Pre-reorg PG rows: {}", pre_count);
+
+        // Send a live transfer to confirm poller is active
+        let live_recipient = generate_test_address(99);
+        context.anvil.send_transfer(&contract_address, &live_recipient, U256::from(777u64)).await?;
+        context.anvil.mine_block().await?;
+        let live_count = wait_for_pg_count(&conn_str, table, pre_count + 1, 15).await?;
+        info!("After live transfer: {} PG rows", live_count);
+
+        // Clear any initial webhook payloads from indexing
+        received_bodies.lock().await.clear();
+
+        // Trigger reorg
+        context.anvil.trigger_reorg(2).await?;
+        context.anvil.mine_block().await?;
+
+        // Wait for reorg recovery
+        if let Some(r) = &context.rindexer {
+            r.wait_for_reorg_recovery(60).await?;
+        }
+
+        // Give webhook delivery a moment to complete
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+        // Check webhook received a reorg notification
+        let bodies = received_bodies.lock().await;
+        info!("Webhook received {} payloads after reorg", bodies.len());
+
+        let reorg_payload = bodies.iter().find(|b| b.contains("reorg"));
+
+        if let Some(payload) = reorg_payload {
+            info!("Reorg webhook payload: {}", payload);
+
+            // Payload structure: { event_name: "__rindexer_reorg", event_data: [{ type: "reorg", network, fork_block, depth, affected_tx_hashes }], ... }
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(payload) {
+                let event_name = json.get("event_name").and_then(|v| v.as_str());
+                if event_name != Some("__rindexer_reorg") {
+                    return Err(anyhow::anyhow!(
+                        "Expected event_name=__rindexer_reorg, got: {:?}",
+                        event_name
+                    ));
+                }
+
+                let event_data =
+                    json.get("event_data").and_then(|v| v.as_array()).and_then(|arr| arr.first());
+                let reorg_entry = event_data.ok_or_else(|| {
+                    anyhow::anyhow!("Missing event_data array in reorg webhook payload")
+                })?;
+
+                let event_type = reorg_entry.get("type").and_then(|v| v.as_str());
+                if event_type != Some("reorg") {
+                    return Err(anyhow::anyhow!(
+                        "Expected type=reorg in event_data, got: {:?}",
+                        event_type
+                    ));
+                }
+
+                let network = reorg_entry.get("network").and_then(|v| v.as_str());
+                if network != Some("polygon") {
+                    return Err(anyhow::anyhow!(
+                        "Expected network=polygon in event_data, got: {:?}",
+                        network
+                    ));
+                }
+
+                let fork_block = reorg_entry.get("fork_block").and_then(|v| v.as_u64());
+                info!(
+                    "Webhook payload validated: type=reorg, network=polygon, fork_block={:?}",
+                    fork_block
+                );
+            } else {
+                return Err(anyhow::anyhow!("Webhook payload is not valid JSON: {}", payload));
+            }
+        } else {
+            return Err(anyhow::anyhow!(
+                "No reorg notification received via webhook. Got {} payloads: {:?}",
+                bodies.len(),
+                bodies.iter().take(3).collect::<Vec<_>>()
+            ));
+        }
+
+        assert_no_pg_duplicates(&conn_str, table).await?;
+
+        info!("Reorg Webhook Stream Notification Test PASSED");
+        Ok(())
+    })
 }

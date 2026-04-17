@@ -23,6 +23,21 @@ use crate::reth::node::start_reth_node_with_exex;
 #[cfg(feature = "reth")]
 use reth::cli::Commands;
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ReorgHandlingConfig {
+    #[serde(default = "default_reorg_enabled")]
+    pub enabled: bool,
+
+    /// Optional override for the block hash window size. When `None`, the
+    /// window size is derived from `reorg_safe_distance_for_chain(chain_id)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_size: Option<usize>,
+}
+
+fn default_reorg_enabled() -> bool {
+    true
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Network {
     pub name: String,
@@ -69,6 +84,9 @@ pub struct Network {
 
     #[cfg(not(feature = "reth"))]
     pub reth: Option<()>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reorg_handling: Option<ReorgHandlingConfig>,
 }
 
 #[cfg(feature = "reth")]

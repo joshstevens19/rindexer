@@ -220,28 +220,57 @@ impl RindexerInstance {
         if let Some(mut child) = self.process.take() {
             info!("Stopping rindexer instance");
 
-            if let Err(e) = child.kill().await {
-                warn!("Failed to kill rindexer process: {}", e);
+            let pid = child.id();
+
+            // Collect child PIDs before killing the parent, so we can clean up
+            // orphans (e.g. PostGraphile) that won't die with SIGKILL.
+            #[cfg(unix)]
+            let child_pids: Vec<String> = pid
+                .and_then(|p| {
+                    std::process::Command::new("pgrep").args(["-P", &p.to_string()]).output().ok()
+                })
+                .map(|out| {
+                    String::from_utf8_lossy(&out.stdout)
+                        .split_whitespace()
+                        .map(|s| s.to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            // Send SIGTERM first so rindexer can gracefully shut down its child
+            // processes (e.g. PostGraphile). SIGKILL skips shutdown handlers.
+            #[cfg(unix)]
+            if let Some(pid) = pid {
+                unsafe { libc::kill(pid as i32, libc::SIGTERM) };
             }
 
-            let timeout = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+            // Wait up to 3s for graceful shutdown
+            let graceful = tokio::time::timeout(Duration::from_secs(3), child.wait()).await;
 
-            match timeout {
+            match graceful {
                 Ok(Ok(status)) => {
-                    info!("Rindexer terminated with status: {:?}", status);
+                    info!("Rindexer terminated gracefully with status: {:?}", status);
                 }
-                Ok(Err(e)) => {
-                    warn!("Error waiting for rindexer: {}", e);
+                _ => {
+                    warn!("Rindexer did not terminate gracefully, force killing");
+                    let _ = child.kill().await;
+                    let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
                 }
-                Err(_) => {
-                    warn!("Rindexer did not terminate within 5s, force killing");
-                    if let Some(pid) = child.id() {
-                        let _ = std::process::Command::new("kill")
-                            .arg("-9")
-                            .arg(pid.to_string())
-                            .output();
-                    }
+            }
+
+            // Kill any child processes (e.g. PostGraphile) that were orphaned.
+            // First try the pre-collected PIDs, then sweep for rindexer-graphql.
+            #[cfg(unix)]
+            {
+                for cpid in &child_pids {
+                    info!("Killing orphaned child process {}", cpid);
+                    let _ = std::process::Command::new("kill").args(["-9", cpid]).output();
                 }
+                // Also kill any rindexer-graphql processes that may have survived.
+                // PostGraphile is spawned as `rindexer-graphql-<pid>` by the core.
+                let _ = std::process::Command::new("pkill")
+                    .args(["-9", "-f", "rindexer-graphql"])
+                    .output();
             }
         }
         Ok(())
@@ -281,7 +310,9 @@ impl RindexerInstance {
                         info!("[RINDEXER] Reorg detected: {}", line);
                         reorg_detected_clone.store(true, Ordering::Relaxed);
                     }
-                    if line.contains("Reorg recovery complete") {
+                    if line.contains("Reorg recovery complete")
+                        || line.contains("Reorg task completed")
+                    {
                         info!("[RINDEXER] Reorg recovery complete: {}", line);
                         reorg_recovery_clone.store(true, Ordering::Relaxed);
                     }
@@ -383,6 +414,7 @@ impl RindexerInstance {
                 name: "anvil".to_string(),
                 chain_id: 31337,
                 rpc: anvil_rpc_url.to_string(),
+                reorg_handling: None,
             }],
             global: crate::test_suite::GlobalConfig { health_port },
             storage: crate::test_suite::StorageConfig {
@@ -416,6 +448,7 @@ impl RindexerInstance {
                 name: "Transfer".to_string(),
             }]),
             tables: None,
+            streams: None,
         }];
         config
     }

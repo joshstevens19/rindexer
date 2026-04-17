@@ -549,6 +549,7 @@ async fn handle_phantom_deploy(
                         get_logs_settings: None,
                         reth: None,
                         multicall3_address: None,
+                        reorg_handling: None,
                     });
                 }
 

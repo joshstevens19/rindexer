@@ -1,0 +1,19 @@
+[
+  {
+    "type": "event",
+    "name": "Ping",
+    "inputs": [
+      { "name": "id", "type": "uint256", "indexed": true },
+      { "name": "sender", "type": "address", "indexed": false }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "ping",
+    "inputs": [
+      { "name": "id", "type": "uint256" }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  }
+]

@@ -216,7 +216,8 @@ impl StreamsClients {
 
         let mut chunks = Vec::new();
         for item in data_array {
-            let item_str = serde_json::to_string(item).unwrap();
+            let item_str = serde_json::to_string(item)
+                .expect("serde_json::to_string on Value cannot fail for valid JSON data");
             let item_size = item_str.len();
 
             if current_size + item_size > MAX_CHUNK_SIZE {
@@ -259,7 +260,8 @@ impl StreamsClients {
             network: event_message.network.clone(),
         };
 
-        serde_json::to_string(&chunk_message).unwrap()
+        serde_json::to_string(&chunk_message)
+            .expect("serde_json::to_string on EventMessage cannot fail for valid JSON data")
     }
 
     fn create_chunk_message_json(
@@ -275,7 +277,8 @@ impl StreamsClients {
             network: event_message.network.clone(),
         };
 
-        serde_json::to_value(&chunk_message).unwrap()
+        serde_json::to_value(&chunk_message)
+            .expect("serde_json::to_value on EventMessage cannot fail for valid JSON data")
     }
 
     fn generate_publish_message_id(
@@ -1174,6 +1177,7 @@ mod tests {
             shared_secret: "s".to_string(),
             networks: vec!["polygon".to_string()],
             events: vec![stream_event("Transfer")],
+            delivery: None,
         };
         let msg = sample_event_message(); // network: ethereum
         let result =
@@ -1188,6 +1192,7 @@ mod tests {
             shared_secret: "s".to_string(),
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Approval")],
+            delivery: None,
         };
         let msg = sample_event_message(); // event: Transfer
         let result =
@@ -1210,6 +1215,7 @@ mod tests {
             shared_secret: "secret".to_string(),
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Transfer")],
+            delivery: None,
         };
 
         let msg = sample_event_message();
@@ -1230,6 +1236,7 @@ mod tests {
             shared_secret: "s".to_string(),
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Transfer")],
+            delivery: None,
         };
 
         let msg = sample_event_message();
@@ -1250,6 +1257,7 @@ mod tests {
             shared_secret: "s".to_string(),
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Transfer")], // does not include NativeTransfer
+            delivery: None,
         };
 
         let msg = EventMessage {
@@ -1277,6 +1285,7 @@ mod tests {
             shared_secret: "s".to_string(),
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Transfer")],
+            delivery: None,
         };
 
         let msg = sample_event_message();
@@ -1306,6 +1315,7 @@ mod tests {
             shared_secret: "s".to_string(),
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Transfer")], // doesn't matter, force_send
+            delivery: None,
         };
 
         let result =
@@ -1330,6 +1340,7 @@ mod tests {
             queue_id: "q-456".to_string(),
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Transfer")],
+            delivery: None,
         };
 
         let msg = sample_event_message();
@@ -1347,6 +1358,7 @@ mod tests {
             queue_id: "q-456".to_string(),
             networks: vec!["polygon".to_string()],
             events: vec![stream_event("Transfer")],
+            delivery: None,
         };
 
         let msg = sample_event_message(); // network: ethereum

@@ -7,6 +7,14 @@ use tokio::fs;
 
 use crate::types::aws_config::AwsConfig;
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum StreamDeliveryMode {
+    #[default]
+    Instant,
+    Finalized,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StreamEvent {
     pub event_name: String,
@@ -25,6 +33,8 @@ pub struct SNSStreamTopicConfig {
     pub networks: Vec<String>,
     #[serde(default)]
     pub events: Vec<StreamEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<StreamDeliveryMode>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -40,6 +50,8 @@ pub struct WebhookStreamConfig {
     pub networks: Vec<String>,
     #[serde(default)]
     pub events: Vec<StreamEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<StreamDeliveryMode>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -60,6 +72,8 @@ pub struct RedisStreamStreamConfig {
     pub networks: Vec<String>,
     #[serde(default)]
     pub events: Vec<StreamEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<StreamDeliveryMode>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -109,6 +123,8 @@ pub struct RabbitMQStreamQueueConfig {
     pub networks: Vec<String>,
     #[serde(default)]
     pub events: Vec<StreamEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<StreamDeliveryMode>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -158,6 +174,8 @@ pub struct KafkaStreamQueueConfig {
     pub networks: Vec<String>,
     #[serde(default)]
     pub events: Vec<StreamEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<StreamDeliveryMode>,
 }
 
 #[cfg(feature = "kafka")]
@@ -185,6 +203,8 @@ pub struct CloudflareQueuesStreamQueueConfig {
     pub networks: Vec<String>,
     #[serde(default)]
     pub events: Vec<StreamEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<StreamDeliveryMode>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

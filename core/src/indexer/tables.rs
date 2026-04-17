@@ -171,7 +171,7 @@ use crate::event::{
 };
 use crate::manifest::contract::{
     compute_sequence_id, injected_columns, ColumnType, IterateBinding, OperationType, SetAction,
-    Table, TableOperation,
+    SetColumn, Table, TableOperation,
 };
 use crate::manifest::core::Constants;
 use crate::provider::ChainProvider;
@@ -3821,6 +3821,15 @@ pub async fn process_table_operations(
                     sql_condition.as_deref(),
                 )
                 .await?;
+
+                // Journal non-reversible operations (Set/Max/Min) for reorg recalculation
+                journal_non_reversible_ops(
+                    postgres,
+                    &table_runtime.full_table_name,
+                    operation,
+                    &rows_to_process,
+                )
+                .await;
             }
 
             if let Some(clickhouse) = &clickhouse {
@@ -3832,6 +3841,14 @@ pub async fn process_table_operations(
                     &rows_to_process,
                 )
                 .await?;
+
+                journal_non_reversible_ops_clickhouse(
+                    clickhouse,
+                    &table_runtime.full_table_name,
+                    operation,
+                    &rows_to_process,
+                )
+                .await;
             }
 
             // DB write succeeded - update max blocks written tracker
@@ -4492,6 +4509,168 @@ pub fn parse_literal_value_for_column(
     column_type: &ColumnType,
 ) -> Option<EthereumSqlTypeWrapper> {
     Some(literal_to_wrapper(value, column_type))
+}
+
+/// Extract block_number, tx_index, log_index from a table row.
+fn extract_row_metadata(row: &TableRowData) -> Option<(u64, u64, u64)> {
+    use crate::manifest::contract::injected_columns;
+
+    let block_number = match row.columns.get(injected_columns::BLOCK_NUMBER) {
+        Some(EthereumSqlTypeWrapper::U64BigInt(n)) => *n,
+        _ => return None,
+    };
+    let tx_index: u64 = match row.columns.get("tx_index") {
+        Some(EthereumSqlTypeWrapper::U64(n)) => *n,
+        Some(EthereumSqlTypeWrapper::U64BigInt(n)) => *n,
+        Some(EthereumSqlTypeWrapper::U32(n)) => (*n).into(),
+        _ => 0,
+    };
+    let log_index: u64 = match row.columns.get("log_index") {
+        Some(EthereumSqlTypeWrapper::U64(n)) => *n,
+        Some(EthereumSqlTypeWrapper::U64BigInt(n)) => *n,
+        Some(EthereumSqlTypeWrapper::U32(n)) => (*n).into(),
+        _ => 0,
+    };
+    Some((block_number, tx_index, log_index))
+}
+
+/// Build where_key string and collect journal value rows for non-reversible operations.
+/// Returns a list of SQL VALUES tuples ready to be joined into a batch INSERT.
+fn collect_journal_values(
+    derived_table: &str,
+    operation: &TableOperation,
+    rows: &[TableRowData],
+    escape_quote: &str,
+) -> Vec<String> {
+    let non_reversible: Vec<&SetColumn> =
+        operation.set.iter().filter(|sc| sc.action.reverse().is_none()).collect();
+
+    if non_reversible.is_empty() || rows.is_empty() {
+        return vec![];
+    }
+
+    let mut where_keys: Vec<&String> = operation.where_clause.keys().collect();
+    where_keys.sort(); // deterministic ordering for where_key string matching during recalculation
+    let mut value_tuples: Vec<String> = Vec::new();
+
+    for row in rows {
+        let Some((block_number, tx_index, log_index)) = extract_row_metadata(row) else {
+            continue;
+        };
+
+        let mut where_clauses: Vec<String> = Vec::new();
+        for col in &where_keys {
+            if let Some(v) = row.columns.get(col.as_str()) {
+                where_clauses.push(format!("{}={}", col, format_wrapper_for_sql(v)));
+            }
+        }
+        if where_clauses.is_empty() {
+            continue;
+        }
+        let where_key_str = where_clauses.join(",").replace('\'', escape_quote);
+
+        for sc in &non_reversible {
+            let value_str = match row.columns.get(sc.column.as_str()) {
+                Some(v) => format_wrapper_for_sql(v),
+                None => continue,
+            };
+
+            value_tuples.push(format!(
+                "('{derived_table}', '{network}', '{where_key}', '{column}', {value}, {block}, {tx_idx}, {log_idx})",
+                derived_table = derived_table,
+                network = row.network,
+                where_key = where_key_str,
+                column = sc.column,
+                value = value_str,
+                block = block_number,
+                tx_idx = tx_index,
+                log_idx = log_index,
+            ));
+        }
+    }
+
+    value_tuples
+}
+
+/// Journal non-reversible (Set/Max/Min) operations to Postgres `rindexer_internal.derived_op_log`.
+/// Batches all rows into a single INSERT statement.
+async fn journal_non_reversible_ops(
+    postgres: &PostgresClient,
+    derived_table: &str,
+    operation: &TableOperation,
+    rows: &[TableRowData],
+) {
+    let values = collect_journal_values(derived_table, operation, rows, "''");
+    if values.is_empty() {
+        return;
+    }
+
+    let sql = format!(
+        "INSERT INTO rindexer_internal.derived_op_log \
+         (derived_table, network, where_key, column_name, value, block_number, tx_index, log_index) \
+         VALUES {}",
+        values.join(", ")
+    );
+
+    if let Err(e) = postgres.batch_execute(&sql).await {
+        tracing::error!(
+            table = %derived_table,
+            "Failed to journal non-reversible ops: {:?}", e
+        );
+    }
+}
+
+/// Journal non-reversible (Set/Max/Min) operations to ClickHouse `rindexer_internal.derived_op_log`.
+/// Batches all rows into a single INSERT statement.
+async fn journal_non_reversible_ops_clickhouse(
+    clickhouse: &ClickhouseClient,
+    derived_table: &str,
+    operation: &TableOperation,
+    rows: &[TableRowData],
+) {
+    let values = collect_journal_values(derived_table, operation, rows, "\\'");
+    if values.is_empty() {
+        return;
+    }
+
+    let sql = format!(
+        "INSERT INTO rindexer_internal.derived_op_log \
+         (derived_table, network, where_key, column_name, value, block_number, tx_index, log_index) \
+         VALUES {}",
+        values.join(", ")
+    );
+
+    if let Err(e) = clickhouse.execute(&sql).await {
+        tracing::error!(
+            table = %derived_table,
+            "ClickHouse: failed to journal non-reversible ops: {:?}", e
+        );
+    }
+}
+
+/// Format an EthereumSqlTypeWrapper as a SQL literal for WHERE clauses.
+fn format_wrapper_for_sql(w: &EthereumSqlTypeWrapper) -> String {
+    match w {
+        EthereumSqlTypeWrapper::String(s) => format!("'{}'", s.replace('\'', "''")),
+        EthereumSqlTypeWrapper::Address(a) => format!("'{:#x}'", a),
+        EthereumSqlTypeWrapper::Bool(b) => format!("{}", b),
+        EthereumSqlTypeWrapper::U8(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::U16(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::U32(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::U64(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::U64BigInt(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::U128(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::U256(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::I8(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::I16(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::I32(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::I64(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::I128(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::I256(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::Bytes(b) => format!("'\\x{}'", hex::encode(b)),
+        // Fallback: use Debug formatting (safe for SQL numerics)
+        other => format!("'{:?}'", other),
+    }
 }
 
 #[cfg(test)]

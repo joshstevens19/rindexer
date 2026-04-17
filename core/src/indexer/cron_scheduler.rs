@@ -1026,7 +1026,7 @@ async fn execute_cron_operations_batch(
         "RPC calls completed: {}/{} successful ({}%)",
         successful_calls,
         total_calls,
-        if total_calls > 0 { (successful_calls * 100) / total_calls } else { 0 }
+        (successful_calls * 100).checked_div(total_calls).unwrap_or(0)
     );
     let mut all_rows: Vec<TableRowData> =
         Vec::with_capacity(blocks.len() * addresses_with_blocks.len());

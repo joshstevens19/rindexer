@@ -103,6 +103,7 @@ fn build_direct_rpc_config(
             name: "mainnet".to_string(),
             chain_id: 1,
             rpc: rpc_url.to_string(),
+            reorg_handling: None,
         }],
         global: GlobalConfig { health_port },
         storage: StorageConfig {
@@ -123,6 +124,7 @@ fn build_direct_rpc_config(
             reorg_safe_distance: None,
             include_events: Some(vec![EventConfig { name: "Transfer".to_string() }]),
             tables: None,
+            streams: None,
         }],
     }
 }

@@ -1,7 +1,13 @@
 use crate::blockclock::BlockClock;
+use crate::database::clickhouse::client::ClickhouseClient;
+use crate::event::callback_registry::EventCallbackRegistry;
 use crate::helpers::{halved_block_number, is_relevant_block};
-use crate::indexer::reorg::{new_shadow_cache, reorg_safe_distance_for_chain};
+use crate::indexer::reorg::{
+    detect_and_handle_reorg, reorg_safe_distance_for_chain, ReorgContext, ReorgCoordinator,
+};
 use crate::metrics::indexing as metrics;
+use crate::streams::StreamsClients;
+use crate::PostgresClient;
 use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
     indexer::{reorg::handle_chain_notification, IndexingEventProgressStatus},
@@ -23,9 +29,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 /// Metadata for a processed block, used for reorg detection via parent hash chain validation.
+#[allow(dead_code)]
 pub struct BlockMeta {
     pub hash: B256,
-    #[allow(dead_code)]
     pub parent_hash: B256,
     pub timestamp: u64,
 }
@@ -51,6 +57,7 @@ pub struct FetchLogsResult {
 pub fn fetch_logs_stream(
     config: Arc<EventProcessingConfig>,
     force_no_live_indexing: bool,
+    reorg_coordinator: Option<ReorgCoordinator>,
 ) -> impl tokio_stream::Stream<Item = Result<FetchLogsResult, Box<dyn Error + Send>>> + Send + Unpin
 {
     // If the sink is slower than the producer it can lead to unbounded memory growth and
@@ -147,6 +154,7 @@ pub fn fetch_logs_stream(
 
         // Live indexing mode
         if config.live_indexing() && !force_no_live_indexing {
+            let registry = config.registry();
             live_indexing_stream(
                 config.timestamps(),
                 config.network_contract().block_clock.clone(),
@@ -161,6 +169,11 @@ pub fn fetch_logs_stream(
                 config.network_contract().disable_logs_bloom_checks,
                 original_max_limit,
                 config.cancel_token().clone(),
+                reorg_coordinator,
+                config.postgres(),
+                config.clickhouse(),
+                config.streams_clients(),
+                &registry,
             )
             .await;
         }
@@ -423,6 +436,11 @@ async fn live_indexing_stream(
     disable_logs_bloom_checks: bool,
     original_max_limit: Option<U64>,
     cancel_token: CancellationToken,
+    mut reorg_coordinator: Option<ReorgCoordinator>,
+    postgres: Option<Arc<PostgresClient>>,
+    clickhouse: Option<Arc<ClickhouseClient>>,
+    streams_clients: Arc<Option<StreamsClients>>,
+    registry: &EventCallbackRegistry,
 ) {
     let mut last_seen_block_number = last_seen_block_number;
     let mut log_response_to_large_to_block: Option<U64> = None;
@@ -456,20 +474,6 @@ async fn live_indexing_stream(
     // for rollups having long-mechanisms like Polygon 1 epoch.
     let mut block_cache: LruCache<u64, BlockMeta> = LruCache::new(NonZeroUsize::new(1024).unwrap());
 
-    // Shadow cache + post-confirmation verifier: catches silent reorgs that
-    // the real-time detection might miss (e.g., when we were between polls).
-    let shadow_cache = new_shadow_cache();
-    let (verifier_reorg_tx, mut verifier_reorg_rx) =
-        tokio::sync::mpsc::unbounded_channel::<ReorgInfo>();
-    let _verifier_handle = crate::indexer::reorg::spawn_post_confirmation_verifier(
-        Arc::clone(&shadow_cache),
-        Arc::clone(&cached_provider),
-        64, // confirmations before verification
-        verifier_reorg_tx,
-        cancel_token.clone(),
-        network.to_string(),
-    );
-
     loop {
         let iteration_start = Instant::now();
 
@@ -477,8 +481,7 @@ async fn live_indexing_stream(
             break;
         }
 
-        // Reth reorg signal — instant detection, skip cache-based checks.
-        // Enters the same FetchLogsResult → handle_reorg_recovery pipeline.
+        // Reth reorg signal — instant detection via ExEx notification.
         if let Ok(reth_reorg) = reth_reorg_rx.try_recv() {
             let fork_block = reth_reorg.fork_block.to::<u64>();
             warn!(
@@ -488,6 +491,28 @@ async fn live_indexing_stream(
 
             for b in fork_block..=(fork_block + reth_reorg.depth) {
                 block_cache.pop(&b);
+            }
+
+            // Route through coordinator for full recovery (event deletion, checkpoint
+            // rewind, derived table rollback, window update) when available.
+            if let Some(ref mut coordinator) = reorg_coordinator {
+                let detection_point = fork_block + reth_reorg.depth;
+                match coordinator.on_exex_reorg(detection_point, fork_block) {
+                    Ok(task) => {
+                        let reorg_ctx = ReorgContext {
+                            postgres: postgres.as_deref(),
+                            clickhouse: clickhouse.as_ref(),
+                            registry: Some(registry),
+                            streams_clients: streams_clients.as_ref().as_ref(),
+                        };
+                        if let Err(e) = coordinator.handle_reorg(task, &reorg_ctx).await {
+                            error!("{} - Failed to handle ExEx reorg: {:?}", info_log_name, e);
+                        }
+                    }
+                    Err(e) => {
+                        error!("{} - Invalid ExEx reorg range: {:?}", info_log_name, e);
+                    }
+                }
             }
 
             let _ = tx
@@ -504,46 +529,11 @@ async fn live_indexing_stream(
             continue;
         }
 
-        // Post-confirmation verifier signal — detected a reorg via background hash checks.
-        if let Ok(verifier_reorg) = verifier_reorg_rx.try_recv() {
-            let fork_block = verifier_reorg.fork_block.to::<u64>();
-            warn!(
-                "{} - REORG (post-confirmation verifier): depth={}, fork_block={}",
-                info_log_name, verifier_reorg.depth, fork_block
-            );
-
-            for b in fork_block..=(fork_block + verifier_reorg.depth) {
-                block_cache.pop(&b);
-            }
-
-            let _ = tx
-                .send(Ok(FetchLogsResult {
-                    logs: vec![],
-                    from_block: U64::from(fork_block),
-                    to_block: U64::from(fork_block),
-                    reorg: Some(verifier_reorg),
-                }))
-                .await;
-
-            current_filter = current_filter.set_from_block(U64::from(fork_block));
-            last_seen_block_number = U64::from(fork_block.saturating_sub(1));
-            while reth_reorg_rx.try_recv().is_ok() {}
-            continue;
-        }
-
         let latest_block = cached_provider.get_latest_block().await;
         match latest_block {
             Ok(latest_block) => {
                 if let Some(latest_block) = latest_block {
-                    // Reorg detection #1: tip hash changed (same block number, different hash).
-                    // Critical for fast chains like Polygon where we poll multiple times
-                    // per block and may see the same block number with a different hash
-                    // after a tip reorg — must check BEFORE overwriting the cache.
-                    let tip_reorged = block_cache
-                        .peek(&latest_block.header.number)
-                        .map(|cached| cached.hash != latest_block.header.hash)
-                        .unwrap_or(false);
-
+                    // Keep block cache for timestamp lookups
                     block_cache.put(
                         latest_block.header.number,
                         BlockMeta {
@@ -553,64 +543,45 @@ async fn live_indexing_stream(
                         },
                     );
 
-                    // Mirror to shadow cache for post-confirmation verification
-                    if let Ok(mut sc) = shadow_cache.try_lock() {
-                        sc.insert(latest_block.header.number, latest_block.header.hash);
-                    }
-
-                    // Reorg detection #2: parent hash chain discontinuity.
-                    // The next block's parent_hash doesn't match our cached hash for
-                    // the previous block — the chain forked between them.
-                    let parent_mismatch = if !tip_reorged && latest_block.header.number > 0 {
-                        block_cache
-                            .peek(&(latest_block.header.number - 1))
-                            .map(|cached| cached.hash != latest_block.header.parent_hash)
-                            .unwrap_or(false)
-                    } else {
-                        false
-                    };
-
-                    if tip_reorged || parent_mismatch {
-                        let reason =
-                            if tip_reorged { "tip hash changed" } else { "parent hash mismatch" };
-                        let fork_block = crate::indexer::reorg::find_fork_point(
-                            &block_cache,
-                            &cached_provider,
-                            latest_block.header.number,
-                        )
-                        .await;
-                        let depth = latest_block.header.number.saturating_sub(fork_block);
-                        metrics::record_reorg(network, depth);
-                        warn!(
-                            "{} - REORG ({}): depth={}, fork_block={}, current_block={}",
-                            info_log_name, reason, depth, fork_block, latest_block.header.number
+                    // Reorg detection via coordinator (parent hash validation)
+                    if let Some(ref mut coordinator) = reorg_coordinator {
+                        let log_prefix = format!(
+                            "{} - {}",
+                            info_log_name,
+                            IndexingEventProgressStatus::live_log()
                         );
-
-                        // Invalidate cached hashes for reorged blocks
-                        for b in fork_block..=latest_block.header.number {
-                            block_cache.pop(&b);
+                        let reorg_ctx = ReorgContext {
+                            postgres: postgres.as_deref(),
+                            clickhouse: clickhouse.as_ref(),
+                            registry: Some(registry),
+                            streams_clients: streams_clients.as_ref().as_ref(),
+                        };
+                        match detect_and_handle_reorg(
+                            coordinator,
+                            latest_block.header.number,
+                            latest_block.header.hash,
+                            latest_block.header.parent_hash,
+                            &log_prefix,
+                            &reorg_ctx,
+                        )
+                        .await
+                        {
+                            Ok(Some(fork_point)) => {
+                                current_filter =
+                                    current_filter.set_from_block(U64::from(fork_point));
+                                last_seen_block_number = U64::from(fork_point.saturating_sub(1));
+                                continue;
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                error!(
+                                    "{} - Reorg handling failed, pausing before retry: {:?}",
+                                    info_log_name, e
+                                );
+                                tokio::time::sleep(Duration::from_secs(2)).await;
+                                continue;
+                            }
                         }
-
-                        // Send reorg signal to consumer
-                        let _ = tx
-                            .send(Ok(FetchLogsResult {
-                                logs: vec![],
-                                from_block: U64::from(fork_block),
-                                to_block: U64::from(fork_block),
-                                reorg: Some(ReorgInfo {
-                                    fork_block: U64::from(fork_block),
-                                    depth,
-                                    affected_tx_hashes: vec![],
-                                }),
-                            }))
-                            .await;
-
-                        // Rewind cursor to fork point
-                        current_filter = current_filter.set_from_block(U64::from(fork_block));
-                        last_seen_block_number = U64::from(fork_block.saturating_sub(1));
-                        // Drain any pending reth signals to avoid double recovery
-                        while reth_reorg_rx.try_recv().is_ok() {}
-                        continue;
                     }
 
                     let latest_block_number = log_response_to_large_to_block
@@ -772,18 +743,58 @@ async fn live_indexing_stream(
                                                 block_cache.pop(&b);
                                             }
 
-                                            let _ = tx
-                                                .send(Ok(FetchLogsResult {
-                                                    logs: vec![],
-                                                    from_block: U64::from(min_removed_block),
-                                                    to_block: U64::from(min_removed_block),
-                                                    reorg: Some(ReorgInfo {
-                                                        fork_block: U64::from(min_removed_block),
-                                                        depth,
-                                                        affected_tx_hashes: vec![],
-                                                    }),
-                                                }))
-                                                .await;
+                                            // Route through coordinator for full recovery when available
+                                            // (event deletion, checkpoint rewind, window update).
+                                            // Fall back to sending ReorgInfo through the stream when
+                                            // the coordinator is not configured.
+                                            if let Some(ref mut coordinator) = reorg_coordinator {
+                                                match coordinator
+                                                    .try_create_reorg_task_for_block_range(
+                                                        min_removed_block,
+                                                        to_block.to::<u64>(),
+                                                    ) {
+                                                    Ok(task) => {
+                                                        let reorg_ctx = ReorgContext {
+                                                            postgres: postgres.as_deref(),
+                                                            clickhouse: clickhouse.as_ref(),
+                                                            registry: Some(registry),
+                                                            streams_clients: streams_clients
+                                                                .as_ref()
+                                                                .as_ref(),
+                                                        };
+                                                        if let Err(e) = coordinator
+                                                            .handle_reorg(task, &reorg_ctx)
+                                                            .await
+                                                        {
+                                                            error!(
+                                                                "{} - Failed to handle removed-logs reorg: {}",
+                                                                info_log_name, e
+                                                            );
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        error!(
+                                                            "{} - Invalid removed-logs reorg range: {:?}",
+                                                            info_log_name, e
+                                                        );
+                                                    }
+                                                }
+                                            } else {
+                                                let _ = tx
+                                                    .send(Ok(FetchLogsResult {
+                                                        logs: vec![],
+                                                        from_block: U64::from(min_removed_block),
+                                                        to_block: U64::from(min_removed_block),
+                                                        reorg: Some(ReorgInfo {
+                                                            fork_block: U64::from(
+                                                                min_removed_block,
+                                                            ),
+                                                            depth,
+                                                            affected_tx_hashes: vec![],
+                                                        }),
+                                                    }))
+                                                    .await;
+                                            }
 
                                             current_filter = current_filter
                                                 .set_from_block(U64::from(min_removed_block));
@@ -986,7 +997,7 @@ async fn retry_with_block_range(
     // Thanks Ponder for the regex patterns - https://github.com/ponder-sh/ponder/blob/889096a3ef5f54a0c5a06df82b0da9cf9a113996/packages/utils/src/getLogsRetryHelper.ts#L34
     // Alchemy
     if let Ok(re) =
-        Regex::new(r"this block range should work: \[0x([0-9a-fA-F]+),\s*0x([0-9a-fA-F]+)\]")
+        Regex::new(r"this block range should work: \[0x([0-9a-fA-F]+),\s*0x([0-9a-fA-F]+)]")
     {
         if let Some(captures) = re.captures(&error_message).or_else(|| re.captures(&error_data)) {
             if let (Some(start_block), Some(end_block)) = (captures.get(1), captures.get(2)) {
@@ -1028,8 +1039,7 @@ async fn retry_with_block_range(
     }
 
     // Infura, Thirdweb, zkSync, Tenderly
-    if let Ok(re) =
-        Regex::new(r"try with this block range \[0x([0-9a-fA-F]+),\s*0x([0-9a-fA-F]+)\]")
+    if let Ok(re) = Regex::new(r"try with this block range \[0x([0-9a-fA-F]+),\s*0x([0-9a-fA-F]+)]")
     {
         if let Some(captures) = re.captures(&error_message).or_else(|| re.captures(&error_data)) {
             if let (Some(start_block), Some(end_block)) = (captures.get(1), captures.get(2)) {
