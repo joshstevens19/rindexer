@@ -1022,6 +1022,19 @@ pub async fn process_trace_events(
         let trace_information =
             TraceInformation::create(manifest.native_transfers.clone(), network_providers)?;
 
+        let nt_tables: Vec<TableRuntime> = manifest
+            .native_transfers
+            .tables
+            .as_ref()
+            .map(|tables| {
+                tables
+                    .iter()
+                    .map(|table| TableRuntime::new(table.clone(), &manifest.name, &contract_name))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let nt_tables_arc = Arc::new(nt_tables);
+
         let mut csv: Option<Arc<AsyncCsvAppender>> = None;
         if contract.generate_csv.unwrap_or(true) && manifest.storage.csv_enabled() {
             let csv_path =
@@ -1088,8 +1101,8 @@ pub async fn process_trace_events(
             sql_column_names,
             streams_clients: Arc::clone(&streams_arc),
             chat_clients: Arc::new(chat_clients),
-            tables: Arc::new(Vec::new()), // Native transfers don't support custom tables
-            store_raw_events: true,       // Native transfers always store raw events
+            tables: nt_tables_arc.clone(),
+            store_raw_events: true, // Native transfers always store raw events
             providers,
             constants: Arc::new(manifest.constants.clone()),
             multicall_addresses,
@@ -1102,6 +1115,7 @@ pub async fn process_trace_events(
             contract_name: contract_name.clone(),
             trace_information: trace_information.clone(),
             callback: no_code_callback(callback_params).trace_callback,
+            tables: nt_tables_arc,
             streams_clients: streams_arc,
         };
 
