@@ -110,8 +110,9 @@ pub(crate) enum NativeTransferReorgOutcome {
     NoCoordinator,
     /// All blocks in the range are canonical. Safe to emit.
     Canonical,
-    /// A reorg was handled. `rewind_to` is the new cursor: the next fetch
-    /// should start at `rewind_to + 1`.
+    /// A reorg was handled. `rewind_to` is the first canonical block to re-fetch
+    /// (inclusive) — the caller rewinds `last_seen_block` to `rewind_to - 1` so
+    /// the next iteration's `from_block` equals `rewind_to`.
     Rewound { rewind_to: u64 },
     /// Detection or rollback failed. Caller should back off and retry.
     Failed,
@@ -153,6 +154,27 @@ pub(crate) async fn native_transfer_detect_reorg_in_range(
         }
     };
 
+    // Guard against short reads (RPC lag, chain-tip reorg). Advancing the caller's
+    // cursor on a partial batch would leave a silent gap: blocks requested but not
+    // returned would never be fed to the coordinator, and their native-transfer
+    // rows would never be emitted. Treat as a transient failure so the caller
+    // backs off and retries the same range.
+    if blocks.len() != block_numbers.len() {
+        warn!(
+            network,
+            from_block,
+            to_block,
+            requested = block_numbers.len(),
+            received = blocks.len(),
+            "Native transfer reorg pre-check: short read from provider, retrying",
+        );
+        return NativeTransferReorgOutcome::Failed;
+    }
+
+    // Mutex held across reorg handling (DB rollback, stream publishes). On a real
+    // reorg this blocks the other indexing path for the duration of handle_reorg,
+    // which is acceptable for isolation. If latency becomes a concern, move
+    // handle_reorg out of the hot path.
     let mut guard = coordinator.lock().await;
     // TODO(Task 4): ReorgContext.registry expects &EventCallbackRegistry; native
     // transfers use a TraceCallbackRegistry. Task 4 will add `trace_registry` to
@@ -264,9 +286,12 @@ pub async fn native_transfer_block_fetch(
                             last_seen_block = to_block;
                         }
                         NativeTransferReorgOutcome::Rewound { rewind_to } => {
-                            // Re-fetch from fork_point + 1 next iteration so the now-canonical
-                            // traces are re-emitted.
-                            last_seen_block = U64::from(rewind_to);
+                            // `rewind_to` is the first canonical block to re-fetch (inclusive).
+                            // Subtract 1 from the cursor so the next iteration computes
+                            // `from_block = last_seen_block + 1 = rewind_to`, matching the
+                            // coordinator's rollback which deletes rows with
+                            // `block_number >= fork_point`.
+                            last_seen_block = U64::from(rewind_to.saturating_sub(1));
                             continue;
                         }
                         NativeTransferReorgOutcome::Failed => {
@@ -979,16 +1004,65 @@ mod tests {
         // Coordinator's find_fork_point compares the window's entries against
         // canonical hashes. With window blocks [10, 11] and canonical [11@0xFE, 12@12],
         // no canonical hash matches any window entry → fork_point falls back to the
-        // oldest window block (10). The caller will re-fetch from 11 onwards.
-        match outcome {
-            NativeTransferReorgOutcome::Rewound { rewind_to } => {
-                assert!(
-                    rewind_to <= 11,
-                    "fork_point {rewind_to} must rewind to at least block 11"
-                );
-            }
+        // oldest window block (10).
+        //
+        // Helper contract: `rewind_to` IS the first canonical block to re-fetch
+        // (inclusive) — equal to `fork_point`.
+        let rewind_to = match outcome {
+            NativeTransferReorgOutcome::Rewound { rewind_to } => rewind_to,
             other => panic!("expected Rewound, got {other:?}"),
-        }
+        };
+        assert_eq!(
+            rewind_to, 10,
+            "helper must return rewind_to == fork_point (the first canonical block to re-fetch)"
+        );
+
+        // Caller contract: applying `last_seen_block = rewind_to - 1` makes the
+        // next iteration's `from_block = last_seen_block + 1 = rewind_to = fork_point`,
+        // so block `fork_point` is NOT skipped. This mirrors the contract-event
+        // path at fetch_logs.rs where `last_seen_block_number = fork_point - 1`.
+        let last_seen_block_after_rewind = U64::from(rewind_to.saturating_sub(1));
+        let next_from_block = last_seen_block_after_rewind + U64::from(1);
+        assert_eq!(
+            next_from_block,
+            U64::from(rewind_to),
+            "caller rewind must set next from_block to fork_point (inclusive)"
+        );
+    }
+
+    #[tokio::test]
+    async fn native_transfer_short_read_returns_failed() {
+        // Provider registered with blocks [10, 11] but caller requests [10, 11, 12].
+        // The helper must detect the short read and return Failed, so the caller
+        // backs off and retries the same range instead of silently advancing
+        // `last_seen_block` past block 12.
+        let canonical_10 = make_block_with_parent(10, b256(10), b256(9));
+        let canonical_11 = make_block_with_parent(11, b256(11), b256(10));
+        let provider: Arc<dyn ChainProvider> = Arc::new(
+            MockChainProvider::new(1).with_blocks(vec![canonical_10, canonical_11]),
+        );
+
+        // Coordinator with an empty window so validation would otherwise succeed
+        // — we want to isolate the short-read check.
+        let coordinator = make_test_coordinator("ethereum", &[], provider.clone());
+
+        let outcome = native_transfer_detect_reorg_in_range(
+            provider.as_ref(),
+            Some(&coordinator),
+            None,
+            None,
+            None,
+            "ethereum",
+            10,
+            12,
+        )
+        .await;
+
+        assert_eq!(
+            outcome,
+            NativeTransferReorgOutcome::Failed,
+            "short read (2 blocks returned when 3 requested) must yield Failed",
+        );
     }
 
     #[tokio::test]
