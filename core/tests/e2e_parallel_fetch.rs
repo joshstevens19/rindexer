@@ -1,7 +1,7 @@
-//! End-to-end test for parallel historical backfill (PR #380).
+//! End-to-end test for parallel historical backfill.
 //!
 //! Runs rindexer's no-code historical pipeline against Anvil + Postgres with
-//! `fetch_concurrency` = 1 (sequential fallback), 4, and 8. Asserts that all
+//! `fetch_concurrency` = 1 (sequential fallback), 4, and 8, asserting all
 //! three runs produce an identical, correctly-ordered set of events.
 //!
 //! Requires Docker. Must be run sequentially (tests share DATABASE_URL env):
@@ -18,10 +18,7 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers::{GenericImage, ImageExt};
 use testcontainers_modules::postgres::Postgres;
 
-// ---------------------------------------------------------------------------
-// PingPong contract (same as e2e_reorg.rs): emits Ping(uint256 indexed id, address sender)
-// ---------------------------------------------------------------------------
-
+// PingPong emits Ping(uint256 indexed id, address sender). Same bytecode as e2e_reorg.rs.
 const PING_PONG_BYTECODE: &str =
     "6080604052348015600e575f5ffd5b506101748061001c5f395ff3fe608060405234801561000f575f5ffd5b5060043610610029575f3560e01c8063773acdef1461002d575b5f5ffd5b610047600480360381019061004291906100bb565b610049565b005b807fc05b373e05c47417d9c7204807552389e512c0e21cbc01a03d1554561080ac6e336040516100799190610125565b60405180910390a250565b5f5ffd5b5f819050919050565b61009a81610088565b81146100a4575f5ffd5b50565b5f813590506100b581610091565b92915050565b5f602082840312156100d0576100cf610084565b5b5f6100dd848285016100a7565b91505092915050565b5f73ffffffffffffffffffffffffffffffffffffffff82169050919050565b5f61010f826100e6565b9050919050565b61011f81610105565b82525050565b5f6020820190506101385f830184610116565b9291505056fea2646970667358221220dc07dd9f297d16a6d4ac329e4565c9ecb79b34df9738da42d568df67b039348764736f6c634300081c0033";
 
@@ -47,10 +44,6 @@ const PING_PONG_ABI: &str = r#"[
     "stateMutability": "nonpayable"
   }
 ]"#;
-
-// ---------------------------------------------------------------------------
-// RPC helpers
-// ---------------------------------------------------------------------------
 
 async fn rpc_call(http: &HttpClient, rpc_url: &str, method: &str, params: Value) -> Value {
     let body = json!({
@@ -149,10 +142,6 @@ async fn mine_blocks(http: &HttpClient, rpc_url: &str, count: u64) {
     let hex = format!("0x{:x}", count);
     rpc_call(http, rpc_url, "anvil_mine", json!([hex])).await;
 }
-
-// ---------------------------------------------------------------------------
-// Test infrastructure
-// ---------------------------------------------------------------------------
 
 struct TestEnv {
     pg_port: u16,
@@ -340,10 +329,6 @@ async fn run_rindexer_historical(manifest_path: PathBuf) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Main test — parity across fetch_concurrency = 1, 4, 8
-// ---------------------------------------------------------------------------
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
 async fn parallel_fetch_parity_across_worker_counts() {
@@ -473,11 +458,9 @@ async fn parallel_fetch_parity_across_worker_counts() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Edge case: large parallel run with a 5000-block range and 8 workers.
-// Verifies chunking at scale and that the reorder buffer doesn't drop or
-// re-order events when workers legitimately complete out of dispatch order.
-// ---------------------------------------------------------------------------
+/// 5000-block range with 8 requested workers (engages 5 per `floor(total/1000)`).
+/// Exercises chunking at scale and verifies the reorder buffer preserves block
+/// order when workers legitimately complete out of dispatch order.
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
