@@ -98,10 +98,8 @@ pub fn fetch_logs_stream(
         if use_parallel {
             let concurrency = config.config().fetch_concurrency.unwrap();
             // Use inclusive block count so a range [a, a] counts as 1 block.
-            let total_blocks = snapshot_to_block
-                .saturating_sub(from_block)
-                .to::<u64>()
-                .saturating_add(1);
+            let total_blocks =
+                snapshot_to_block.saturating_sub(from_block).to::<u64>().saturating_add(1);
 
             // Fallback to sequential for small ranges (not worth the overhead).
             if total_blocks >= PARALLEL_MIN_BLOCKS {
@@ -209,18 +207,10 @@ pub fn fetch_logs_stream(
                 });
 
                 if let Err(e) = dispatcher_handle.await {
-                    error!(
-                        "{} - Dispatcher task failed: {:?}",
-                        config.info_log_name(),
-                        e
-                    );
+                    error!("{} - Dispatcher task failed: {:?}", config.info_log_name(), e);
                 }
                 if let Err(e) = reorder_handle.await {
-                    error!(
-                        "{} - Reorder task failed: {:?}",
-                        config.info_log_name(),
-                        e
-                    );
+                    error!("{} - Reorder task failed: {:?}", config.info_log_name(), e);
                 }
 
                 info!(
@@ -232,10 +222,8 @@ pub fn fetch_logs_stream(
                 if config.live_indexing() && !force_no_live_indexing {
                     let registry = config.registry();
                     let live_from = snapshot_to_block + U64::from(1);
-                    let live_filter = current_filter
-                        .clone()
-                        .set_from_block(live_from)
-                        .set_to_block(live_from);
+                    let live_filter =
+                        current_filter.clone().set_from_block(live_from).set_to_block(live_from);
 
                     live_indexing_stream(
                         config.timestamps(),
@@ -638,10 +626,8 @@ pub(crate) fn plan_parallel_fetch(total_blocks: u64, concurrency: usize) -> Para
     let chunk_size = std::cmp::max(PARALLEL_MIN_CHUNK, total_blocks / capped as u64);
     // Never spawn more workers than there are MIN_CHUNK-sized pieces. For a
     // 2500-block range with concurrency=10 this yields 2 workers, not 10.
-    let effective_concurrency = std::cmp::min(
-        capped,
-        std::cmp::max(1, (total_blocks / PARALLEL_MIN_CHUNK) as usize),
-    );
+    let effective_concurrency =
+        std::cmp::min(capped, std::cmp::max(1, (total_blocks / PARALLEL_MIN_CHUNK) as usize));
     ParallelFetchParams { chunk_size, effective_concurrency }
 }
 
@@ -825,8 +811,8 @@ async fn parallel_worker(
                 controller.record_success();
                 results.push(Ok(fetch_result));
 
-                if results.len() >= MAX_WORKER_RESULTS {
-                    if tx
+                if results.len() >= MAX_WORKER_RESULTS
+                    && tx
                         .send(SequencedFetchBatch {
                             sequence_id: state.sequence_id,
                             results: std::mem::take(&mut results),
@@ -834,10 +820,9 @@ async fn parallel_worker(
                         })
                         .await
                         .is_err()
-                    {
-                        // Downstream closed — no point continuing.
-                        break;
-                    }
+                {
+                    // Downstream closed — no point continuing.
+                    break;
                 }
             }
             None => {
@@ -862,11 +847,7 @@ async fn parallel_worker(
 
     // Send final batch (may be empty, but must carry is_final=true)
     let _ = tx
-        .send(SequencedFetchBatch {
-            sequence_id: state.sequence_id,
-            results,
-            is_final: true,
-        })
+        .send(SequencedFetchBatch { sequence_id: state.sequence_id, results, is_final: true })
         .await;
     guard.sent = true;
 
@@ -1036,9 +1017,7 @@ async fn fetch_logs_once<P: ChainProvider + ?Sized>(
             return (
                 None,
                 Some(ProcessHistoricLogsStreamResult {
-                    next: current_filter
-                        .set_from_block(from_block)
-                        .set_to_block(halved_to_block),
+                    next: current_filter.set_from_block(from_block).set_to_block(halved_to_block),
                     max_block_range_limitation,
                 }),
             );
@@ -2461,7 +2440,11 @@ mod tests {
             }
 
             assert!(rx.try_recv().is_err(), "no extra batch when worker exited cleanly");
-            assert_eq!(active.load(Ordering::Acquire), 1, "explicit decrement path — guard is no-op");
+            assert_eq!(
+                active.load(Ordering::Acquire),
+                1,
+                "explicit decrement path — guard is no-op"
+            );
         }
 
         #[tokio::test]
@@ -2498,12 +2481,8 @@ mod tests {
             // unblock the dispatcher.
             let (tx, _rx) = mpsc::channel::<SequencedFetchBatch>(1);
             // Fill the buffer so try_send fails.
-            tx.try_send(SequencedFetchBatch {
-                sequence_id: 0,
-                results: vec![],
-                is_final: false,
-            })
-            .expect("first send fits");
+            tx.try_send(SequencedFetchBatch { sequence_id: 0, results: vec![], is_final: false })
+                .expect("first send fits");
 
             let cancel = CancellationToken::new();
             let active = Arc::new(AtomicUsize::new(1));
@@ -2550,7 +2529,8 @@ mod tests {
             )
             .await;
 
-            let r = result.expect("empty logs still return a result so sink can advance checkpoint");
+            let r =
+                result.expect("empty logs still return a result so sink can advance checkpoint");
             assert_eq!(r.from_block, U64::from(100));
             assert_eq!(r.to_block, U64::from(200));
             assert!(r.logs.is_empty());
