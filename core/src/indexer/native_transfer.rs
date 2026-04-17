@@ -172,10 +172,10 @@ pub(crate) async fn native_transfer_detect_reorg_in_range(
         return NativeTransferReorgOutcome::Failed;
     }
 
-    // Mutex held across reorg handling (DB rollback, stream publishes). On a real
-    // reorg this blocks the other indexing path for the duration of handle_reorg,
-    // which is acceptable for isolation. If latency becomes a concern, move
-    // handle_reorg out of the hot path.
+    // Mutex held across reorg handling (DB rollback, stream publishes, user
+    // on_reorg callback firing). On a real reorg this blocks the other indexing
+    // path for the duration of handle_reorg, which is acceptable for isolation.
+    // If latency becomes a concern, move handle_reorg out of the hot path.
     let mut guard = coordinator.lock().await;
     let ctx = ReorgContext {
         postgres,
