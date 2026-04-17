@@ -1,5 +1,4 @@
 use alloy::primitives::{B256, U64};
-use alloy::rpc::types::Log;
 
 use futures::future::join_all;
 use futures::{FutureExt, StreamExt};
@@ -103,34 +102,49 @@ async fn process_event_logs(
     let mut tasks = Vec::new();
     let mut pending_error: Option<Box<dyn std::error::Error + Send>> = None;
 
+    // Spawn the callback task and either await it (dependency mode) or push
+    // it onto `tasks` for end-of-stream joining. Extracted because we do this
+    // 4× (normal coalesced flush, reaper-triggered flush, mid-coalesce reorg
+    // flush, standalone reorg forward) with byte-identical bodies.
+    async fn dispatch_batch(
+        config: &Arc<EventProcessingConfig>,
+        permits: &Arc<Semaphore>,
+        result: FetchLogsResult,
+        block_until_indexed: bool,
+        tasks: &mut Vec<JoinHandle<()>>,
+    ) -> Result<(), Box<ProviderError>> {
+        let task = handle_logs_result(Arc::clone(config), permits.clone(), Ok(result))
+            .await
+            .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
+        if block_until_indexed {
+            task.await.map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
+        } else {
+            tasks.push(task);
+        }
+        Ok(())
+    }
+
     'outer: while let Some(result) = logs_stream.next().await {
-        // Check for a deferred error from previous coalescing iteration
         if let Some(e) = pending_error.take() {
             return Err(Box::new(ProviderError::CustomError(e.to_string())));
         }
 
-        // Process the first result. Reorg-bearing batches are forwarded as-is
-        // (no coalescing) so the coordinator's rollback semantics are preserved.
+        // Reorg-bearing batches bypass coalescing — the coordinator's rollback
+        // semantics require standalone delivery in order.
         let (mut coalesced_logs, mut final_from_block, mut final_to_block) = match result {
             Ok(fetch_result) => {
                 if fetch_result.reorg.is_some() {
-                    let task = handle_logs_result(
-                        Arc::clone(&config),
-                        callback_permits.clone(),
-                        Ok(fetch_result),
+                    dispatch_batch(
+                        &config,
+                        &callback_permits,
+                        fetch_result,
+                        block_until_indexed,
+                        &mut tasks,
                     )
-                    .await
-                    .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
-                    if block_until_indexed {
-                        task.await
-                            .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
-                    } else {
-                        tasks.push(task);
-                    }
+                    .await?;
                     continue;
                 }
-                let logs: Vec<Log> = fetch_result.logs;
-                (logs, fetch_result.from_block, fetch_result.to_block)
+                (fetch_result.logs, fetch_result.from_block, fetch_result.to_block)
             }
             Err(e) => {
                 return Err(Box::new(ProviderError::CustomError(e.to_string())));
@@ -138,57 +152,39 @@ async fn process_event_logs(
         };
 
         // Drain any additional READY results (non-blocking via now_or_never).
-        // SAFETY: tokio mpsc Receiver::recv/poll_recv is cancel-safe — dropping the
-        // future without completion does not consume any item from the channel.
-        // The coalesced range uses min(from)/max(to) across all batches. Since the
-        // reorder buffer guarantees monotonic delivery, this equals first.from/last.to.
+        // SAFETY: tokio mpsc Receiver::recv/poll_recv is cancel-safe — dropping
+        // the future without completion does not consume any item from the channel.
         const MAX_COALESCE_LOGS: usize = 5000;
         let mut coalesced_count = 1usize;
         while coalesced_logs.len() < MAX_COALESCE_LOGS {
             match logs_stream.next().now_or_never() {
                 Some(Some(Ok(fetch_result))) => {
                     if fetch_result.reorg.is_some() {
-                        // Flush the coalesced batch first (preserving its captured
-                        // block range), then forward the reorg batch standalone,
-                        // then `continue 'outer` so the next coalescing cycle
-                        // starts with fresh final_from_block/final_to_block state
-                        // — otherwise the stale range would poison subsequent
-                        // min/max arithmetic and report a bogus `from_block` to
-                        // callbacks.
-                        let coalesced_result = FetchLogsResult {
-                            logs: std::mem::take(&mut coalesced_logs),
-                            from_block: final_from_block,
-                            to_block: final_to_block,
-                            reorg: None,
-                        };
-                        let task = handle_logs_result(
-                            Arc::clone(&config),
-                            callback_permits.clone(),
-                            Ok(coalesced_result),
+                        // Flush coalesced + reorg, then `continue 'outer` to
+                        // rebuild coalescing state with fresh block-range vars
+                        // (otherwise the stale min/max would poison the next
+                        // batch's reported range).
+                        dispatch_batch(
+                            &config,
+                            &callback_permits,
+                            FetchLogsResult {
+                                logs: std::mem::take(&mut coalesced_logs),
+                                from_block: final_from_block,
+                                to_block: final_to_block,
+                                reorg: None,
+                            },
+                            block_until_indexed,
+                            &mut tasks,
                         )
-                        .await
-                        .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
-                        if block_until_indexed {
-                            task.await
-                                .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
-                        } else {
-                            tasks.push(task);
-                        }
-
-                        let reorg_task = handle_logs_result(
-                            Arc::clone(&config),
-                            callback_permits.clone(),
-                            Ok(fetch_result),
+                        .await?;
+                        dispatch_batch(
+                            &config,
+                            &callback_permits,
+                            fetch_result,
+                            block_until_indexed,
+                            &mut tasks,
                         )
-                        .await
-                        .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
-                        if block_until_indexed {
-                            reorg_task
-                                .await
-                                .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
-                        } else {
-                            tasks.push(reorg_task);
-                        }
+                        .await?;
                         continue 'outer;
                     }
                     final_from_block = final_from_block.min(fetch_result.from_block);
@@ -200,7 +196,7 @@ async fn process_event_logs(
                     pending_error = Some(e);
                     break;
                 }
-                _ => break, // nothing ready or stream ended
+                _ => break,
             }
         }
 
@@ -215,36 +211,32 @@ async fn process_event_logs(
             );
         }
 
-        let coalesced_result = FetchLogsResult {
-            logs: coalesced_logs,
-            from_block: final_from_block,
-            to_block: final_to_block,
-            reorg: None,
-        };
+        dispatch_batch(
+            &config,
+            &callback_permits,
+            FetchLogsResult {
+                logs: coalesced_logs,
+                from_block: final_from_block,
+                to_block: final_to_block,
+                reorg: None,
+            },
+            block_until_indexed,
+            &mut tasks,
+        )
+        .await?;
 
-        let task =
-            handle_logs_result(Arc::clone(&config), callback_permits.clone(), Ok(coalesced_result))
-                .await
-                .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
-
-        if block_until_indexed {
-            task.await.map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
-        } else {
-            tasks.push(task);
-
-            // Periodically reap completed tasks to detect errors early and avoid
-            // unbounded JoinHandle accumulation during long syncs.
-            if tasks.len() >= 64 {
-                let mut pending = Vec::with_capacity(tasks.len());
-                for t in tasks.drain(..) {
-                    if t.is_finished() {
-                        t.await.map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
-                    } else {
-                        pending.push(t);
-                    }
+        // Periodically reap completed tasks to surface errors early and avoid
+        // unbounded JoinHandle accumulation during long syncs.
+        if !block_until_indexed && tasks.len() >= 64 {
+            let mut pending = Vec::with_capacity(tasks.len());
+            for t in tasks.drain(..) {
+                if t.is_finished() {
+                    t.await.map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
+                } else {
+                    pending.push(t);
                 }
-                tasks = pending;
             }
+            tasks = pending;
         }
     }
 

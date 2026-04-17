@@ -126,9 +126,8 @@ pub fn fetch_logs_stream(
                 let worker_done_notify = Arc::new(tokio::sync::Notify::new());
                 let cancel_token = config.cancel_token().clone();
 
-                // Dispatcher: slices the range into chunks and spawns workers.
-                // worker_tx is MOVED into the dispatcher so that when the dispatcher
-                // exits, only the clones held by workers keep the channel alive.
+                // worker_tx is MOVED into the dispatcher so the channel is kept
+                // alive only by the worker clones once dispatching finishes.
                 let dispatcher_filter = current_filter.clone();
                 let dispatcher_config = Arc::clone(&config);
                 let dispatcher_cancel = cancel_token.clone();
@@ -144,9 +143,9 @@ pub fn fetch_logs_stream(
                             break;
                         }
 
-                        // Event-driven wait for an available slot.
-                        // Register the Notified future BEFORE the load to avoid the
-                        // lost-wakeup race where a worker finishes between check and await.
+                        // Register `notified()` BEFORE the load — otherwise a
+                        // worker finishing between load and await would be a
+                        // lost wakeup.
                         loop {
                             let notified = dispatcher_notify.notified();
                             let active = dispatcher_active.load(Ordering::Acquire);
@@ -190,9 +189,8 @@ pub fn fetch_logs_stream(
                         next_from = sub_to + U64::from(1);
                         sequence_id = sequence_id.saturating_add(1);
                     }
-                    // Drop the dispatcher's sender clone so worker_rx.recv()
-                    // returns None once the last worker's clone is dropped —
-                    // this is load-bearing for the reorder task to terminate.
+                    // Load-bearing: reorder task terminates only when every
+                    // worker_tx clone is dropped.
                     drop(worker_tx);
                 });
 
@@ -603,26 +601,23 @@ const MAX_WORKER_RESULTS: usize = 1000;
 /// Minimum total blocks to enable the parallel path. Below this we fall back
 /// to the sequential implementation — the overhead of workers/reorder buffer
 /// is not worth it for small ranges.
-pub(crate) const PARALLEL_MIN_BLOCKS: u64 = 1000;
+const PARALLEL_MIN_BLOCKS: u64 = 1000;
 
 /// Minimum per-worker chunk size. Ensures each worker has meaningful work to
 /// do rather than thrashing on single blocks.
-pub(crate) const PARALLEL_MIN_CHUNK: u64 = 1000;
+const PARALLEL_MIN_CHUNK: u64 = 1000;
 
 /// Maximum fetch_concurrency regardless of user config. Guards against
 /// accidentally spawning hundreds of workers and overloading the RPC.
-pub(crate) const PARALLEL_MAX_CONCURRENCY: usize = 32;
+const PARALLEL_MAX_CONCURRENCY: usize = 32;
 
-/// Parameters chosen for a parallel-fetch pipeline based on range size and
-/// user-requested concurrency. Extracted as a pure function so the chunk-size
-/// and worker-count arithmetic can be exercised without a live pipeline.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct ParallelFetchParams {
-    pub chunk_size: u64,
-    pub effective_concurrency: usize,
+struct ParallelFetchParams {
+    chunk_size: u64,
+    effective_concurrency: usize,
 }
 
-pub(crate) fn plan_parallel_fetch(total_blocks: u64, concurrency: usize) -> ParallelFetchParams {
+fn plan_parallel_fetch(total_blocks: u64, concurrency: usize) -> ParallelFetchParams {
     let capped = concurrency.clamp(1, PARALLEL_MAX_CONCURRENCY);
     // Each worker gets at least PARALLEL_MIN_CHUNK blocks; above that we
     // divide the range evenly across the requested number of workers.
@@ -634,10 +629,10 @@ pub(crate) fn plan_parallel_fetch(total_blocks: u64, concurrency: usize) -> Para
     ParallelFetchParams { chunk_size, effective_concurrency }
 }
 
-pub(crate) struct SequencedFetchBatch {
-    pub(crate) sequence_id: u64,
-    pub(crate) results: Vec<Result<FetchLogsResult, Box<dyn Error + Send>>>,
-    pub(crate) is_final: bool,
+struct SequencedFetchBatch {
+    sequence_id: u64,
+    results: Vec<Result<FetchLogsResult, Box<dyn Error + Send>>>,
+    is_final: bool,
 }
 
 /// In-order delivery buffer for parallel-worker batches.
@@ -647,29 +642,41 @@ pub(crate) struct SequencedFetchBatch {
 /// known, then emits the next contiguous run. Partial batches (is_final=false)
 /// are forwarded as soon as their sequence_id is current but do NOT advance
 /// the cursor — the cursor only moves when the final batch for that id arrives.
-pub(crate) struct ReorderBuffer {
+///
+/// Worst-case memory: if the worker for `next_expected` stalls indefinitely
+/// (without panicking — WorkerDropGuard handles the panic case by forcibly
+/// sending a final error batch), completed later workers pile up here with
+/// one `PendingSlot` per sequence_id. In practice the pipeline's cancel_token
+/// or the worker's own is_running()/cancel check bounds the stall; the
+/// bound is NOT the channel capacity (the reorder task drains it eagerly).
+struct ReorderBuffer {
     next_expected: u64,
-    pending: BTreeMap<u64, (Vec<SequencedFetchBatch>, bool)>,
+    pending: BTreeMap<u64, PendingSlot>,
+}
+
+struct PendingSlot {
+    batches: Vec<SequencedFetchBatch>,
+    finalized: bool,
 }
 
 impl ReorderBuffer {
-    pub(crate) fn new() -> Self {
+    fn new() -> Self {
         Self { next_expected: 0, pending: BTreeMap::new() }
     }
 
     #[cfg(test)]
-    pub(crate) fn next_expected(&self) -> u64 {
+    fn next_expected(&self) -> u64 {
         self.next_expected
     }
 
     #[cfg(test)]
-    pub(crate) fn pending_sequence_ids(&self) -> Vec<u64> {
+    fn pending_sequence_ids(&self) -> Vec<u64> {
         self.pending.keys().copied().collect()
     }
 
     /// Feed a batch into the buffer. Returns the list of results that are now
     /// ready to be forwarded downstream, in strict block order.
-    pub(crate) fn accept(
+    fn accept(
         &mut self,
         batch: SequencedFetchBatch,
     ) -> Vec<Result<FetchLogsResult, Box<dyn Error + Send>>> {
@@ -682,11 +689,11 @@ impl ReorderBuffer {
 
             if is_final {
                 self.next_expected = self.next_expected.saturating_add(1);
-                while let Some((batches, was_final)) = self.pending.remove(&self.next_expected) {
-                    for b in batches {
+                while let Some(slot) = self.pending.remove(&self.next_expected) {
+                    for b in slot.batches {
                         out.extend(b.results);
                     }
-                    if was_final {
+                    if slot.finalized {
                         self.next_expected = self.next_expected.saturating_add(1);
                     } else {
                         break;
@@ -694,11 +701,14 @@ impl ReorderBuffer {
                 }
             }
         } else {
-            let entry = self.pending.entry(sid).or_insert_with(|| (Vec::new(), false));
+            let slot = self
+                .pending
+                .entry(sid)
+                .or_insert_with(|| PendingSlot { batches: Vec::new(), finalized: false });
             if is_final {
-                entry.1 = true;
+                slot.finalized = true;
             }
-            entry.0.push(batch);
+            slot.batches.push(batch);
         }
 
         out
@@ -725,7 +735,6 @@ struct WorkerDropGuard {
     active_workers: Arc<AtomicUsize>,
     worker_done_notify: Arc<tokio::sync::Notify>,
     sent: bool,
-    decremented: bool,
 }
 
 impl Drop for WorkerDropGuard {
@@ -747,12 +756,8 @@ impl Drop for WorkerDropGuard {
                 self.cancel_token.cancel();
             }
         }
-        // Always release the active_workers slot — otherwise a panic between
-        // fetch_add and the explicit fetch_sub would deadlock the dispatcher.
-        if !self.decremented {
-            self.active_workers.fetch_sub(1, Ordering::Release);
-            self.worker_done_notify.notify_one();
-        }
+        self.active_workers.fetch_sub(1, Ordering::Release);
+        self.worker_done_notify.notify_one();
     }
 }
 
@@ -772,12 +777,18 @@ async fn parallel_worker(
         active_workers: Arc::clone(&active_workers),
         worker_done_notify: Arc::clone(&worker_done_notify),
         sent: false,
-        decremented: false,
     };
 
     let sub_range_end = state.filter.to_block();
     let mut current_filter = state.filter.clone();
     let mut results: Vec<Result<FetchLogsResult, Box<dyn Error + Send>>> = Vec::new();
+
+    // Hoist per-worker constants out of the fetch loop — each one costs
+    // heap allocations or Arc refcount bumps on every iteration.
+    let timestamps = config.timestamps();
+    let block_clock = config.network_contract().block_clock.clone();
+    let cached_provider = Arc::clone(&config.network_contract().cached_provider);
+    let info_log_name = config.info_log_name();
 
     while current_filter.from_block() <= sub_range_end {
         if !is_running() || cancel_token.is_cancelled() {
@@ -787,14 +798,13 @@ async fn parallel_worker(
         controller.wait_for_backoff().await;
 
         let (maybe_result, next_state) = fetch_logs_once(
-            config.timestamps(),
-            config.network_contract().block_clock.clone(),
-            config.network_contract().cached_provider.as_ref(),
-            &config.topic_id(),
+            timestamps,
+            &block_clock,
+            cached_provider.as_ref(),
             current_filter.clone(),
             state.max_block_range_limitation,
             sub_range_end,
-            &config.info_log_name(),
+            &info_log_name,
         )
         .await;
 
@@ -842,10 +852,8 @@ async fn parallel_worker(
         .send(SequencedFetchBatch { sequence_id: state.sequence_id, results, is_final: true })
         .await;
     guard.sent = true;
-
-    active_workers.fetch_sub(1, Ordering::Release);
-    worker_done_notify.notify_one();
-    guard.decremented = true;
+    // Counter release + notify happen in WorkerDropGuard::drop when `guard`
+    // goes out of scope here, keeping the cleanup path single-sourced.
 }
 
 /// Pure fetch: get_logs + retry logic. No channel interaction.
@@ -855,9 +863,8 @@ async fn parallel_worker(
 #[allow(clippy::too_many_arguments)]
 async fn fetch_logs_once<P: ChainProvider + ?Sized>(
     timestamps: bool,
-    block_clock: BlockClock,
+    block_clock: &BlockClock,
     cached_provider: &P,
-    _topic_id: &B256,
     current_filter: RindexerEventFilter,
     max_block_range_limitation: Option<U64>,
     snapshot_to_block: U64,
@@ -2186,17 +2193,11 @@ mod tests {
         assert!(result.is_none());
     }
 
-    // ------------------------------------------------------------------
-    // Parallel historical backfill tests (PR #380)
-    // ------------------------------------------------------------------
-
     mod parallel {
         use super::*;
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
         use tokio_util::sync::CancellationToken;
-
-        // ---- plan_parallel_fetch: chunk / worker-count math ----
 
         #[test]
         fn plan_small_range_below_threshold_is_not_reached_but_returns_one_worker() {
@@ -2255,8 +2256,6 @@ mod tests {
             assert!(p.chunk_size > 0);
             assert_eq!(p.effective_concurrency, 32);
         }
-
-        // ---- ReorderBuffer: in-order delivery under out-of-order arrival ----
 
         fn batch(sid: u64, blocks: &[u64], is_final: bool) -> SequencedFetchBatch {
             let results = blocks
@@ -2378,8 +2377,6 @@ mod tests {
             assert_eq!(buf.next_expected(), 1, "empty final batch still advances cursor");
         }
 
-        // ---- WorkerDropGuard: panic / cancellation safety ----
-
         #[tokio::test]
         async fn drop_guard_unsent_on_panic_sends_error_and_decrements_counter() {
             let (tx, mut rx) = mpsc::channel::<SequencedFetchBatch>(4);
@@ -2395,7 +2392,6 @@ mod tests {
                     active_workers: Arc::clone(&active),
                     worker_done_notify: Arc::clone(&notify),
                     sent: false,
-                    decremented: false,
                 };
                 // guard dropped at scope end without sent=true — simulates panic.
             }
@@ -2425,17 +2421,15 @@ mod tests {
                     active_workers: Arc::clone(&active),
                     worker_done_notify: Arc::clone(&notify),
                     sent: false,
-                    decremented: false,
                 };
                 guard.sent = true; // normal exit path
-                guard.decremented = true;
             }
 
             assert!(rx.try_recv().is_err(), "no extra batch when worker exited cleanly");
             assert_eq!(
                 active.load(Ordering::Acquire),
-                1,
-                "explicit decrement path — guard is no-op"
+                0,
+                "counter release is now single-sourced in Drop — always decrements"
             );
         }
 
@@ -2456,7 +2450,6 @@ mod tests {
                     active_workers: Arc::clone(&active),
                     worker_done_notify: Arc::clone(&notify),
                     sent: false,
-                    decremented: false,
                 };
             }
 
@@ -2488,7 +2481,6 @@ mod tests {
                     active_workers: Arc::clone(&active),
                     worker_done_notify: Arc::clone(&notify),
                     sent: false,
-                    decremented: false,
                 };
             }
 
@@ -2500,8 +2492,6 @@ mod tests {
             );
         }
 
-        // ---- fetch_logs_once: pure-fetch semantics used by workers ----
-
         #[tokio::test]
         async fn fetch_logs_once_empty_range_advances() {
             let mock = MockChainProvider::new(1);
@@ -2509,17 +2499,9 @@ mod tests {
                 .set_from_block(U64::from(100))
                 .set_to_block(U64::from(200));
 
-            let (result, next) = fetch_logs_once(
-                false,
-                BlockClock::new(None, None, Arc::new(MockChainProvider::new(1))),
-                &mock,
-                &B256::ZERO,
-                filter,
-                None,
-                U64::from(500),
-                "test",
-            )
-            .await;
+            let bc = BlockClock::new(None, None, Arc::new(MockChainProvider::new(1)));
+            let (result, next) =
+                fetch_logs_once(false, &bc, &mock, filter, None, U64::from(500), "test").await;
 
             let r =
                 result.expect("empty logs still return a result so sink can advance checkpoint");
@@ -2537,17 +2519,9 @@ mod tests {
                 .set_from_block(U64::from(500))
                 .set_to_block(U64::from(500));
 
-            let (_result, next) = fetch_logs_once(
-                false,
-                BlockClock::new(None, None, Arc::new(MockChainProvider::new(1))),
-                &mock,
-                &B256::ZERO,
-                filter,
-                None,
-                U64::from(500),
-                "test",
-            )
-            .await;
+            let bc = BlockClock::new(None, None, Arc::new(MockChainProvider::new(1)));
+            let (_result, next) =
+                fetch_logs_once(false, &bc, &mock, filter, None, U64::from(500), "test").await;
 
             assert!(next.is_none(), "no further work past snapshot_to_block");
         }
@@ -2560,17 +2534,9 @@ mod tests {
                 .set_from_block(U64::from(100))
                 .set_to_block(U64::from(200));
 
-            let (result, next) = fetch_logs_once(
-                false,
-                BlockClock::new(None, None, Arc::new(MockChainProvider::new(1))),
-                &mock,
-                &B256::ZERO,
-                filter,
-                None,
-                U64::from(500),
-                "test",
-            )
-            .await;
+            let bc = BlockClock::new(None, None, Arc::new(MockChainProvider::new(1)));
+            let (result, next) =
+                fetch_logs_once(false, &bc, &mock, filter, None, U64::from(500), "test").await;
 
             let r = result.expect("should return logs");
             assert_eq!(r.logs.len(), 2);
@@ -2581,23 +2547,14 @@ mod tests {
 
         #[tokio::test]
         async fn fetch_logs_once_from_gt_to_corrects_instead_of_failing() {
-            // Corrupt filter (from > to) should be recoverable, not panic.
             let mock = MockChainProvider::new(1);
             let filter = RindexerEventFilter::empty_for_test()
                 .set_from_block(U64::from(300))
                 .set_to_block(U64::from(200));
 
-            let (result, next) = fetch_logs_once(
-                false,
-                BlockClock::new(None, None, Arc::new(MockChainProvider::new(1))),
-                &mock,
-                &B256::ZERO,
-                filter,
-                None,
-                U64::from(500),
-                "test",
-            )
-            .await;
+            let bc = BlockClock::new(None, None, Arc::new(MockChainProvider::new(1)));
+            let (result, next) =
+                fetch_logs_once(false, &bc, &mock, filter, None, U64::from(500), "test").await;
 
             assert!(result.is_none(), "no logs emitted for inverted range");
             let next = next.expect("self-correction returns a fixed next filter");
