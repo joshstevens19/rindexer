@@ -1,0 +1,23 @@
+core/src/indexer/fetch_logs.rs
+  1c310fb5324a32f8 98,106-108,200,202-204,611-715,2204-2643
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.0",
+  "base_commit_sha": "fb2efaa6986b8b1bb0d75f640e3300b16b9e6ac2",
+  "prompts": {
+    "1c310fb5324a32f8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3a6e88e9-e1d4-4670-a53c-5571d0e432d8",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 721,
+      "total_deletions": 221,
+      "accepted_lines": 1747,
+      "overriden_lines": 0
+    }
+  }
+}
