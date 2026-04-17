@@ -3,6 +3,8 @@ use std::{
     sync::Arc,
 };
 
+use tokio::sync::Mutex;
+
 use crate::{
     database::postgres::relationship::Relationship,
     event::{config::EventProcessingConfig, contract_setup::ContractEventMapping},
@@ -306,7 +308,7 @@ pub struct ContractEventsDependenciesConfig {
     pub event_dependencies: EventDependencies,
     pub events_config: Vec<Arc<EventProcessingConfig>>,
     /// Per-network reorg coordinators for live indexing reorg protection.
-    pub reorg_coordinators: HashMap<String, ReorgCoordinator>,
+    pub reorg_coordinators: HashMap<String, Arc<Mutex<ReorgCoordinator>>>,
 }
 
 impl ContractEventsDependenciesConfig {

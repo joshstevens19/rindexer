@@ -4,8 +4,8 @@ use alloy::primitives::U64;
 use futures::future::try_join_all;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
+use tokio::sync::Mutex;
 use tokio::{
-    join,
     task::{JoinError, JoinHandle},
     time::Instant,
 };
@@ -190,6 +190,7 @@ async fn start_indexing_traces(
     trace_registry: Arc<TraceCallbackRegistry>,
     cancel_token: CancellationToken,
     progress: Arc<IndexingEventsProgressState>,
+    network_coordinators: &HashMap<String, Arc<Mutex<ReorgCoordinator>>>,
 ) -> Result<Vec<JoinHandle<Result<(), ProcessEventError>>>, StartIndexingError> {
     if !manifest.native_transfers.enabled {
         info!("Native transfer indexing disabled!");
@@ -212,6 +213,12 @@ async fn start_indexing_traces(
 
     // Create one pipeline per network
     for (network_name, events) in network_events {
+        // Pick any first event's streams_clients - they all share the same stream
+        // config for the network.
+        let streams_clients = events
+            .first()
+            .map(|e| e.streams_clients.clone())
+            .unwrap_or_else(|| Arc::new(None));
         // Get the first event's network details (they should all be the same for a given network)
         let first_event = events.first().unwrap();
         let network_details = first_event
@@ -276,6 +283,8 @@ async fn start_indexing_traces(
             cancel_token: cancel_token.clone(),
         });
 
+        let reorg_coordinator = network_coordinators.get(&network_name).cloned();
+
         let block_fetch_handle = tokio::spawn(native_transfer_block_fetch(
             network_details.cached_provider.clone(),
             block_tx,
@@ -286,6 +295,9 @@ async fn start_indexing_traces(
             cancel_token.clone(),
             postgres.clone(),
             first_event.indexer_name.clone(),
+            reorg_coordinator,
+            clickhouse.clone(),
+            streams_clients,
         ));
 
         non_blocking_process_events.push(block_fetch_handle);
@@ -360,6 +372,7 @@ async fn start_indexing_contract_events(
         Vec<ProcessedNetworkContract>,
         Vec<(String, Arc<EventProcessingConfig>)>,
         Vec<ContractEventsDependenciesConfig>,
+        HashMap<String, Arc<Mutex<ReorgCoordinator>>>,
     ),
     StartIndexingError,
 > {
@@ -601,7 +614,7 @@ async fn start_indexing_contract_events(
     // historical phase — so that stale checkpoints are corrected before events are
     // fetched.  Coordinators are only kept for live indexing; when we are in the
     // historical-only pass they are dropped after validation.
-    let mut network_coordinators: HashMap<String, ReorgCoordinator> = HashMap::new();
+    let mut network_coordinators: HashMap<String, Arc<Mutex<ReorgCoordinator>>> = HashMap::new();
     for (network_name, (reorg_config, chain_id)) in &reorg_configs {
         let window_size = reorg_config
             .window_size
@@ -693,7 +706,8 @@ async fn start_indexing_contract_events(
             // Only keep coordinators for live indexing; in the historical-only pass
             // they served their purpose (startup validation) and can be dropped.
             if !no_live_indexing_forced {
-                network_coordinators.insert(network_name.clone(), coordinator);
+                network_coordinators
+                    .insert(network_name.clone(), Arc::new(Mutex::new(coordinator)));
             }
         }
     }
@@ -857,16 +871,16 @@ async fn start_indexing_contract_events(
                 &dependencies,
             );
         } else {
-            // DESIGN: One ReorgCoordinator per network, owned by the first non-blocking event
-            // spawned on that network. The coordinator holds ALL event tables for the network,
-            // so reorg rollbacks cover every table regardless of which event task drives
-            // detection. Subsequent events on the same network receive None. This means if
-            // the owning task exits or errors, reorg detection stops for the network. A
-            // future improvement could wrap the coordinator in Arc<Mutex<>> for redundancy.
+            // DESIGN: One ReorgCoordinator per network, shared via Arc<Mutex<_>> across
+            // all tasks that can observe a new block for that network (contract-event
+            // pipelines and the native-transfer block fetcher). The coordinator holds
+            // ALL event tables for the network, so reorg rollbacks cover every table
+            // regardless of which task drives detection. The Mutex serializes
+            // `on_new_block`/`handle_reorg` calls so concurrent detection is idempotent.
             let reorg_coordinator =
                 if event_processing_config.live_indexing() && !no_live_indexing_forced {
                     let network_name = event_processing_config.network_contract().network.clone();
-                    network_coordinators.remove(&network_name)
+                    network_coordinators.get(&network_name).cloned()
                 } else {
                     None
                 };
@@ -895,10 +909,10 @@ async fn start_indexing_contract_events(
             .collect();
 
         // Build coordinators for networks that weren't already consumed
-        let mut dep_coordinators: HashMap<String, ReorgCoordinator> = HashMap::new();
+        let mut dep_coordinators: HashMap<String, Arc<Mutex<ReorgCoordinator>>> = HashMap::new();
         for network_name in &dep_networks {
-            // Try to take a leftover from the non-blocking build
-            if let Some(coord) = network_coordinators.remove(network_name) {
+            // Share the network's coordinator if one already exists
+            if let Some(coord) = network_coordinators.get(network_name).cloned() {
                 dep_coordinators.insert(network_name.clone(), coord);
                 continue;
             }
@@ -993,7 +1007,11 @@ async fn start_indexing_contract_events(
                         }
                     }
 
-                    dep_coordinators.insert(network_name.clone(), coordinator);
+                    let shared = Arc::new(Mutex::new(coordinator));
+                    dep_coordinators.insert(network_name.clone(), shared.clone());
+                    // Also share with the non-blocking network map so any native-transfer
+                    // task running on this network can reach the same coordinator.
+                    network_coordinators.insert(network_name.clone(), shared);
                 }
             }
         }
@@ -1020,6 +1038,7 @@ async fn start_indexing_contract_events(
         processed_network_contracts,
         apply_cross_contract_dependency_events_config_after_processing,
         dependency_event_processing_configs,
+        network_coordinators,
     ))
 }
 
@@ -1098,41 +1117,47 @@ async fn start_indexing(
 
     let indexer = manifest.to_indexer();
 
-    // Start the sub-indexers concurrently to ensure fast startup times
-    let (trace_indexer_handles, contract_events_indexer) = join!(
-        start_indexing_traces(
-            manifest,
-            project_path,
-            database.clone(),
-            clickhouse.clone(),
-            &indexer,
-            trace_registry.clone(),
-            cancel_token.clone(),
-            progress.clone(),
-        ),
-        start_indexing_contract_events(
-            manifest,
-            project_path,
-            database.clone(),
-            clickhouse.clone(),
-            &indexer,
-            registry.clone(),
-            trace_registry.clone(),
-            dependencies,
-            no_live_indexing_forced,
-            cancel_token.clone(),
-            progress.clone(),
-        )
-    );
+    // Contract events must complete their setup first so the per-network reorg
+    // coordinators exist before native-transfer tasks look them up. The returned
+    // `network_coordinators` map is shared (each entry is Arc<Mutex<_>>), so
+    // both pipelines observe the same coordinator for any given network.
+    let contract_events_indexer = start_indexing_contract_events(
+        manifest,
+        project_path,
+        database.clone(),
+        clickhouse.clone(),
+        &indexer,
+        registry.clone(),
+        trace_registry.clone(),
+        dependencies,
+        no_live_indexing_forced,
+        cancel_token.clone(),
+        progress.clone(),
+    )
+    .await;
 
     let (
         non_blocking_contract_handles,
         processed_network_contracts,
         apply_cross_contract_dependency_events_config_after_processing,
         mut dependency_event_processing_configs,
+        network_coordinators,
     ) = contract_events_indexer?;
 
-    non_blocking_process_events.extend(trace_indexer_handles?);
+    let trace_indexer_handles = start_indexing_traces(
+        manifest,
+        project_path,
+        database.clone(),
+        clickhouse.clone(),
+        &indexer,
+        trace_registry.clone(),
+        cancel_token.clone(),
+        progress.clone(),
+        &network_coordinators,
+    )
+    .await?;
+
+    non_blocking_process_events.extend(trace_indexer_handles);
     non_blocking_process_events.extend(non_blocking_contract_handles);
 
     // apply dependency events config after processing to avoid ordering issues
