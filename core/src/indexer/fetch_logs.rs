@@ -1,12 +1,18 @@
 use crate::blockclock::BlockClock;
+use crate::database::clickhouse::client::ClickhouseClient;
+use crate::event::callback_registry::EventCallbackRegistry;
 use crate::helpers::{halved_block_number, is_relevant_block};
-use crate::indexer::reorg::reorg_safe_distance_for_chain;
+use crate::indexer::reorg::{
+    detect_and_handle_reorg, reorg_safe_distance_for_chain, ReorgContext, ReorgCoordinator,
+};
 use crate::metrics::indexing as metrics;
+use crate::streams::StreamsClients;
+use crate::PostgresClient;
 use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
     indexer::{reorg::handle_chain_notification, IndexingEventProgressStatus},
     is_running,
-    provider::{JsonRpcCachedProvider, ProviderError},
+    provider::{ChainProvider, ProviderError},
 };
 use alloy::{
     primitives::{B256, U64},
@@ -23,9 +29,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 /// Metadata for a processed block, used for reorg detection via parent hash chain validation.
+#[allow(dead_code)]
 pub struct BlockMeta {
     pub hash: B256,
-    #[allow(dead_code)]
     pub parent_hash: B256,
     pub timestamp: u64,
 }
@@ -51,6 +57,7 @@ pub struct FetchLogsResult {
 pub fn fetch_logs_stream(
     config: Arc<EventProcessingConfig>,
     force_no_live_indexing: bool,
+    reorg_coordinator: Option<ReorgCoordinator>,
 ) -> impl tokio_stream::Stream<Item = Result<FetchLogsResult, Box<dyn Error + Send>>> + Send + Unpin
 {
     // If the sink is slower than the producer it can lead to unbounded memory growth and
@@ -73,9 +80,9 @@ pub fn fetch_logs_stream(
         let from_block = current_filter.from_block();
 
         // add any max block range limitation before we start processing
-        let original_max_limit = config.network_contract().cached_provider.max_block_range;
+        let original_max_limit = config.network_contract().cached_provider.max_block_range();
         let mut max_block_range_limitation =
-            config.network_contract().cached_provider.max_block_range;
+            config.network_contract().cached_provider.max_block_range();
         #[allow(clippy::unnecessary_unwrap)]
         if max_block_range_limitation.is_some() {
             current_filter = current_filter.set_to_block(calculate_process_historic_log_to_block(
@@ -147,10 +154,11 @@ pub fn fetch_logs_stream(
 
         // Live indexing mode
         if config.live_indexing() && !force_no_live_indexing {
+            let registry = config.registry();
             live_indexing_stream(
                 config.timestamps(),
                 config.network_contract().block_clock.clone(),
-                &config.network_contract().cached_provider,
+                config.network_contract().cached_provider.clone(),
                 &tx,
                 snapshot_to_block,
                 &config.topic_id(),
@@ -161,6 +169,11 @@ pub fn fetch_logs_stream(
                 config.network_contract().disable_logs_bloom_checks,
                 original_max_limit,
                 config.cancel_token().clone(),
+                reorg_coordinator,
+                config.postgres(),
+                config.clickhouse(),
+                config.streams_clients(),
+                &registry,
             )
             .await;
         }
@@ -175,10 +188,10 @@ struct ProcessHistoricLogsStreamResult {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn fetch_historic_logs_stream(
+async fn fetch_historic_logs_stream<P: ChainProvider>(
     timestamps: bool,
     block_clock: BlockClock,
-    cached_provider: &Arc<JsonRpcCachedProvider>,
+    cached_provider: &P,
     tx: &mpsc::Sender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
     topic_id: &B256,
     current_filter: RindexerEventFilter,
@@ -412,7 +425,7 @@ async fn fetch_historic_logs_stream(
 async fn live_indexing_stream(
     timestamps: bool,
     block_clock: BlockClock,
-    cached_provider: &Arc<JsonRpcCachedProvider>,
+    cached_provider: Arc<dyn ChainProvider>,
     tx: &mpsc::Sender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
     last_seen_block_number: U64,
     topic_id: &B256,
@@ -423,6 +436,11 @@ async fn live_indexing_stream(
     disable_logs_bloom_checks: bool,
     original_max_limit: Option<U64>,
     cancel_token: CancellationToken,
+    mut reorg_coordinator: Option<ReorgCoordinator>,
+    postgres: Option<Arc<PostgresClient>>,
+    clickhouse: Option<Arc<ClickhouseClient>>,
+    streams_clients: Arc<Option<StreamsClients>>,
+    registry: &EventCallbackRegistry,
 ) {
     let mut last_seen_block_number = last_seen_block_number;
     let mut log_response_to_large_to_block: Option<U64> = None;
@@ -433,9 +451,9 @@ async fn live_indexing_stream(
     // Channel for reth-provided reorg signals (feature-gated, None for HTTP RPC).
     // The spawned task converts ChainStateNotification → ReorgInfo and sends here;
     // the main loop try_recv()s to trigger the same recovery codepath as cache-based detection.
-    let (reth_reorg_tx, mut reth_reorg_rx) = tokio::sync::mpsc::unbounded_channel::<ReorgInfo>();
+    let (reth_reorg_tx, mut reth_reorg_rx) = mpsc::unbounded_channel::<ReorgInfo>();
 
-    if let Some(notifications) = cached_provider.get_chain_state_notification() {
+    if let Some(notifications) = cached_provider.chain_state_notification() {
         let info_log_name = info_log_name.to_string();
         let network = network.to_string();
         tokio::spawn(async move {
@@ -456,20 +474,6 @@ async fn live_indexing_stream(
     // for rollups having long-mechanisms like Polygon 1 epoch.
     let mut block_cache: LruCache<u64, BlockMeta> = LruCache::new(NonZeroUsize::new(1024).unwrap());
 
-    // Shadow cache + post-confirmation verifier: catches silent reorgs that
-    // the real-time detection might miss (e.g., when we were between polls).
-    let shadow_cache = crate::indexer::reorg::new_shadow_cache();
-    let (verifier_reorg_tx, mut verifier_reorg_rx) =
-        tokio::sync::mpsc::unbounded_channel::<ReorgInfo>();
-    let _verifier_handle = crate::indexer::reorg::spawn_post_confirmation_verifier(
-        Arc::clone(&shadow_cache),
-        Arc::clone(cached_provider),
-        64, // confirmations before verification
-        verifier_reorg_tx,
-        cancel_token.clone(),
-        network.to_string(),
-    );
-
     loop {
         let iteration_start = Instant::now();
 
@@ -477,8 +481,7 @@ async fn live_indexing_stream(
             break;
         }
 
-        // Reth reorg signal — instant detection, skip cache-based checks.
-        // Enters the same FetchLogsResult → handle_reorg_recovery pipeline.
+        // Reth reorg signal — instant detection via ExEx notification.
         if let Ok(reth_reorg) = reth_reorg_rx.try_recv() {
             let fork_block = reth_reorg.fork_block.to::<u64>();
             warn!(
@@ -488,6 +491,28 @@ async fn live_indexing_stream(
 
             for b in fork_block..=(fork_block + reth_reorg.depth) {
                 block_cache.pop(&b);
+            }
+
+            // Route through coordinator for full recovery (event deletion, checkpoint
+            // rewind, derived table rollback, window update) when available.
+            if let Some(ref mut coordinator) = reorg_coordinator {
+                let detection_point = fork_block + reth_reorg.depth;
+                match coordinator.on_exex_reorg(detection_point, fork_block) {
+                    Ok(task) => {
+                        let reorg_ctx = ReorgContext {
+                            postgres: postgres.as_deref(),
+                            clickhouse: clickhouse.as_ref(),
+                            registry: Some(registry),
+                            streams_clients: streams_clients.as_ref().as_ref(),
+                        };
+                        if let Err(e) = coordinator.handle_reorg(task, &reorg_ctx).await {
+                            error!("{} - Failed to handle ExEx reorg: {:?}", info_log_name, e);
+                        }
+                    }
+                    Err(e) => {
+                        error!("{} - Invalid ExEx reorg range: {:?}", info_log_name, e);
+                    }
+                }
             }
 
             let _ = tx
@@ -504,46 +529,11 @@ async fn live_indexing_stream(
             continue;
         }
 
-        // Post-confirmation verifier signal — detected a reorg via background hash checks.
-        if let Ok(verifier_reorg) = verifier_reorg_rx.try_recv() {
-            let fork_block = verifier_reorg.fork_block.to::<u64>();
-            warn!(
-                "{} - REORG (post-confirmation verifier): depth={}, fork_block={}",
-                info_log_name, verifier_reorg.depth, fork_block
-            );
-
-            for b in fork_block..=(fork_block + verifier_reorg.depth) {
-                block_cache.pop(&b);
-            }
-
-            let _ = tx
-                .send(Ok(FetchLogsResult {
-                    logs: vec![],
-                    from_block: U64::from(fork_block),
-                    to_block: U64::from(fork_block),
-                    reorg: Some(verifier_reorg),
-                }))
-                .await;
-
-            current_filter = current_filter.set_from_block(U64::from(fork_block));
-            last_seen_block_number = U64::from(fork_block.saturating_sub(1));
-            while reth_reorg_rx.try_recv().is_ok() {}
-            continue;
-        }
-
         let latest_block = cached_provider.get_latest_block().await;
         match latest_block {
             Ok(latest_block) => {
                 if let Some(latest_block) = latest_block {
-                    // Reorg detection #1: tip hash changed (same block number, different hash).
-                    // Critical for fast chains like Polygon where we poll multiple times
-                    // per block and may see the same block number with a different hash
-                    // after a tip reorg — must check BEFORE overwriting the cache.
-                    let tip_reorged = block_cache
-                        .peek(&latest_block.header.number)
-                        .map(|cached| cached.hash != latest_block.header.hash)
-                        .unwrap_or(false);
-
+                    // Keep block cache for timestamp lookups
                     block_cache.put(
                         latest_block.header.number,
                         BlockMeta {
@@ -553,64 +543,45 @@ async fn live_indexing_stream(
                         },
                     );
 
-                    // Mirror to shadow cache for post-confirmation verification
-                    if let Ok(mut sc) = shadow_cache.try_lock() {
-                        sc.insert(latest_block.header.number, latest_block.header.hash);
-                    }
-
-                    // Reorg detection #2: parent hash chain discontinuity.
-                    // The next block's parent_hash doesn't match our cached hash for
-                    // the previous block — the chain forked between them.
-                    let parent_mismatch = if !tip_reorged && latest_block.header.number > 0 {
-                        block_cache
-                            .peek(&(latest_block.header.number - 1))
-                            .map(|cached| cached.hash != latest_block.header.parent_hash)
-                            .unwrap_or(false)
-                    } else {
-                        false
-                    };
-
-                    if tip_reorged || parent_mismatch {
-                        let reason =
-                            if tip_reorged { "tip hash changed" } else { "parent hash mismatch" };
-                        let fork_block = crate::indexer::reorg::find_fork_point(
-                            &block_cache,
-                            cached_provider,
-                            latest_block.header.number,
-                        )
-                        .await;
-                        let depth = latest_block.header.number.saturating_sub(fork_block);
-                        metrics::record_reorg(network, depth);
-                        warn!(
-                            "{} - REORG ({}): depth={}, fork_block={}, current_block={}",
-                            info_log_name, reason, depth, fork_block, latest_block.header.number
+                    // Reorg detection via coordinator (parent hash validation)
+                    if let Some(ref mut coordinator) = reorg_coordinator {
+                        let log_prefix = format!(
+                            "{} - {}",
+                            info_log_name,
+                            IndexingEventProgressStatus::live_log()
                         );
-
-                        // Invalidate cached hashes for reorged blocks
-                        for b in fork_block..=latest_block.header.number {
-                            block_cache.pop(&b);
+                        let reorg_ctx = ReorgContext {
+                            postgres: postgres.as_deref(),
+                            clickhouse: clickhouse.as_ref(),
+                            registry: Some(registry),
+                            streams_clients: streams_clients.as_ref().as_ref(),
+                        };
+                        match detect_and_handle_reorg(
+                            coordinator,
+                            latest_block.header.number,
+                            latest_block.header.hash,
+                            latest_block.header.parent_hash,
+                            &log_prefix,
+                            &reorg_ctx,
+                        )
+                        .await
+                        {
+                            Ok(Some(fork_point)) => {
+                                current_filter =
+                                    current_filter.set_from_block(U64::from(fork_point));
+                                last_seen_block_number = U64::from(fork_point.saturating_sub(1));
+                                continue;
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                error!(
+                                    "{} - Reorg handling failed, pausing before retry: {:?}",
+                                    info_log_name, e
+                                );
+                                tokio::time::sleep(Duration::from_secs(2)).await;
+                                continue;
+                            }
                         }
-
-                        // Send reorg signal to consumer
-                        let _ = tx
-                            .send(Ok(FetchLogsResult {
-                                logs: vec![],
-                                from_block: U64::from(fork_block),
-                                to_block: U64::from(fork_block),
-                                reorg: Some(ReorgInfo {
-                                    fork_block: U64::from(fork_block),
-                                    depth,
-                                    affected_tx_hashes: vec![],
-                                }),
-                            }))
-                            .await;
-
-                        // Rewind cursor to fork point
-                        current_filter = current_filter.set_from_block(U64::from(fork_block));
-                        last_seen_block_number = U64::from(fork_block.saturating_sub(1));
-                        // Drain any pending reth signals to avoid double recovery
-                        while reth_reorg_rx.try_recv().is_ok() {}
-                        continue;
                     }
 
                     let latest_block_number = log_response_to_large_to_block
@@ -647,7 +618,7 @@ async fn live_indexing_stream(
                             if reorg_safe_distance.is_zero() {
                                 let block_distance = from_block - latest_block_number;
                                 let is_outside_reorg_range = block_distance
-                                    > reorg_safe_distance_for_chain(cached_provider.chain.id());
+                                    > reorg_safe_distance_for_chain(cached_provider.chain().id());
 
                                 // it should never get under normal conditions outside the reorg range,
                                 // therefore, we log an error as means RCP state is not in sync with the blockchain
@@ -772,18 +743,58 @@ async fn live_indexing_stream(
                                                 block_cache.pop(&b);
                                             }
 
-                                            let _ = tx
-                                                .send(Ok(FetchLogsResult {
-                                                    logs: vec![],
-                                                    from_block: U64::from(min_removed_block),
-                                                    to_block: U64::from(min_removed_block),
-                                                    reorg: Some(ReorgInfo {
-                                                        fork_block: U64::from(min_removed_block),
-                                                        depth,
-                                                        affected_tx_hashes: vec![],
-                                                    }),
-                                                }))
-                                                .await;
+                                            // Route through coordinator for full recovery when available
+                                            // (event deletion, checkpoint rewind, window update).
+                                            // Fall back to sending ReorgInfo through the stream when
+                                            // the coordinator is not configured.
+                                            if let Some(ref mut coordinator) = reorg_coordinator {
+                                                match coordinator
+                                                    .try_create_reorg_task_for_block_range(
+                                                        min_removed_block,
+                                                        to_block.to::<u64>(),
+                                                    ) {
+                                                    Ok(task) => {
+                                                        let reorg_ctx = ReorgContext {
+                                                            postgres: postgres.as_deref(),
+                                                            clickhouse: clickhouse.as_ref(),
+                                                            registry: Some(registry),
+                                                            streams_clients: streams_clients
+                                                                .as_ref()
+                                                                .as_ref(),
+                                                        };
+                                                        if let Err(e) = coordinator
+                                                            .handle_reorg(task, &reorg_ctx)
+                                                            .await
+                                                        {
+                                                            error!(
+                                                                "{} - Failed to handle removed-logs reorg: {}",
+                                                                info_log_name, e
+                                                            );
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        error!(
+                                                            "{} - Invalid removed-logs reorg range: {:?}",
+                                                            info_log_name, e
+                                                        );
+                                                    }
+                                                }
+                                            } else {
+                                                let _ = tx
+                                                    .send(Ok(FetchLogsResult {
+                                                        logs: vec![],
+                                                        from_block: U64::from(min_removed_block),
+                                                        to_block: U64::from(min_removed_block),
+                                                        reorg: Some(ReorgInfo {
+                                                            fork_block: U64::from(
+                                                                min_removed_block,
+                                                            ),
+                                                            depth,
+                                                            affected_tx_hashes: vec![],
+                                                        }),
+                                                    }))
+                                                    .await;
+                                            }
 
                                             current_filter = current_filter
                                                 .set_from_block(U64::from(min_removed_block));
@@ -986,7 +997,7 @@ async fn retry_with_block_range(
     // Thanks Ponder for the regex patterns - https://github.com/ponder-sh/ponder/blob/889096a3ef5f54a0c5a06df82b0da9cf9a113996/packages/utils/src/getLogsRetryHelper.ts#L34
     // Alchemy
     if let Ok(re) =
-        Regex::new(r"this block range should work: \[0x([0-9a-fA-F]+),\s*0x([0-9a-fA-F]+)\]")
+        Regex::new(r"this block range should work: \[0x([0-9a-fA-F]+),\s*0x([0-9a-fA-F]+)]")
     {
         if let Some(captures) = re.captures(&error_message).or_else(|| re.captures(&error_data)) {
             if let (Some(start_block), Some(end_block)) = (captures.get(1), captures.get(2)) {
@@ -1028,8 +1039,7 @@ async fn retry_with_block_range(
     }
 
     // Infura, Thirdweb, zkSync, Tenderly
-    if let Ok(re) =
-        Regex::new(r"try with this block range \[0x([0-9a-fA-F]+),\s*0x([0-9a-fA-F]+)\]")
+    if let Ok(re) = Regex::new(r"try with this block range \[0x([0-9a-fA-F]+),\s*0x([0-9a-fA-F]+)]")
     {
         if let Some(captures) = re.captures(&error_message).or_else(|| re.captures(&error_data)) {
             if let (Some(start_block), Some(end_block)) = (captures.get(1), captures.get(2)) {
@@ -1269,5 +1279,298 @@ fn calculate_process_historic_log_to_block(
         }
     } else {
         *snapshot_to_block
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::blockclock::BlockClock;
+    use crate::event::RindexerEventFilter;
+    use crate::provider::mock::MockChainProvider;
+    use alloy::primitives::Log as PrimitiveLog;
+    use alloy::rpc::types::Log;
+    use tokio::sync::mpsc;
+
+    #[test]
+    fn to_block_no_limit() {
+        let result =
+            calculate_process_historic_log_to_block(&U64::from(100), &U64::from(5000), &None);
+        assert_eq!(result, U64::from(5000));
+    }
+
+    #[test]
+    fn to_block_with_limit_within_snapshot() {
+        let result = calculate_process_historic_log_to_block(
+            &U64::from(100),
+            &U64::from(5000),
+            &Some(U64::from(1000)),
+        );
+        assert_eq!(result, U64::from(1100));
+    }
+
+    #[test]
+    fn to_block_with_limit_exceeds_snapshot() {
+        let result = calculate_process_historic_log_to_block(
+            &U64::from(4500),
+            &U64::from(5000),
+            &Some(U64::from(1000)),
+        );
+        assert_eq!(result, U64::from(5000));
+    }
+
+    #[test]
+    fn fallback_from_diff_large() {
+        assert_eq!(FallbackBlockRange::from_diff(U64::from(10000)), FallbackBlockRange::Range5000);
+    }
+
+    #[test]
+    fn fallback_from_diff_medium() {
+        assert_eq!(FallbackBlockRange::from_diff(U64::from(500)), FallbackBlockRange::Range500);
+    }
+
+    #[test]
+    fn fallback_from_diff_small() {
+        assert_eq!(FallbackBlockRange::from_diff(U64::from(3)), FallbackBlockRange::Range1);
+    }
+
+    #[test]
+    fn fallback_lower_chain() {
+        let range = FallbackBlockRange::Range5000;
+        assert_eq!(range.lower(), FallbackBlockRange::Range500);
+        assert_eq!(range.lower().lower(), FallbackBlockRange::Range75);
+    }
+
+    #[test]
+    fn fallback_lower_bottoms_at_1() {
+        assert_eq!(FallbackBlockRange::Range1.lower(), FallbackBlockRange::Range1);
+    }
+
+    fn make_log_at_block(block_number: u64) -> Log {
+        Log {
+            inner: PrimitiveLog { address: Default::default(), data: Default::default() },
+            block_hash: None,
+            block_number: Some(block_number),
+            block_timestamp: None,
+            transaction_hash: None,
+            transaction_index: None,
+            log_index: None,
+            removed: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn historic_empty_logs_advances_to_next_range() {
+        let mock = MockChainProvider::new(1).with_block_number(1000);
+        let (tx, _rx) = mpsc::channel(4);
+        let filter = RindexerEventFilter::empty_for_test()
+            .set_from_block(U64::from(100))
+            .set_to_block(U64::from(200));
+
+        let result = fetch_historic_logs_stream(
+            false,
+            BlockClock::new(None, None, Arc::new(MockChainProvider::new(1))),
+            &mock,
+            &tx,
+            &B256::ZERO,
+            filter,
+            None,
+            U64::from(500),
+            "test",
+        )
+        .await;
+
+        let result = result.expect("should return next range");
+        assert_eq!(result.next.from_block(), U64::from(201));
+    }
+
+    #[tokio::test]
+    async fn historic_with_logs_advances_past_last_log() {
+        let logs = vec![make_log_at_block(150), make_log_at_block(175)];
+        let mock = MockChainProvider::new(1).with_logs(logs);
+        let (tx, _rx) = mpsc::channel(4);
+        let filter = RindexerEventFilter::empty_for_test()
+            .set_from_block(U64::from(100))
+            .set_to_block(U64::from(200));
+
+        let result = fetch_historic_logs_stream(
+            false,
+            BlockClock::new(None, None, Arc::new(MockChainProvider::new(1))),
+            &mock,
+            &tx,
+            &B256::ZERO,
+            filter,
+            None,
+            U64::from(500),
+            "test",
+        )
+        .await;
+
+        let result = result.expect("should return next range");
+        // Next from_block should be last_log.block_number + 1 = 176
+        assert_eq!(result.next.from_block(), U64::from(176));
+    }
+
+    #[tokio::test]
+    async fn historic_from_greater_than_to_corrects() {
+        let mock = MockChainProvider::new(1);
+        let (tx, _rx) = mpsc::channel(4);
+        let filter = RindexerEventFilter::empty_for_test()
+            .set_from_block(U64::from(300))
+            .set_to_block(U64::from(200));
+
+        let result = fetch_historic_logs_stream(
+            false,
+            BlockClock::new(None, None, Arc::new(MockChainProvider::new(1))),
+            &mock,
+            &tx,
+            &B256::ZERO,
+            filter,
+            None,
+            U64::from(500),
+            "test",
+        )
+        .await;
+
+        let result = result.expect("should return corrected range");
+        assert_eq!(result.next.from_block(), U64::from(200));
+    }
+
+    #[tokio::test]
+    async fn historic_empty_logs_past_snapshot_returns_none() {
+        let mock = MockChainProvider::new(1);
+        let (tx, _rx) = mpsc::channel(4);
+        // from=500, to=500, snapshot=500 → after processing, next would be 501 > 500
+        let filter = RindexerEventFilter::empty_for_test()
+            .set_from_block(U64::from(500))
+            .set_to_block(U64::from(500));
+
+        let result = fetch_historic_logs_stream(
+            false,
+            BlockClock::new(None, None, Arc::new(MockChainProvider::new(1))),
+            &mock,
+            &tx,
+            &B256::ZERO,
+            filter,
+            None,
+            U64::from(500),
+            "test",
+        )
+        .await;
+
+        assert!(result.is_none(), "should signal completion when past snapshot");
+    }
+
+    #[tokio::test]
+    async fn historic_with_max_block_range_limits_next() {
+        let mock = MockChainProvider::new(1);
+        let (tx, _rx) = mpsc::channel(4);
+        let filter = RindexerEventFilter::empty_for_test()
+            .set_from_block(U64::from(100))
+            .set_to_block(U64::from(200));
+
+        let result = fetch_historic_logs_stream(
+            false,
+            BlockClock::new(None, None, Arc::new(MockChainProvider::new(1))),
+            &mock,
+            &tx,
+            &B256::ZERO,
+            filter,
+            Some(U64::from(50)), // max range = 50
+            U64::from(5000),
+            "test",
+        )
+        .await;
+
+        let result = result.expect("should return next range");
+        // next from = 201, next to = 201 + 50 = 251
+        assert_eq!(result.next.from_block(), U64::from(201));
+        assert_eq!(result.next.to_block(), U64::from(251));
+    }
+
+    // --- retry_with_block_range tests ---
+
+    #[tokio::test]
+    async fn retry_alchemy_block_range_parsing() {
+        let error =
+            ProviderError::CustomError("this block range should work: [0x100, 0x200]".to_string());
+        let result = retry_with_block_range("test", &error, U64::from(0), U64::from(999), None)
+            .await
+            .expect("should return a result");
+        assert_eq!(result.from, U64::from(0x100));
+        assert_eq!(result.to, U64::from(0x200));
+        assert_eq!(result.max_block_range, None);
+    }
+
+    #[tokio::test]
+    async fn retry_ankr_block_range_too_wide() {
+        let error = ProviderError::CustomError("block range is too wide".to_string());
+        let from = U64::from(500);
+        let result = retry_with_block_range("test", &error, from, U64::from(10000), None)
+            .await
+            .expect("should return a result");
+        assert_eq!(result.from, from);
+        assert_eq!(result.to, from + U64::from(3000));
+        assert_eq!(result.max_block_range, Some(U64::from(3000)));
+    }
+
+    #[tokio::test]
+    async fn retry_base_block_range_too_large() {
+        let error = ProviderError::CustomError("block range too large".to_string());
+        let from = U64::from(500);
+        let result = retry_with_block_range("test", &error, from, U64::from(10000), None)
+            .await
+            .expect("should return a result");
+        assert_eq!(result.from, from);
+        assert_eq!(result.to, from + U64::from(2000));
+        assert_eq!(result.max_block_range, Some(U64::from(2000)));
+    }
+
+    #[tokio::test]
+    async fn retry_quicknode_limited_to() {
+        let error = ProviderError::CustomError("limited to a 10,000 block range".to_string());
+        let from = U64::from(500);
+        let result = retry_with_block_range("test", &error, from, U64::from(20000), None)
+            .await
+            .expect("should return a result");
+        assert_eq!(result.from, from);
+        assert_eq!(result.to, from + U64::from(10000));
+        assert_eq!(result.max_block_range, Some(U64::from(10000)));
+    }
+
+    #[tokio::test]
+    async fn retry_response_too_big_halves_range() {
+        let error = ProviderError::CustomError("response is too big".to_string());
+        let from = U64::from(100);
+        let to = U64::from(10100);
+        // halved_block_number(10100, 100) = 100 + (10000 / 2) = 5100
+        let expected_to = halved_block_number(to, from);
+        let result = retry_with_block_range("test", &error, from, to, None)
+            .await
+            .expect("should return a result");
+        assert_eq!(result.from, from);
+        assert_eq!(result.to, expected_to);
+        assert_eq!(result.max_block_range, None);
+    }
+
+    #[tokio::test]
+    async fn retry_fallback_unknown_error_uses_range5000() {
+        let error = ProviderError::CustomError("some unknown rpc error".to_string());
+        let from = U64::from(100);
+        let to = U64::from(10100); // diff = 10000 → FallbackBlockRange::Range5000
+        let result = retry_with_block_range("test", &error, from, to, None)
+            .await
+            .expect("should return a result");
+        assert_eq!(result.from, from);
+        assert_eq!(result.to, from + U64::from(5000));
+        assert_eq!(result.max_block_range, Some(U64::from(5000)));
+    }
+
+    #[tokio::test]
+    async fn retry_equal_from_to_returns_none() {
+        let error = ProviderError::CustomError("some unknown error".to_string());
+        let result =
+            retry_with_block_range("test", &error, U64::from(100), U64::from(100), None).await;
+        assert!(result.is_none());
     }
 }

@@ -1,4 +1,4 @@
-use std::{path::Path, sync::Arc};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 use alloy::primitives::U64;
 use futures::future::try_join_all;
@@ -10,13 +10,21 @@ use tokio::{
     time::Instant,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::database::clickhouse::client::{ClickhouseClient, ClickhouseConnectionError};
+use crate::database::generate::generate_indexer_contract_schema_name;
+use crate::database::postgres::generate::generate_internal_event_table_name;
 use crate::event::config::{ContractEventProcessingConfig, FactoryEventProcessingConfig};
-use crate::helpers::format_duration;
+use crate::helpers::{camel_to_snake, format_duration};
 use crate::indexer::native_transfer::native_transfer_block_processor;
+use crate::indexer::reorg::{
+    reorg_safe_distance_for_chain, BlockChainWindow, DerivedColumnJournal, DerivedColumnRollback,
+    DerivedTableInfo, DerivedTableRollbackOp, EventTableInfo, ReorgBlockHashPersistence,
+    ReorgContext, ReorgCoordinator,
+};
 use crate::indexer::Indexer;
+use crate::manifest::network::ReorgHandlingConfig;
 use crate::{
     database::postgres::client::PostgresConnectionError,
     event::{
@@ -35,7 +43,7 @@ use crate::{
         ContractEventDependencies,
     },
     manifest::{contract::ReorgSafeDistance, core::Manifest},
-    provider::{JsonRpcCachedProvider, ProviderError},
+    provider::{ChainProvider, ProviderError},
     PostgresClient,
 };
 
@@ -83,6 +91,9 @@ pub enum StartIndexingError {
 
     #[error("Encountered unknown error: {0}")]
     UnknownError(String),
+
+    #[error("Invalid configuration: {0}")]
+    ConfigError(#[from] anyhow::Error),
 }
 
 #[derive(Clone)]
@@ -92,7 +103,7 @@ pub struct ProcessedNetworkContract {
 }
 
 async fn get_start_end_block(
-    provider: Arc<JsonRpcCachedProvider>,
+    provider: &dyn ChainProvider,
     manifest_start_block: Option<U64>,
     manifest_end_block: Option<U64>,
     config: SyncConfig<'_>,
@@ -159,8 +170,12 @@ async fn get_start_end_block(
         }
     }
 
-    let (end_block, indexing_distance_from_head) =
-        calculate_safe_block_number(reorg_safe_distance, &provider, latest_block, end_block);
+    let (end_block, indexing_distance_from_head) = calculate_safe_block_number(
+        reorg_safe_distance,
+        provider.chain().id(),
+        latest_block,
+        end_block,
+    );
 
     Ok((start_block, end_block, indexing_distance_from_head))
 }
@@ -227,7 +242,7 @@ async fn start_indexing_traces(
 
         let (block_tx, block_rx) = tokio::sync::mpsc::channel(4096);
         let (start_block, end_block, indexing_distance_from_head) = get_start_end_block(
-            network_details.cached_provider.clone(),
+            &*network_details.cached_provider,
             network_details.start_block,
             network_details.end_block,
             sync_config,
@@ -244,7 +259,7 @@ async fn start_indexing_traces(
 
         let config = Arc::new(TraceProcessingConfig {
             id: first_event.id.clone(), // Use the first event's ID for progress tracking
-            chain_id: network_details.cached_provider.chain.id(),
+            chain_id: network_details.cached_provider.chain().id(),
             project_path: project_path.to_path_buf(),
             start_block,
             end_block,
@@ -352,7 +367,7 @@ async fn start_indexing_contract_events(
                 };
 
                 let result = get_start_end_block(
-                    network_contract.cached_provider.clone(),
+                    &*network_contract.cached_provider,
                     network_contract.start_block,
                     network_contract.end_block,
                     config,
@@ -379,6 +394,263 @@ async fn start_indexing_contract_events(
                     )
                 })
             });
+        }
+    }
+
+    // Build per-network reorg handling config lookup (includes chain_id for window size resolution)
+    let reorg_configs: HashMap<String, (ReorgHandlingConfig, u64)> = manifest
+        .networks
+        .iter()
+        .filter_map(|n| {
+            n.reorg_handling.as_ref().and_then(|cfg| {
+                if cfg.enabled {
+                    Some((n.name.clone(), (cfg.clone(), n.chain_id)))
+                } else {
+                    None
+                }
+            })
+        })
+        .collect();
+
+    // Build per-network event tables and derived tables for reorg rollback.
+    let mut network_event_tables: HashMap<String, Vec<EventTableInfo>> = HashMap::new();
+    let mut network_derived_tables: HashMap<String, Vec<DerivedTableInfo>> = HashMap::new();
+    for event in registry.events.iter() {
+        for network_contract in event.contract.details.iter() {
+            let schema =
+                generate_indexer_contract_schema_name(&event.indexer_name, &event.contract.name);
+            let table_name = camel_to_snake(&event.event_name);
+            let event_table_full = format!("{}.{}", schema, table_name);
+            let checkpoint_table = generate_internal_event_table_name(&schema, &event.event_name);
+            network_event_tables
+                .entry(network_contract.network.clone())
+                .or_default()
+                .push(EventTableInfo::try_new(schema, table_name, checkpoint_table)?);
+
+            for tr in event.tables.iter() {
+                let derived =
+                    network_derived_tables.entry(network_contract.network.clone()).or_default();
+
+                // Build rollback_ops from table event mappings that reference this event
+                let event_table_name = event_table_full.clone();
+                let mut rollback_ops: Vec<DerivedTableRollbackOp> = Vec::new();
+                let mut journal_columns: Vec<DerivedColumnJournal> = Vec::new();
+
+                for table_event in &tr.table.events {
+                    if table_event.event != event.event_name {
+                        continue;
+                    }
+                    for operation in &table_event.operations {
+                        use crate::manifest::contract::OperationType;
+                        if !matches!(
+                            operation.operation_type,
+                            OperationType::Upsert | OperationType::Update
+                        ) {
+                            continue;
+                        }
+
+                        let mut where_columns: Vec<(String, String)> = operation
+                            .where_clause
+                            .iter()
+                            .filter_map(|(col, val)| {
+                                val.strip_prefix('$')
+                                    .map(|field| (col.clone(), camel_to_snake(field)))
+                            })
+                            .collect();
+                        where_columns.sort_by(|a, b| a.0.cmp(&b.0));
+
+                        let where_col_names: Vec<String> =
+                            where_columns.iter().map(|(col, _)| col.clone()).collect();
+
+                        let columns: Vec<DerivedColumnRollback> = operation
+                            .set
+                            .iter()
+                            .filter(|set_col| {
+                                set_col.action.reverse().is_some()
+                                    && set_col.event_field_name().is_some()
+                            })
+                            .map(|set_col| {
+                                DerivedColumnRollback::try_new(
+                                    set_col.column.clone(),
+                                    camel_to_snake(set_col.event_field_name().unwrap()),
+                                    set_col.action.clone(),
+                                )
+                            })
+                            .collect::<anyhow::Result<Vec<_>>>()?;
+
+                        // Collect non-reversible columns for journal-based recalculation
+                        for set_col in &operation.set {
+                            if set_col.action.reverse().is_some() {
+                                continue; // handled by rollback_ops
+                            }
+                            if !journal_columns.iter().any(|jc| jc.derived_column == set_col.column)
+                            {
+                                journal_columns.push(DerivedColumnJournal::try_new(
+                                    set_col.column.clone(),
+                                    set_col.action.clone(),
+                                    where_col_names.clone(),
+                                )?);
+                            }
+                        }
+
+                        if !columns.is_empty() {
+                            rollback_ops.push(DerivedTableRollbackOp::try_new(
+                                event_table_name.clone(),
+                                where_columns,
+                                columns,
+                                operation.condition().map(String::from),
+                            )?);
+                        }
+                    }
+                }
+
+                // Merge into existing entry or create a new one
+                if let Some(existing) =
+                    derived.iter_mut().find(|d| d.full_table_name == tr.full_table_name)
+                {
+                    existing.rollback_ops.extend(rollback_ops);
+                    for jc in journal_columns {
+                        if !existing
+                            .journal_columns
+                            .iter()
+                            .any(|e| e.derived_column == jc.derived_column)
+                        {
+                            existing.journal_columns.push(jc);
+                        }
+                    }
+                } else {
+                    derived.push(DerivedTableInfo::try_new(
+                        tr.full_table_name.clone(),
+                        tr.table.cross_chain,
+                        rollback_ops,
+                        journal_columns,
+                    )?);
+                }
+            }
+        }
+    }
+
+    // Register native transfer tables for reorg rollback (if native transfers are enabled).
+    // Native transfers use the virtual contract name "EvmTraces" with event "NativeTransfer".
+    if manifest.native_transfers.enabled {
+        if let Some(networks) = &manifest.native_transfers.networks {
+            for nt_detail in networks {
+                let schema = generate_indexer_contract_schema_name(
+                    &manifest.name,
+                    NATIVE_TRANSFER_CONTRACT_NAME,
+                );
+                let table_name = camel_to_snake("NativeTransfer");
+                let checkpoint_table =
+                    generate_internal_event_table_name(&schema, "NativeTransfer");
+                network_event_tables
+                    .entry(nt_detail.network.clone())
+                    .or_default()
+                    .push(EventTableInfo::try_new(schema, table_name, checkpoint_table)?);
+            }
+        }
+    }
+
+    // Shared persistence per invocation (shared across all coordinators)
+    let reorg_persistence =
+        Arc::new(ReorgBlockHashPersistence::new(postgres.clone(), clickhouse.clone()));
+
+    // Build one ReorgCoordinator per network (shared across all events on that network).
+    // The first non-blocking event on each network takes ownership; subsequent events get None.
+    //
+    // Startup reorg validation MUST run before any indexing begins — including the
+    // historical phase — so that stale checkpoints are corrected before events are
+    // fetched.  Coordinators are only kept for live indexing; when we are in the
+    // historical-only pass they are dropped after validation.
+    let mut network_coordinators: HashMap<String, ReorgCoordinator> = HashMap::new();
+    for (network_name, (reorg_config, chain_id)) in &reorg_configs {
+        let window_size = reorg_config
+            .window_size
+            .unwrap_or_else(|| 2 * reorg_safe_distance_for_chain(*chain_id) as usize);
+        let event_tables = network_event_tables.get(network_name).cloned().unwrap_or_default();
+
+        let window = match reorg_persistence.load(network_name, window_size).await {
+            Ok(window) => {
+                info!(
+                    "Loaded {} blocks into reorg window for network {}",
+                    window.len(),
+                    network_name,
+                );
+                window
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to load reorg window from persistence for {}: {}. Using empty window.",
+                    network_name, e
+                );
+                BlockChainWindow::try_new(window_size)?
+            }
+        };
+
+        // Get a provider for this network from any registry event targeting it
+        let provider = registry
+            .events
+            .iter()
+            .flat_map(|e| e.contract.details.iter())
+            .find(|nc| nc.network == *network_name)
+            .map(|nc| nc.cached_provider.clone());
+
+        if let Some(provider) = provider {
+            let derived_tables =
+                network_derived_tables.get(network_name).cloned().unwrap_or_default();
+            let mut coordinator = ReorgCoordinator::new(
+                network_name.clone(),
+                window,
+                Arc::clone(&reorg_persistence),
+                provider,
+                event_tables,
+                derived_tables,
+            )?;
+
+            // Get streams_clients for this network (if any event has one)
+            let startup_streams_clients = registry
+                .events
+                .iter()
+                .find(|e| e.contract.details.iter().any(|d| d.network == *network_name))
+                .map(|e| e.streams_clients.clone());
+
+            // Run startup validation
+            match coordinator.validate_on_startup().await {
+                Ok(Some(startup_task)) => {
+                    warn!(
+                        "Startup reorg detected on {} (fork_point: {}, depth: {}). Executing rollback before indexing.",
+                        network_name,
+                        startup_task.fork_point,
+                        startup_task.detection_point.saturating_sub(startup_task.fork_point) + 1,
+                    );
+                    let reorg_ctx = ReorgContext {
+                        postgres: postgres.as_deref(),
+                        clickhouse: clickhouse.as_ref(),
+                        registry: Some(&registry),
+                        streams_clients: startup_streams_clients
+                            .as_ref()
+                            .and_then(|a| a.as_ref().as_ref()),
+                    };
+                    if let Err(e) = coordinator.handle_reorg(startup_task, &reorg_ctx).await {
+                        error!(
+                            "Failed to execute startup reorg rollback for {}: {}",
+                            network_name, e
+                        );
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    error!(
+                        "Startup reorg validation failed for {}: {}. Proceeding without validation.",
+                        network_name, e
+                    );
+                }
+            }
+
+            // Only keep coordinators for live indexing; in the historical-only pass
+            // they served their purpose (startup validation) and can be dropped.
+            if !no_live_indexing_forced {
+                network_coordinators.insert(network_name.clone(), coordinator);
+            }
         }
     }
 
@@ -541,8 +813,156 @@ async fn start_indexing_contract_events(
                 &dependencies,
             );
         } else {
-            let process_event = tokio::spawn(process_non_blocking_event(event_processing_config));
+            // DESIGN: One ReorgCoordinator per network, owned by the first non-blocking event
+            // spawned on that network. The coordinator holds ALL event tables for the network,
+            // so reorg rollbacks cover every table regardless of which event task drives
+            // detection. Subsequent events on the same network receive None. This means if
+            // the owning task exits or errors, reorg detection stops for the network. A
+            // future improvement could wrap the coordinator in Arc<Mutex<>> for redundancy.
+            let reorg_coordinator =
+                if event_processing_config.live_indexing() && !no_live_indexing_forced {
+                    let network_name = event_processing_config.network_contract().network.clone();
+                    network_coordinators.remove(&network_name)
+                } else {
+                    None
+                };
+
+            let process_event = tokio::spawn(process_non_blocking_event(
+                event_processing_config,
+                reorg_coordinator,
+            ));
             non_blocking_process_events.push(process_event);
+        }
+    }
+
+    // Build per-network reorg coordinators for dependency events.
+    // Any coordinators left over in network_coordinators (not consumed by non-blocking events)
+    // are available for dependency events. Build new ones for networks only used in dependencies.
+    if !no_live_indexing_forced {
+        // Collect all networks needed by dependency events
+        let dep_networks: std::collections::HashSet<String> = dependency_event_processing_configs
+            .iter()
+            .flat_map(|dep| {
+                dep.events_config
+                    .iter()
+                    .filter(|e| e.live_indexing())
+                    .map(|e| e.network_contract().network.clone())
+            })
+            .collect();
+
+        // Build coordinators for networks that weren't already consumed
+        let mut dep_coordinators: HashMap<String, ReorgCoordinator> = HashMap::new();
+        for network_name in &dep_networks {
+            // Try to take a leftover from the non-blocking build
+            if let Some(coord) = network_coordinators.remove(network_name) {
+                dep_coordinators.insert(network_name.clone(), coord);
+                continue;
+            }
+
+            // Otherwise build a fresh one
+            if let Some((reorg_config, chain_id)) = reorg_configs.get(network_name) {
+                let window_size = reorg_config
+                    .window_size
+                    .unwrap_or_else(|| 2 * reorg_safe_distance_for_chain(*chain_id) as usize);
+                let event_tables =
+                    network_event_tables.get(network_name).cloned().unwrap_or_default();
+
+                let window = match reorg_persistence.load(network_name, window_size).await {
+                    Ok(window) => {
+                        info!(
+                            "Dependency events - Loaded {} blocks into reorg window for network {}",
+                            window.len(),
+                            network_name,
+                        );
+                        window
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Dependency events - Failed to load reorg window for {}: {}. Using empty window.",
+                            network_name, e
+                        );
+                        BlockChainWindow::try_new(window_size)?
+                    }
+                };
+
+                // Get a provider from any dependency event config for this network
+                let provider = dependency_event_processing_configs
+                    .iter()
+                    .flat_map(|dep| dep.events_config.iter())
+                    .find(|e| e.network_contract().network == *network_name)
+                    .map(|e| e.network_contract().cached_provider.clone());
+
+                if let Some(provider) = provider {
+                    let derived_tables =
+                        network_derived_tables.get(network_name).cloned().unwrap_or_default();
+                    let mut coordinator = ReorgCoordinator::new(
+                        network_name.clone(),
+                        window,
+                        Arc::clone(&reorg_persistence),
+                        provider,
+                        event_tables,
+                        derived_tables,
+                    )?;
+
+                    // Get streams_clients for this network from dependency events
+                    let dep_streams_clients = dependency_event_processing_configs
+                        .iter()
+                        .flat_map(|dep| dep.events_config.iter())
+                        .find(|e| e.network_contract().network == *network_name)
+                        .map(|e| e.streams_clients());
+
+                    match coordinator.validate_on_startup().await {
+                        Ok(Some(startup_task)) => {
+                            warn!(
+                                "Dependency events - Startup reorg detected on {} (fork_point: {}, depth: {}). Executing rollback.",
+                                network_name,
+                                startup_task.fork_point,
+                                startup_task.detection_point.saturating_sub(startup_task.fork_point) + 1,
+                            );
+                            let reorg_ctx = ReorgContext {
+                                postgres: postgres.as_deref(),
+                                clickhouse: clickhouse.as_ref(),
+                                registry: Some(&registry),
+                                streams_clients: dep_streams_clients
+                                    .as_ref()
+                                    .and_then(|a| a.as_ref().as_ref()),
+                            };
+                            if let Err(e) = coordinator.handle_reorg(startup_task, &reorg_ctx).await
+                            {
+                                error!(
+                                    "Dependency events - Failed to execute startup reorg rollback for {}: {}",
+                                    network_name, e
+                                );
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            error!(
+                                "Dependency events - Startup reorg validation failed for {}: {}. Proceeding without validation.",
+                                network_name, e
+                            );
+                        }
+                    }
+
+                    dep_coordinators.insert(network_name.clone(), coordinator);
+                }
+            }
+        }
+
+        // Inject per-network coordinators into each dependency config group
+        for dep_config in &mut dependency_event_processing_configs {
+            let networks: std::collections::HashSet<String> = dep_config
+                .events_config
+                .iter()
+                .filter(|e| e.live_indexing())
+                .map(|e| e.network_contract().network.clone())
+                .collect();
+
+            for network_name in networks {
+                if let Some(coord) = dep_coordinators.remove(&network_name) {
+                    dep_config.reorg_coordinators.insert(network_name, coord);
+                }
+            }
         }
     }
 
@@ -744,13 +1164,12 @@ pub async fn initialize_clickhouse(
 
 pub fn calculate_safe_block_number(
     reorg_safe_distance: Option<ReorgSafeDistance>,
-    provider: &Arc<JsonRpcCachedProvider>,
+    chain_id: u64,
     latest_block: U64,
     mut end_block: U64,
 ) -> (U64, U64) {
     let mut indexing_distance_from_head = U64::ZERO;
     if let Some(ref config) = reorg_safe_distance {
-        let chain_id = provider.chain.id();
         if let Some(distance) = config.resolve(chain_id) {
             let safe_distance = U64::from(distance);
             let safe_block_number = latest_block.saturating_sub(safe_distance);
@@ -761,4 +1180,325 @@ pub fn calculate_safe_block_number(
         }
     }
     (end_block, indexing_distance_from_head)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::indexer::last_synced::SyncConfig;
+    use crate::manifest::contract::ReorgSafeDistance;
+    use crate::provider::mock::MockChainProvider;
+    use std::path::Path;
+
+    fn empty_sync_config() -> SyncConfig<'static> {
+        SyncConfig {
+            project_path: Path::new("/tmp/test"),
+            postgres: &None,
+            clickhouse: &None,
+            csv_details: &None,
+            stream_details: &None,
+            contract_csv_enabled: false,
+            indexer_name: "test_indexer",
+            contract_name: "test_contract",
+            event_name: "test_event",
+            network: "ethereum",
+        }
+    }
+
+    #[test]
+    fn safe_block_no_reorg_distance() {
+        let (end, distance) =
+            calculate_safe_block_number(None, 1, U64::from(1000), U64::from(1000));
+        assert_eq!(end, U64::from(1000));
+        assert_eq!(distance, U64::ZERO);
+    }
+
+    #[test]
+    fn safe_block_reorg_disabled() {
+        let (end, distance) = calculate_safe_block_number(
+            Some(ReorgSafeDistance::Enabled(false)),
+            1,
+            U64::from(1000),
+            U64::from(1000),
+        );
+        assert_eq!(end, U64::from(1000));
+        assert_eq!(distance, U64::ZERO);
+    }
+
+    #[test]
+    fn safe_block_custom_distance_clamps_end() {
+        // latest=1000, end=1000, distance=20 → safe_block=980, end clamped to 980
+        let (end, distance) = calculate_safe_block_number(
+            Some(ReorgSafeDistance::Custom(20)),
+            1,
+            U64::from(1000),
+            U64::from(1000),
+        );
+        assert_eq!(end, U64::from(980));
+        assert_eq!(distance, U64::from(20));
+    }
+
+    #[test]
+    fn safe_block_end_already_below_safe() {
+        // latest=1000, end=500, distance=20 → safe_block=980, end stays 500
+        let (end, distance) = calculate_safe_block_number(
+            Some(ReorgSafeDistance::Custom(20)),
+            1,
+            U64::from(1000),
+            U64::from(500),
+        );
+        assert_eq!(end, U64::from(500));
+        assert_eq!(distance, U64::from(20));
+    }
+
+    #[test]
+    fn safe_block_enabled_true_uses_chain_default() {
+        // Ethereum mainnet (chain_id=1) should have a non-zero default distance
+        let (end, distance) = calculate_safe_block_number(
+            Some(ReorgSafeDistance::Enabled(true)),
+            1, // ethereum mainnet
+            U64::from(10000),
+            U64::from(10000),
+        );
+        assert!(distance > U64::ZERO);
+        assert!(end < U64::from(10000));
+    }
+
+    #[tokio::test]
+    async fn start_block_higher_than_latest_errors() {
+        let mock = MockChainProvider::new(1).with_block_number(100);
+        let result = get_start_end_block(
+            &mock,
+            Some(U64::from(200)), // start > latest
+            None,
+            empty_sync_config(),
+            "Test",
+            "ethereum",
+            None,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(StartIndexingError::StartBlockIsHigherThanLatestBlockError(..))
+        ));
+    }
+
+    #[tokio::test]
+    async fn end_block_higher_than_latest_errors() {
+        let mock = MockChainProvider::new(1).with_block_number(100);
+        let result = get_start_end_block(
+            &mock,
+            Some(U64::from(50)),
+            Some(U64::from(200)), // end > latest
+            empty_sync_config(),
+            "Test",
+            "ethereum",
+            None,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(StartIndexingError::EndBlockIsHigherThanLatestBlockError(..))
+        ));
+    }
+
+    #[tokio::test]
+    async fn normal_range_returns_start_and_end() {
+        let mock = MockChainProvider::new(1).with_block_number(1000);
+        let (start, end, distance) = get_start_end_block(
+            &mock,
+            Some(U64::from(100)),
+            Some(U64::from(500)),
+            empty_sync_config(),
+            "Test",
+            "ethereum",
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(start, U64::from(100));
+        assert_eq!(end, U64::from(500));
+        assert_eq!(distance, U64::ZERO);
+    }
+
+    #[tokio::test]
+    async fn end_block_clamped_to_latest() {
+        let mock = MockChainProvider::new(1).with_block_number(1000);
+        let (_, end, _) = get_start_end_block(
+            &mock,
+            Some(U64::from(100)),
+            None, // no manifest end → defaults to latest
+            empty_sync_config(),
+            "Test",
+            "ethereum",
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(end, U64::from(1000));
+    }
+
+    #[tokio::test]
+    async fn reorg_safe_distance_applied() {
+        let mock = MockChainProvider::new(1).with_block_number(1000);
+        let (start, end, distance) = get_start_end_block(
+            &mock,
+            Some(U64::from(100)),
+            None,
+            empty_sync_config(),
+            "Test",
+            "ethereum",
+            Some(ReorgSafeDistance::Custom(50)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(start, U64::from(100));
+        assert_eq!(end, U64::from(950)); // 1000 - 50
+        assert_eq!(distance, U64::from(50));
+    }
+
+    #[tokio::test]
+    async fn no_start_block_defaults_to_latest() {
+        let mock = MockChainProvider::new(1).with_block_number(500);
+        let (start, end, _) = get_start_end_block(
+            &mock,
+            None, // no manifest start → defaults to latest
+            None,
+            empty_sync_config(),
+            "Test",
+            "ethereum",
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(start, U64::from(500));
+        assert_eq!(end, U64::from(500));
+    }
+
+    #[tokio::test]
+    async fn start_block_equals_end_block_single_block_range() {
+        let mock = MockChainProvider::new(1).with_block_number(1000);
+        let (start, end, distance) = get_start_end_block(
+            &mock,
+            Some(U64::from(500)),
+            Some(U64::from(500)),
+            empty_sync_config(),
+            "Test",
+            "ethereum",
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(start, U64::from(500));
+        assert_eq!(end, U64::from(500));
+        assert_eq!(distance, U64::ZERO);
+    }
+
+    #[tokio::test]
+    async fn start_block_zero_genesis() {
+        let mock = MockChainProvider::new(1).with_block_number(1000);
+        let (start, end, _) = get_start_end_block(
+            &mock,
+            Some(U64::ZERO),
+            Some(U64::from(100)),
+            empty_sync_config(),
+            "Test",
+            "ethereum",
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(start, U64::ZERO);
+        assert_eq!(end, U64::from(100));
+    }
+
+    #[tokio::test]
+    async fn very_large_block_numbers() {
+        let large = 18_000_000u64;
+        let mock = MockChainProvider::new(1).with_block_number(large);
+        let (start, end, distance) = get_start_end_block(
+            &mock,
+            Some(U64::from(17_000_000u64)),
+            Some(U64::from(large)),
+            empty_sync_config(),
+            "Test",
+            "ethereum",
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(start, U64::from(17_000_000u64));
+        assert_eq!(end, U64::from(large));
+        assert_eq!(distance, U64::ZERO);
+    }
+
+    #[tokio::test]
+    async fn reorg_safe_distance_larger_than_range_clamps_to_zero() {
+        // latest=100, distance=200 → safe_block = saturating_sub → 0
+        // end (100) > safe_block (0) so end is clamped to 0
+        let mock = MockChainProvider::new(1).with_block_number(100);
+        let (start, end, distance) = get_start_end_block(
+            &mock,
+            Some(U64::from(10)),
+            None,
+            empty_sync_config(),
+            "Test",
+            "ethereum",
+            Some(ReorgSafeDistance::Custom(200)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(start, U64::from(10));
+        assert_eq!(end, U64::ZERO); // clamped due to saturating_sub
+        assert_eq!(distance, U64::from(200));
+    }
+
+    #[test]
+    fn safe_block_distance_larger_than_latest_saturates_to_zero() {
+        // latest=50, distance=100 → saturating_sub = 0, end clamped to 0
+        let (end, distance) = calculate_safe_block_number(
+            Some(ReorgSafeDistance::Custom(100)),
+            1,
+            U64::from(50),
+            U64::from(50),
+        );
+        assert_eq!(end, U64::ZERO);
+        assert_eq!(distance, U64::from(100));
+    }
+
+    #[test]
+    fn safe_block_end_exactly_equals_safe_block() {
+        // latest=1000, distance=20 → safe_block=980, end=980 → no clamp needed
+        let (end, distance) = calculate_safe_block_number(
+            Some(ReorgSafeDistance::Custom(20)),
+            1,
+            U64::from(1000),
+            U64::from(980),
+        );
+        assert_eq!(end, U64::from(980));
+        assert_eq!(distance, U64::from(20));
+    }
+
+    #[test]
+    fn safe_block_custom_zero_distance_no_change() {
+        // distance=0 → safe_block = latest, end unchanged
+        let (end, distance) = calculate_safe_block_number(
+            Some(ReorgSafeDistance::Custom(0)),
+            1,
+            U64::from(1000),
+            U64::from(1000),
+        );
+        assert_eq!(end, U64::from(1000));
+        assert_eq!(distance, U64::ZERO);
+    }
 }

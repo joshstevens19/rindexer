@@ -171,10 +171,10 @@ use crate::event::{
 };
 use crate::manifest::contract::{
     compute_sequence_id, injected_columns, ColumnType, IterateBinding, OperationType, SetAction,
-    Table, TableOperation,
+    SetColumn, Table, TableOperation,
 };
 use crate::manifest::core::Constants;
-use crate::provider::JsonRpcCachedProvider;
+use crate::provider::ChainProvider;
 use crate::system_state::is_running;
 use crate::types::core::LogParam;
 
@@ -425,7 +425,7 @@ async fn prefetch_view_calls(
     tables: &[TableRuntime],
     event_name: &str,
     events_data: &[(Vec<LogParam>, String, TxMetadata)],
-    providers: &std::collections::HashMap<String, Arc<JsonRpcCachedProvider>>,
+    providers: &std::collections::HashMap<String, Arc<dyn ChainProvider>>,
     constants: &Constants,
     multicall_addresses: &std::collections::HashMap<String, Option<String>>,
 ) {
@@ -837,7 +837,7 @@ async fn prefetch_view_calls(
 /// Results are stored in STATIC_CALL_CACHE.
 async fn prefetch_static_calls_via_multicall(
     pending_calls: Vec<PendingViewCall>,
-    providers: &std::collections::HashMap<String, Arc<JsonRpcCachedProvider>>,
+    providers: &std::collections::HashMap<String, Arc<dyn ChainProvider>>,
     multicall_addresses: &std::collections::HashMap<String, Option<String>>,
 ) {
     if pending_calls.is_empty() {
@@ -959,7 +959,7 @@ async fn prefetch_static_calls_via_multicall(
 /// Executes a batch of STATIC view calls using Multicall3 at "latest" block.
 /// Results are stored in STATIC_CALL_CACHE (no block number in key).
 async fn execute_static_multicall3_batch(
-    provider: &JsonRpcCachedProvider,
+    provider: &dyn ChainProvider,
     network: &str,
     calls: &[PendingViewCall],
     multicall_address: Address,
@@ -1126,7 +1126,7 @@ fn resolve_view_call_to_pending(
 /// Results are stored in the VIEW_CALL_CACHE.
 /// If the call fails (e.g., Multicall3 not deployed), marks the network as not having Multicall3.
 async fn execute_multicall3_batch(
-    provider: &JsonRpcCachedProvider,
+    provider: &dyn ChainProvider,
     network: &str,
     block_number: u64,
     calls: &[PendingViewCall],
@@ -1254,7 +1254,7 @@ async fn execute_multicall3_batch(
 /// Results are stored in the global BLOCK_TIMESTAMP_CACHE.
 async fn prefetch_block_timestamps(
     events_data: &[(Vec<LogParam>, String, TxMetadata)],
-    providers: &std::collections::HashMap<String, Arc<JsonRpcCachedProvider>>,
+    providers: &std::collections::HashMap<String, Arc<dyn ChainProvider>>,
     needs_timestamp: bool,
 ) {
     if !needs_timestamp {
@@ -2127,7 +2127,7 @@ async fn execute_view_call(
     view_call: &ViewCall,
     log_params: &[LogParam],
     tx_metadata: &TxMetadata,
-    provider: &JsonRpcCachedProvider,
+    provider: &dyn ChainProvider,
     network: &str,
     constants: &Constants,
 ) -> Option<DynSolValue> {
@@ -2302,7 +2302,7 @@ async fn resolve_calls_in_arithmetic_expression(
     expression: &str,
     log_params: &[LogParam],
     tx_metadata: &TxMetadata,
-    provider: &JsonRpcCachedProvider,
+    provider: &dyn ChainProvider,
     network: &str,
     constants: &Constants,
 ) -> Option<String> {
@@ -2550,7 +2550,7 @@ async fn extract_value_from_event_async(
     log_params: &[LogParam],
     tx_metadata: &TxMetadata,
     column_type: &ColumnType,
-    provider: Option<&JsonRpcCachedProvider>,
+    provider: Option<&dyn ChainProvider>,
     network: &str,
     constants: &Constants,
 ) -> Option<EthereumSqlTypeWrapper> {
@@ -3499,7 +3499,7 @@ pub async fn process_table_operations(
     events_data: &[(Vec<LogParam>, String, TxMetadata)], // (log_params, network, tx_metadata)
     postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickhouseClient>>,
-    providers: Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>>,
+    providers: Arc<std::collections::HashMap<String, Arc<dyn crate::provider::ChainProvider>>>,
     constants: &Constants,
     multicall_addresses: &std::collections::HashMap<String, Option<String>>,
     checkpoint_config: Option<&ProgressCheckpointConfig>,
@@ -3821,6 +3821,15 @@ pub async fn process_table_operations(
                     sql_condition.as_deref(),
                 )
                 .await?;
+
+                // Journal non-reversible operations (Set/Max/Min) for reorg recalculation
+                journal_non_reversible_ops(
+                    postgres,
+                    &table_runtime.full_table_name,
+                    operation,
+                    &rows_to_process,
+                )
+                .await;
             }
 
             if let Some(clickhouse) = &clickhouse {
@@ -3832,6 +3841,14 @@ pub async fn process_table_operations(
                     &rows_to_process,
                 )
                 .await?;
+
+                journal_non_reversible_ops_clickhouse(
+                    clickhouse,
+                    &table_runtime.full_table_name,
+                    operation,
+                    &rows_to_process,
+                )
+                .await;
             }
 
             // DB write succeeded - update max blocks written tracker
@@ -4282,7 +4299,7 @@ pub async fn execute_view_call_for_cron(
     tx_metadata: &TxMetadata,
     contract_address: &Address,
     column_type: &ColumnType,
-    provider: &JsonRpcCachedProvider,
+    provider: &dyn ChainProvider,
     network: &str,
 ) -> Option<EthereumSqlTypeWrapper> {
     // Parse the view call
@@ -4309,7 +4326,7 @@ async fn execute_view_call_for_cron_internal(
     view_call: &ViewCall,
     tx_metadata: &TxMetadata,
     contract_address: &Address,
-    provider: &JsonRpcCachedProvider,
+    provider: &dyn ChainProvider,
     network: &str,
 ) -> Option<DynSolValue> {
     use alloy::primitives::keccak256;
@@ -4492,6 +4509,168 @@ pub fn parse_literal_value_for_column(
     column_type: &ColumnType,
 ) -> Option<EthereumSqlTypeWrapper> {
     Some(literal_to_wrapper(value, column_type))
+}
+
+/// Extract block_number, tx_index, log_index from a table row.
+fn extract_row_metadata(row: &TableRowData) -> Option<(u64, u64, u64)> {
+    use crate::manifest::contract::injected_columns;
+
+    let block_number = match row.columns.get(injected_columns::BLOCK_NUMBER) {
+        Some(EthereumSqlTypeWrapper::U64BigInt(n)) => *n,
+        _ => return None,
+    };
+    let tx_index: u64 = match row.columns.get("tx_index") {
+        Some(EthereumSqlTypeWrapper::U64(n)) => *n,
+        Some(EthereumSqlTypeWrapper::U64BigInt(n)) => *n,
+        Some(EthereumSqlTypeWrapper::U32(n)) => (*n).into(),
+        _ => 0,
+    };
+    let log_index: u64 = match row.columns.get("log_index") {
+        Some(EthereumSqlTypeWrapper::U64(n)) => *n,
+        Some(EthereumSqlTypeWrapper::U64BigInt(n)) => *n,
+        Some(EthereumSqlTypeWrapper::U32(n)) => (*n).into(),
+        _ => 0,
+    };
+    Some((block_number, tx_index, log_index))
+}
+
+/// Build where_key string and collect journal value rows for non-reversible operations.
+/// Returns a list of SQL VALUES tuples ready to be joined into a batch INSERT.
+fn collect_journal_values(
+    derived_table: &str,
+    operation: &TableOperation,
+    rows: &[TableRowData],
+    escape_quote: &str,
+) -> Vec<String> {
+    let non_reversible: Vec<&SetColumn> =
+        operation.set.iter().filter(|sc| sc.action.reverse().is_none()).collect();
+
+    if non_reversible.is_empty() || rows.is_empty() {
+        return vec![];
+    }
+
+    let mut where_keys: Vec<&String> = operation.where_clause.keys().collect();
+    where_keys.sort(); // deterministic ordering for where_key string matching during recalculation
+    let mut value_tuples: Vec<String> = Vec::new();
+
+    for row in rows {
+        let Some((block_number, tx_index, log_index)) = extract_row_metadata(row) else {
+            continue;
+        };
+
+        let mut where_clauses: Vec<String> = Vec::new();
+        for col in &where_keys {
+            if let Some(v) = row.columns.get(col.as_str()) {
+                where_clauses.push(format!("{}={}", col, format_wrapper_for_sql(v)));
+            }
+        }
+        if where_clauses.is_empty() {
+            continue;
+        }
+        let where_key_str = where_clauses.join(",").replace('\'', escape_quote);
+
+        for sc in &non_reversible {
+            let value_str = match row.columns.get(sc.column.as_str()) {
+                Some(v) => format_wrapper_for_sql(v),
+                None => continue,
+            };
+
+            value_tuples.push(format!(
+                "('{derived_table}', '{network}', '{where_key}', '{column}', {value}, {block}, {tx_idx}, {log_idx})",
+                derived_table = derived_table,
+                network = row.network,
+                where_key = where_key_str,
+                column = sc.column,
+                value = value_str,
+                block = block_number,
+                tx_idx = tx_index,
+                log_idx = log_index,
+            ));
+        }
+    }
+
+    value_tuples
+}
+
+/// Journal non-reversible (Set/Max/Min) operations to Postgres `rindexer_internal.derived_op_log`.
+/// Batches all rows into a single INSERT statement.
+async fn journal_non_reversible_ops(
+    postgres: &PostgresClient,
+    derived_table: &str,
+    operation: &TableOperation,
+    rows: &[TableRowData],
+) {
+    let values = collect_journal_values(derived_table, operation, rows, "''");
+    if values.is_empty() {
+        return;
+    }
+
+    let sql = format!(
+        "INSERT INTO rindexer_internal.derived_op_log \
+         (derived_table, network, where_key, column_name, value, block_number, tx_index, log_index) \
+         VALUES {}",
+        values.join(", ")
+    );
+
+    if let Err(e) = postgres.batch_execute(&sql).await {
+        tracing::error!(
+            table = %derived_table,
+            "Failed to journal non-reversible ops: {:?}", e
+        );
+    }
+}
+
+/// Journal non-reversible (Set/Max/Min) operations to ClickHouse `rindexer_internal.derived_op_log`.
+/// Batches all rows into a single INSERT statement.
+async fn journal_non_reversible_ops_clickhouse(
+    clickhouse: &ClickhouseClient,
+    derived_table: &str,
+    operation: &TableOperation,
+    rows: &[TableRowData],
+) {
+    let values = collect_journal_values(derived_table, operation, rows, "\\'");
+    if values.is_empty() {
+        return;
+    }
+
+    let sql = format!(
+        "INSERT INTO rindexer_internal.derived_op_log \
+         (derived_table, network, where_key, column_name, value, block_number, tx_index, log_index) \
+         VALUES {}",
+        values.join(", ")
+    );
+
+    if let Err(e) = clickhouse.execute(&sql).await {
+        tracing::error!(
+            table = %derived_table,
+            "ClickHouse: failed to journal non-reversible ops: {:?}", e
+        );
+    }
+}
+
+/// Format an EthereumSqlTypeWrapper as a SQL literal for WHERE clauses.
+fn format_wrapper_for_sql(w: &EthereumSqlTypeWrapper) -> String {
+    match w {
+        EthereumSqlTypeWrapper::String(s) => format!("'{}'", s.replace('\'', "''")),
+        EthereumSqlTypeWrapper::Address(a) => format!("'{:#x}'", a),
+        EthereumSqlTypeWrapper::Bool(b) => format!("{}", b),
+        EthereumSqlTypeWrapper::U8(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::U16(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::U32(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::U64(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::U64BigInt(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::U128(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::U256(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::I8(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::I16(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::I32(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::I64(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::I128(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::I256(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::Bytes(b) => format!("'\\x{}'", hex::encode(b)),
+        // Fallback: use Debug formatting (safe for SQL numerics)
+        other => format!("'{:?}'", other),
+    }
 }
 
 #[cfg(test)]
@@ -5182,5 +5361,430 @@ mod tests {
             let mut cache = BLOCK_TIMESTAMP_CACHE.write().await;
             cache.remove(&("polygon".to_string(), 77777777));
         }
+    }
+
+    // =========================================================================
+    // Tests for is_conditional_value
+    // =========================================================================
+
+    #[test]
+    fn test_is_conditional_value_valid() {
+        assert!(is_conditional_value("$if($amount > 0, $amount, $null)"));
+        assert!(is_conditional_value("$if(a == b, yes, no)"));
+        assert!(is_conditional_value("$if(x, y, z)"));
+    }
+
+    #[test]
+    fn test_is_conditional_value_invalid() {
+        assert!(!is_conditional_value("$if("));
+        assert!(!is_conditional_value("$if(a, b, c"));
+        assert!(!is_conditional_value("if(a, b, c)"));
+        assert!(!is_conditional_value("$from"));
+        assert!(!is_conditional_value(""));
+        assert!(!is_conditional_value("$if"));
+    }
+
+    // =========================================================================
+    // Tests for parse_conditional_value
+    // =========================================================================
+
+    #[test]
+    fn test_parse_conditional_value_basic() {
+        let result = parse_conditional_value("$if($amount > 0, $amount, $null)");
+        assert!(result.is_ok());
+        let (cond, true_val, false_val) = result.unwrap();
+        assert_eq!(cond, "$amount > 0");
+        assert_eq!(true_val, "$amount");
+        assert_eq!(false_val, "$null");
+    }
+
+    #[test]
+    fn test_parse_conditional_value_quoted() {
+        let result = parse_conditional_value("$if($x == 1, \"yes\", \"no\")");
+        assert!(result.is_ok());
+        let (cond, true_val, false_val) = result.unwrap();
+        assert_eq!(cond, "$x == 1");
+        assert_eq!(true_val, "\"yes\"");
+        assert_eq!(false_val, "\"no\"");
+    }
+
+    #[test]
+    fn test_parse_conditional_value_nested_parens() {
+        // Nested call inside condition — comma inside nested parens should not split
+        let result = parse_conditional_value("$if($call(0x1234, \"decimals()\") > 0, $a, $b)");
+        assert!(result.is_ok());
+        let (cond, true_val, false_val) = result.unwrap();
+        assert_eq!(cond, "$call(0x1234, \"decimals()\") > 0");
+        assert_eq!(true_val, "$a");
+        assert_eq!(false_val, "$b");
+    }
+
+    #[test]
+    fn test_parse_conditional_value_wrong_arg_count() {
+        // Only 2 args — should fail
+        let result = parse_conditional_value("$if(a, b)");
+        assert!(result.is_err());
+        // 4 args — should also fail
+        let result = parse_conditional_value("$if(a, b, c, d)");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_conditional_value_invalid_prefix() {
+        let result = parse_conditional_value("if(a, b, c)");
+        assert!(result.is_err());
+    }
+
+    // =========================================================================
+    // Tests for is_view_call (edge cases beyond what already exists)
+    // =========================================================================
+
+    #[test]
+    fn test_is_view_call_static_variant() {
+        assert!(is_view_call("$call_static($addr, \"decimals()\")"));
+        assert!(is_view_call("$call_static(0xABCD, \"totalSupply()\")"));
+    }
+
+    #[test]
+    fn test_is_view_call_with_accessor() {
+        // Call followed by array index or field access
+        assert!(is_view_call("$call($addr, \"getReserves()\")[0]"));
+        assert!(is_view_call(
+            "$call($addr, \"getReserves() returns (uint112 r0, uint112 r1)\").r0"
+        ));
+    }
+
+    #[test]
+    fn test_is_view_call_missing_close_paren() {
+        // No closing paren anywhere (not even inside a quoted sig)
+        assert!(!is_view_call("$call($addr, \"decimals\""));
+        // Starts with $call( but has no ) at all
+        assert!(!is_view_call("$call("));
+    }
+
+    // =========================================================================
+    // Tests for is_constant_ref
+    // =========================================================================
+
+    #[test]
+    fn test_is_constant_ref_valid() {
+        assert!(is_constant_ref("$constant(myConst)"));
+        assert!(is_constant_ref("$constant(fee_rate)"));
+        assert!(is_constant_ref("$constant(x)"));
+    }
+
+    #[test]
+    fn test_is_constant_ref_invalid() {
+        assert!(!is_constant_ref("$const_myConst")); // old prefix style
+        assert!(!is_constant_ref("$constant("));
+        assert!(!is_constant_ref("$constant"));
+        assert!(!is_constant_ref("constant(x)"));
+        assert!(!is_constant_ref(""));
+        assert!(!is_constant_ref("$from"));
+    }
+
+    // =========================================================================
+    // Tests for parse_constant_ref
+    // =========================================================================
+
+    #[test]
+    fn test_parse_constant_ref_valid() {
+        assert_eq!(parse_constant_ref("$constant(myConst)"), Some("myConst"));
+        assert_eq!(parse_constant_ref("$constant(fee_rate)"), Some("fee_rate"));
+        assert_eq!(parse_constant_ref("$constant(  spaced  )"), Some("spaced"));
+    }
+
+    #[test]
+    fn test_parse_constant_ref_invalid() {
+        assert!(parse_constant_ref("not_a_constant").is_none());
+        assert!(parse_constant_ref("$from").is_none());
+        assert!(parse_constant_ref("$constant(").is_none());
+        // Empty name: $constant() — start >= end, returns None
+        assert!(parse_constant_ref("$constant()").is_none());
+    }
+
+    // =========================================================================
+    // Tests for dyn_sol_value_to_json
+    // =========================================================================
+
+    #[test]
+    fn test_dyn_sol_value_to_json_address() {
+        let addr: Address = "0x1111111111111111111111111111111111111111".parse().unwrap();
+        let result = dyn_sol_value_to_json(&DynSolValue::Address(addr));
+        assert_eq!(result, json!("0x1111111111111111111111111111111111111111"));
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_json_uint_small() {
+        let result = dyn_sol_value_to_json(&DynSolValue::Uint(U256::from(42u64), 256));
+        assert_eq!(result, json!(42u64));
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_json_uint_large() {
+        // Value larger than u64::MAX should be serialized as string
+        let large = U256::from(u64::MAX) + U256::from(1u64);
+        let result = dyn_sol_value_to_json(&DynSolValue::Uint(large, 256));
+        assert_eq!(result, json!(large.to_string()));
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_json_uint_boundary() {
+        // Exactly u64::MAX — fits, so emitted as number
+        let result = dyn_sol_value_to_json(&DynSolValue::Uint(U256::from(u64::MAX), 256));
+        assert_eq!(result, json!(u64::MAX));
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_json_int() {
+        use alloy::primitives::I256;
+        let neg = I256::try_from(-100i64).unwrap();
+        let result = dyn_sol_value_to_json(&DynSolValue::Int(neg, 256));
+        assert_eq!(result, json!(neg.to_string()));
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_json_bool() {
+        assert_eq!(dyn_sol_value_to_json(&DynSolValue::Bool(true)), json!(true));
+        assert_eq!(dyn_sol_value_to_json(&DynSolValue::Bool(false)), json!(false));
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_json_string() {
+        let result = dyn_sol_value_to_json(&DynSolValue::String("hello".to_string()));
+        assert_eq!(result, json!("hello"));
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_json_bytes() {
+        let result = dyn_sol_value_to_json(&DynSolValue::Bytes(vec![0xde, 0xad]));
+        assert_eq!(result, json!("0xdead"));
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_json_fixed_bytes() {
+        // DynSolValue::FixedBytes takes a B256 (Word/32-byte) with a declared size
+        let word = B256::from_slice(&[
+            0xbe, 0xef, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0,
+        ]);
+        let result = dyn_sol_value_to_json(&DynSolValue::FixedBytes(word, 2));
+        assert_eq!(result, json!(format!("0x{}", hex::encode(&word[..]))));
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_json_tuple() {
+        let tuple = DynSolValue::Tuple(vec![
+            DynSolValue::Uint(U256::from(1u64), 256),
+            DynSolValue::Bool(true),
+        ]);
+        let result = dyn_sol_value_to_json(&tuple);
+        if let Value::Object(map) = result {
+            assert_eq!(map["0"], json!(1u64));
+            assert_eq!(map["1"], json!(true));
+        } else {
+            panic!("Expected Object");
+        }
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_json_array() {
+        let arr = DynSolValue::Array(vec![
+            DynSolValue::Uint(U256::from(10u64), 256),
+            DynSolValue::Uint(U256::from(20u64), 256),
+        ]);
+        let result = dyn_sol_value_to_json(&arr);
+        assert_eq!(result, json!([10u64, 20u64]));
+    }
+
+    // =========================================================================
+    // Tests for parse_accessor_segments
+    // =========================================================================
+
+    #[test]
+    fn test_parse_accessor_segments_empty() {
+        let segs = parse_accessor_segments("");
+        assert!(segs.is_empty());
+    }
+
+    #[test]
+    fn test_parse_accessor_segments_index_only() {
+        let segs = parse_accessor_segments("[0]");
+        assert_eq!(segs.len(), 1);
+        assert!(matches!(segs[0], AccessorSegment::Index(0)));
+    }
+
+    #[test]
+    fn test_parse_accessor_segments_field_only() {
+        let segs = parse_accessor_segments(".reserve0");
+        assert_eq!(segs.len(), 1);
+        assert!(matches!(segs[0], AccessorSegment::Field(ref s) if s == "reserve0"));
+    }
+
+    #[test]
+    fn test_parse_accessor_segments_mixed() {
+        // "[0].field[1].nested"
+        let segs = parse_accessor_segments("[0].field[1].nested");
+        assert_eq!(segs.len(), 4);
+        assert!(matches!(segs[0], AccessorSegment::Index(0)));
+        assert!(matches!(segs[1], AccessorSegment::Field(ref s) if s == "field"));
+        assert!(matches!(segs[2], AccessorSegment::Index(1)));
+        assert!(matches!(segs[3], AccessorSegment::Field(ref s) if s == "nested"));
+    }
+
+    #[test]
+    fn test_parse_accessor_segments_multiple_indices() {
+        let segs = parse_accessor_segments("[2][3]");
+        assert_eq!(segs.len(), 2);
+        assert!(matches!(segs[0], AccessorSegment::Index(2)));
+        assert!(matches!(segs[1], AccessorSegment::Index(3)));
+    }
+
+    #[test]
+    fn test_parse_accessor_segments_leading_dot_multiple_fields() {
+        let segs = parse_accessor_segments(".point.x");
+        assert_eq!(segs.len(), 2);
+        assert!(matches!(segs[0], AccessorSegment::Field(ref s) if s == "point"));
+        assert!(matches!(segs[1], AccessorSegment::Field(ref s) if s == "x"));
+    }
+
+    #[test]
+    fn test_parse_accessor_segments_invalid_start_stops() {
+        // Starts with a plain character that is neither '[' nor '.' — should return empty
+        let segs = parse_accessor_segments("fieldname");
+        assert!(segs.is_empty());
+    }
+
+    // =========================================================================
+    // Tests for dyn_sol_value_to_string
+    // =========================================================================
+
+    #[test]
+    fn test_dyn_sol_value_to_string_address() {
+        let addr: Address = "0x1111111111111111111111111111111111111111".parse().unwrap();
+        let result = dyn_sol_value_to_string(&DynSolValue::Address(addr));
+        assert_eq!(result, "0x1111111111111111111111111111111111111111");
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_string_uint() {
+        let result = dyn_sol_value_to_string(&DynSolValue::Uint(U256::from(999u64), 256));
+        assert_eq!(result, "999");
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_string_int() {
+        use alloy::primitives::I256;
+        let neg = I256::try_from(-7i64).unwrap();
+        let result = dyn_sol_value_to_string(&DynSolValue::Int(neg, 256));
+        assert_eq!(result, neg.to_string());
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_string_bool() {
+        assert_eq!(dyn_sol_value_to_string(&DynSolValue::Bool(true)), "true");
+        assert_eq!(dyn_sol_value_to_string(&DynSolValue::Bool(false)), "false");
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_string_string() {
+        let result = dyn_sol_value_to_string(&DynSolValue::String("world".to_string()));
+        assert_eq!(result, "world");
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_string_bytes() {
+        let result = dyn_sol_value_to_string(&DynSolValue::Bytes(vec![0xca, 0xfe]));
+        assert_eq!(result, "0xcafe");
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_string_fixed_bytes() {
+        let word = B256::from_slice(&[
+            0xab, 0xcd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0,
+        ]);
+        let result = dyn_sol_value_to_string(&DynSolValue::FixedBytes(word, 2));
+        assert_eq!(result, format!("0x{}", hex::encode(&word[..])));
+    }
+
+    // =========================================================================
+    // Edge-case tests for is_arithmetic_expression
+    // =========================================================================
+
+    #[test]
+    fn test_is_arithmetic_expression_edge_cases() {
+        // Subtraction at position > 0
+        assert!(is_arithmetic_expression("$a - $b"));
+        // Unary minus at start — operator at index 0, should NOT count
+        assert!(!is_arithmetic_expression("-$value"));
+        // No $ reference — not an arithmetic expression even with operator
+        assert!(!is_arithmetic_expression("100 + 200"));
+        // Nested $call in arithmetic
+        assert!(is_arithmetic_expression("$amount / $call($asset, \"decimals()\")"));
+        // Comparison operators are NOT arithmetic operators
+        assert!(!is_arithmetic_expression("$x == $y"));
+        assert!(!is_arithmetic_expression("$x != $y"));
+        assert!(!is_arithmetic_expression("$x >= $y"));
+    }
+
+    // =========================================================================
+    // Edge-case tests for is_string_template
+    // =========================================================================
+
+    #[test]
+    fn test_is_string_template_edge_cases() {
+        // Lone '$' — treated as pure field (empty identifier), so NOT a template
+        assert!(!is_string_template("$"));
+        // Empty string — no $, not a template
+        assert!(!is_string_template(""));
+        // $call(...) starts with $ but the part after $ contains '(' which is not
+        // alphanumeric/dot/underscore/bracket — so it IS treated as a template
+        assert!(is_string_template("$call($addr, \"decimals()\")"));
+        // $if(...) similarly contains '(' after $, so it is a template
+        assert!(is_string_template("$if($x > 0, a, b)"));
+    }
+
+    // =========================================================================
+    // Edge-case tests for expand_string_template
+    // =========================================================================
+
+    #[test]
+    fn test_expand_string_template_lone_dollar() {
+        let params: Vec<LogParam> = vec![];
+        let meta = TxMetadata {
+            block_number: 1,
+            block_timestamp: None,
+            tx_hash: B256::ZERO,
+            block_hash: B256::ZERO,
+            contract_address: Address::ZERO,
+            log_index: U256::from(0u64),
+            tx_index: 0,
+        };
+
+        // A lone '$' with no field name should be kept as '$'
+        let result = expand_string_template("prefix $ suffix", &params, &meta);
+        assert_eq!(result, Some("prefix $ suffix".to_string()));
+    }
+
+    #[test]
+    fn test_expand_string_template_metadata_fields() {
+        let params: Vec<LogParam> = vec![];
+        let meta = TxMetadata {
+            block_number: 42,
+            block_timestamp: None,
+            tx_hash: B256::ZERO,
+            block_hash: B256::ZERO,
+            contract_address: Address::ZERO,
+            log_index: U256::from(3u64),
+            tx_index: 1,
+        };
+
+        let result = expand_string_template(
+            "blk=$rindexer_block_number,log=$rindexer_log_index",
+            &params,
+            &meta,
+        );
+        assert_eq!(result, Some("blk=42,log=3".to_string()));
     }
 }

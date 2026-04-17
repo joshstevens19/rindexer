@@ -35,6 +35,34 @@ pub fn generate_column_names_only_with_base_properties(inputs: &[ABIInput]) -> V
     column_names
 }
 
+pub fn generate_reorg_block_hashes_table_sql() -> String {
+    r#"CREATE TABLE IF NOT EXISTS rindexer_internal.reorg_block_hashes (
+        network TEXT NOT NULL,
+        block_number BIGINT NOT NULL,
+        block_hash CHAR(66) NOT NULL,
+        parent_hash CHAR(66) NOT NULL,
+        PRIMARY KEY (network, block_number)
+    );"#
+    .to_string()
+}
+
+pub fn generate_derived_op_log_table_sql() -> String {
+    r#"CREATE TABLE IF NOT EXISTS rindexer_internal.derived_op_log (
+        id BIGSERIAL PRIMARY KEY,
+        derived_table VARCHAR(200) NOT NULL,
+        network VARCHAR(50) NOT NULL,
+        where_key VARCHAR(500) NOT NULL,
+        column_name VARCHAR(100) NOT NULL,
+        value NUMERIC NOT NULL,
+        block_number BIGINT NOT NULL,
+        tx_index INTEGER NOT NULL,
+        log_index INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_derived_op_log_reorg
+        ON rindexer_internal.derived_op_log (derived_table, column_name, where_key, block_number);"#
+        .to_string()
+}
+
 pub fn generate_internal_event_table_name(schema_name: &str, event_name: &str) -> String {
     let table_name = format!("{}_{}", schema_name, camel_to_snake(event_name));
 

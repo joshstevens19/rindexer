@@ -253,11 +253,13 @@ fn build_multi_network_config(
                 name: "ethereum".to_string(),
                 chain_id: 1,
                 rpc: params.mainnet_rpc.to_string(),
+                reorg_handling: None,
             },
             NetworkConfig {
                 name: "anvil".to_string(),
                 chain_id: 31337,
                 rpc: params.anvil_rpc.to_string(),
+                reorg_handling: None,
             },
         ],
         global: GlobalConfig { health_port },
@@ -280,6 +282,7 @@ fn build_multi_network_config(
                 reorg_safe_distance: None,
                 include_events: Some(vec![EventConfig { name: "Transfer".to_string() }]),
                 tables: None,
+                streams: None,
             },
             ContractConfig {
                 name: "SimpleERC20".to_string(),
@@ -293,6 +296,7 @@ fn build_multi_network_config(
                 reorg_safe_distance: None,
                 include_events: Some(vec![EventConfig { name: "Transfer".to_string() }]),
                 tables: None,
+                streams: None,
             },
         ],
     }

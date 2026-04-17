@@ -1239,6 +1239,17 @@ impl SetAction {
     pub fn is_counter_action(&self) -> bool {
         matches!(self, SetAction::Increment | SetAction::Decrement)
     }
+
+    /// Returns the reverse action for reorg rollback, or None if not reversible.
+    pub fn reverse(&self) -> Option<SetAction> {
+        match self {
+            SetAction::Add => Some(SetAction::Subtract),
+            SetAction::Subtract => Some(SetAction::Add),
+            SetAction::Increment => Some(SetAction::Decrement),
+            SetAction::Decrement => Some(SetAction::Increment),
+            SetAction::Set | SetAction::Max | SetAction::Min => None,
+        }
+    }
 }
 
 // ============================================================================
@@ -1643,5 +1654,778 @@ mod tests {
     #[test]
     fn test_pg_type_address_is_char42() {
         assert_eq!(ColumnType::Address.to_postgres_type(), "CHAR(42)");
+    }
+
+    // =========================================================================
+    // compute_sequence_id
+    // =========================================================================
+
+    #[test]
+    fn test_compute_sequence_id_basic() {
+        // block * 100_000_000 + tx * 100_000 + log
+        assert_eq!(compute_sequence_id(1, 0, 0), 100_000_000);
+        assert_eq!(compute_sequence_id(0, 1, 0), 100_000);
+        assert_eq!(compute_sequence_id(0, 0, 1), 1);
+    }
+
+    #[test]
+    fn test_compute_sequence_id_combined() {
+        // block=2, tx=3, log=4 → 2*100_000_000 + 3*100_000 + 4
+        assert_eq!(compute_sequence_id(2, 3, 4), 200_300_004);
+    }
+
+    #[test]
+    fn test_compute_sequence_id_zero() {
+        assert_eq!(compute_sequence_id(0, 0, 0), 0);
+    }
+
+    #[test]
+    fn test_compute_sequence_id_large_block() {
+        // Use a realistic large block number (20_000_000) to verify no overflow
+        let id = compute_sequence_id(20_000_000, 0, 0);
+        assert_eq!(id, 20_000_000u128 * 100_000_000);
+    }
+
+    #[test]
+    fn test_compute_sequence_id_deterministic() {
+        // Same inputs always produce same output
+        let a = compute_sequence_id(100, 50, 25);
+        let b = compute_sequence_id(100, 50, 25);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_compute_sequence_id_ordering() {
+        // The encoding is: block * 100_000_000 + tx * 100_000 + log
+        // tx_index has a 1000-wide slot (0..999), log_index has 100_000-wide slot (0..99_999).
+        // Within these bounds, later blocks always produce higher IDs.
+        let block1 = compute_sequence_id(100, 999, 99_999);
+        let block2 = compute_sequence_id(101, 0, 0);
+        assert!(block2 > block1);
+
+        // Same block, higher tx_index wins
+        let a = compute_sequence_id(100, 5, 99_999);
+        let b = compute_sequence_id(100, 6, 0);
+        assert!(b > a);
+
+        // Same block+tx, higher log_index wins
+        let c = compute_sequence_id(100, 5, 0);
+        let d = compute_sequence_id(100, 5, 1);
+        assert!(d > c);
+    }
+
+    #[test]
+    fn test_compute_sequence_id_slot_overflow() {
+        // tx_index >= 1000 overflows into the block number's space.
+        // This documents the known limitation of the encoding.
+        let normal = compute_sequence_id(101, 0, 0); // 10_100_000_000
+        let overflow = compute_sequence_id(100, 1000, 0); // 10_100_000_000
+        assert_eq!(normal, overflow, "tx_index=1000 aliases with next block");
+    }
+
+    // =========================================================================
+    // ColumnType::from_solidity_type
+    // =========================================================================
+
+    #[test]
+    fn test_from_solidity_type_address() {
+        assert_eq!(ColumnType::from_solidity_type("address"), Some(ColumnType::Address));
+    }
+
+    #[test]
+    fn test_from_solidity_type_bool() {
+        assert_eq!(ColumnType::from_solidity_type("bool"), Some(ColumnType::Bool));
+    }
+
+    #[test]
+    fn test_from_solidity_type_string() {
+        assert_eq!(ColumnType::from_solidity_type("string"), Some(ColumnType::String));
+    }
+
+    #[test]
+    fn test_from_solidity_type_uint8() {
+        assert_eq!(ColumnType::from_solidity_type("uint8"), Some(ColumnType::Uint8));
+    }
+
+    #[test]
+    fn test_from_solidity_type_uint16() {
+        assert_eq!(ColumnType::from_solidity_type("uint16"), Some(ColumnType::Uint16));
+    }
+
+    #[test]
+    fn test_from_solidity_type_uint32() {
+        assert_eq!(ColumnType::from_solidity_type("uint32"), Some(ColumnType::Uint32));
+    }
+
+    #[test]
+    fn test_from_solidity_type_uint24_maps_to_uint32() {
+        assert_eq!(ColumnType::from_solidity_type("uint24"), Some(ColumnType::Uint32));
+    }
+
+    #[test]
+    fn test_from_solidity_type_uint64() {
+        assert_eq!(ColumnType::from_solidity_type("uint64"), Some(ColumnType::Uint64));
+    }
+
+    #[test]
+    fn test_from_solidity_type_uint128() {
+        assert_eq!(ColumnType::from_solidity_type("uint128"), Some(ColumnType::Uint128));
+    }
+
+    #[test]
+    fn test_from_solidity_type_uint256() {
+        assert_eq!(ColumnType::from_solidity_type("uint256"), Some(ColumnType::Uint256));
+    }
+
+    #[test]
+    fn test_from_solidity_type_large_uint_maps_to_uint256() {
+        // uint160, uint192, uint224 etc. should all map to Uint256
+        assert_eq!(ColumnType::from_solidity_type("uint160"), Some(ColumnType::Uint256));
+    }
+
+    #[test]
+    fn test_from_solidity_type_int8() {
+        assert_eq!(ColumnType::from_solidity_type("int8"), Some(ColumnType::Int8));
+    }
+
+    #[test]
+    fn test_from_solidity_type_int256() {
+        assert_eq!(ColumnType::from_solidity_type("int256"), Some(ColumnType::Int256));
+    }
+
+    #[test]
+    fn test_from_solidity_type_bytes() {
+        assert_eq!(ColumnType::from_solidity_type("bytes"), Some(ColumnType::Bytes));
+    }
+
+    #[test]
+    fn test_from_solidity_type_bytes32() {
+        assert_eq!(ColumnType::from_solidity_type("bytes32"), Some(ColumnType::Bytes32));
+    }
+
+    #[test]
+    fn test_from_solidity_type_bytes_other_maps_to_bytes() {
+        // bytes16, bytes4, etc. should map to Bytes
+        assert_eq!(ColumnType::from_solidity_type("bytes16"), Some(ColumnType::Bytes));
+    }
+
+    #[test]
+    fn test_from_solidity_type_array_address() {
+        assert_eq!(
+            ColumnType::from_solidity_type("address[]"),
+            Some(ColumnType::Array(Box::new(ColumnType::Address)))
+        );
+    }
+
+    #[test]
+    fn test_from_solidity_type_array_uint256() {
+        assert_eq!(
+            ColumnType::from_solidity_type("uint256[]"),
+            Some(ColumnType::Array(Box::new(ColumnType::Uint256)))
+        );
+    }
+
+    #[test]
+    fn test_from_solidity_type_unknown_returns_none() {
+        assert_eq!(ColumnType::from_solidity_type("tuple"), None);
+        assert_eq!(ColumnType::from_solidity_type(""), None);
+        assert_eq!(ColumnType::from_solidity_type("unknown"), None);
+    }
+
+    // =========================================================================
+    // ColumnType::to_postgres_type — full coverage
+    // =========================================================================
+
+    #[test]
+    fn test_pg_type_uint8_is_smallint() {
+        assert_eq!(ColumnType::Uint8.to_postgres_type(), "SMALLINT");
+    }
+
+    #[test]
+    fn test_pg_type_int8_is_smallint() {
+        assert_eq!(ColumnType::Int8.to_postgres_type(), "SMALLINT");
+    }
+
+    #[test]
+    fn test_pg_type_uint32_is_integer() {
+        assert_eq!(ColumnType::Uint32.to_postgres_type(), "INTEGER");
+    }
+
+    #[test]
+    fn test_pg_type_int32_is_integer() {
+        assert_eq!(ColumnType::Int32.to_postgres_type(), "INTEGER");
+    }
+
+    #[test]
+    fn test_pg_type_uint64_is_bigint() {
+        assert_eq!(ColumnType::Uint64.to_postgres_type(), "BIGINT");
+    }
+
+    #[test]
+    fn test_pg_type_int64_is_bigint() {
+        assert_eq!(ColumnType::Int64.to_postgres_type(), "BIGINT");
+    }
+
+    #[test]
+    fn test_pg_type_uint128_is_numeric() {
+        assert_eq!(ColumnType::Uint128.to_postgres_type(), "NUMERIC");
+    }
+
+    #[test]
+    fn test_pg_type_int128_is_numeric() {
+        assert_eq!(ColumnType::Int128.to_postgres_type(), "NUMERIC");
+    }
+
+    #[test]
+    fn test_pg_type_int256_is_numeric() {
+        assert_eq!(ColumnType::Int256.to_postgres_type(), "NUMERIC");
+    }
+
+    #[test]
+    fn test_pg_type_bytes_is_bytea() {
+        assert_eq!(ColumnType::Bytes.to_postgres_type(), "BYTEA");
+    }
+
+    #[test]
+    fn test_pg_type_bytes32_is_bytea() {
+        assert_eq!(ColumnType::Bytes32.to_postgres_type(), "BYTEA");
+    }
+
+    #[test]
+    fn test_pg_type_string_is_text() {
+        assert_eq!(ColumnType::String.to_postgres_type(), "TEXT");
+    }
+
+    #[test]
+    fn test_pg_type_bool_is_boolean() {
+        assert_eq!(ColumnType::Bool.to_postgres_type(), "BOOLEAN");
+    }
+
+    #[test]
+    fn test_pg_type_timestamp_is_timestamptz() {
+        assert_eq!(ColumnType::Timestamp.to_postgres_type(), "TIMESTAMPTZ");
+    }
+
+    #[test]
+    fn test_pg_type_array_uint256() {
+        let arr = ColumnType::Array(Box::new(ColumnType::Uint256));
+        assert_eq!(arr.to_postgres_type(), "NUMERIC[]");
+    }
+
+    #[test]
+    fn test_pg_type_array_address_uses_text() {
+        // Special case: address arrays use TEXT[] not CHAR(42)[]
+        let arr = ColumnType::Array(Box::new(ColumnType::Address));
+        assert_eq!(arr.to_postgres_type(), "TEXT[]");
+    }
+
+    // =========================================================================
+    // ColumnType::to_clickhouse_type — remaining types
+    // =========================================================================
+
+    #[test]
+    fn test_ch_type_uint8() {
+        assert_eq!(ColumnType::Uint8.to_clickhouse_type(), "UInt8");
+    }
+
+    #[test]
+    fn test_ch_type_uint16() {
+        assert_eq!(ColumnType::Uint16.to_clickhouse_type(), "UInt16");
+    }
+
+    #[test]
+    fn test_ch_type_uint32() {
+        assert_eq!(ColumnType::Uint32.to_clickhouse_type(), "UInt32");
+    }
+
+    #[test]
+    fn test_ch_type_int8() {
+        assert_eq!(ColumnType::Int8.to_clickhouse_type(), "Int8");
+    }
+
+    #[test]
+    fn test_ch_type_int16() {
+        assert_eq!(ColumnType::Int16.to_clickhouse_type(), "Int16");
+    }
+
+    #[test]
+    fn test_ch_type_int32() {
+        assert_eq!(ColumnType::Int32.to_clickhouse_type(), "Int32");
+    }
+
+    #[test]
+    fn test_ch_type_bytes_is_string() {
+        assert_eq!(ColumnType::Bytes.to_clickhouse_type(), "String");
+    }
+
+    #[test]
+    fn test_ch_type_bytes32_is_string() {
+        assert_eq!(ColumnType::Bytes32.to_clickhouse_type(), "String");
+    }
+
+    #[test]
+    fn test_ch_type_timestamp_is_datetime_utc() {
+        assert_eq!(ColumnType::Timestamp.to_clickhouse_type(), "DateTime('UTC')");
+    }
+
+    #[test]
+    fn test_ch_type_array_address() {
+        let arr = ColumnType::Array(Box::new(ColumnType::Address));
+        assert_eq!(arr.to_clickhouse_type(), "Array(FixedString(42))");
+    }
+
+    // =========================================================================
+    // ColumnType::from_type_string
+    // =========================================================================
+
+    #[test]
+    fn test_from_type_string_all_base_types() {
+        assert_eq!(ColumnType::from_type_string("uint8"), Some(ColumnType::Uint8));
+        assert_eq!(ColumnType::from_type_string("uint16"), Some(ColumnType::Uint16));
+        assert_eq!(ColumnType::from_type_string("uint32"), Some(ColumnType::Uint32));
+        assert_eq!(ColumnType::from_type_string("uint64"), Some(ColumnType::Uint64));
+        assert_eq!(ColumnType::from_type_string("uint128"), Some(ColumnType::Uint128));
+        assert_eq!(ColumnType::from_type_string("uint256"), Some(ColumnType::Uint256));
+        assert_eq!(ColumnType::from_type_string("int8"), Some(ColumnType::Int8));
+        assert_eq!(ColumnType::from_type_string("int16"), Some(ColumnType::Int16));
+        assert_eq!(ColumnType::from_type_string("int32"), Some(ColumnType::Int32));
+        assert_eq!(ColumnType::from_type_string("int64"), Some(ColumnType::Int64));
+        assert_eq!(ColumnType::from_type_string("int128"), Some(ColumnType::Int128));
+        assert_eq!(ColumnType::from_type_string("int256"), Some(ColumnType::Int256));
+        assert_eq!(ColumnType::from_type_string("address"), Some(ColumnType::Address));
+        assert_eq!(ColumnType::from_type_string("bytes"), Some(ColumnType::Bytes));
+        assert_eq!(ColumnType::from_type_string("bytes32"), Some(ColumnType::Bytes32));
+        assert_eq!(ColumnType::from_type_string("string"), Some(ColumnType::String));
+        assert_eq!(ColumnType::from_type_string("bool"), Some(ColumnType::Bool));
+        assert_eq!(ColumnType::from_type_string("timestamp"), Some(ColumnType::Timestamp));
+    }
+
+    #[test]
+    fn test_from_type_string_array_suffix() {
+        assert_eq!(
+            ColumnType::from_type_string("address[]"),
+            Some(ColumnType::Array(Box::new(ColumnType::Address)))
+        );
+        assert_eq!(
+            ColumnType::from_type_string("uint256[]"),
+            Some(ColumnType::Array(Box::new(ColumnType::Uint256)))
+        );
+        assert_eq!(
+            ColumnType::from_type_string("bool[]"),
+            Some(ColumnType::Array(Box::new(ColumnType::Bool)))
+        );
+    }
+
+    #[test]
+    fn test_from_type_string_unknown_returns_none() {
+        assert_eq!(ColumnType::from_type_string("UINT256"), None); // case-sensitive
+        assert_eq!(ColumnType::from_type_string(""), None);
+        assert_eq!(ColumnType::from_type_string("float"), None);
+    }
+
+    // =========================================================================
+    // ColumnType::to_type_string — roundtrip with from_type_string
+    // =========================================================================
+
+    #[test]
+    fn test_to_type_string_all_base_types() {
+        let types = [
+            (ColumnType::Uint8, "uint8"),
+            (ColumnType::Uint16, "uint16"),
+            (ColumnType::Uint32, "uint32"),
+            (ColumnType::Uint64, "uint64"),
+            (ColumnType::Uint128, "uint128"),
+            (ColumnType::Uint256, "uint256"),
+            (ColumnType::Int8, "int8"),
+            (ColumnType::Int16, "int16"),
+            (ColumnType::Int32, "int32"),
+            (ColumnType::Int64, "int64"),
+            (ColumnType::Int128, "int128"),
+            (ColumnType::Int256, "int256"),
+            (ColumnType::Address, "address"),
+            (ColumnType::Bytes, "bytes"),
+            (ColumnType::Bytes32, "bytes32"),
+            (ColumnType::String, "string"),
+            (ColumnType::Bool, "bool"),
+            (ColumnType::Timestamp, "timestamp"),
+        ];
+
+        for (col_type, expected) in types {
+            assert_eq!(col_type.to_type_string(), expected);
+        }
+    }
+
+    #[test]
+    fn test_to_type_string_array() {
+        let arr = ColumnType::Array(Box::new(ColumnType::Uint256));
+        assert_eq!(arr.to_type_string(), "uint256[]");
+    }
+
+    #[test]
+    fn test_type_string_roundtrip() {
+        let original = ColumnType::Array(Box::new(ColumnType::Address));
+        let s = original.to_type_string();
+        let parsed = ColumnType::from_type_string(&s).unwrap();
+        assert_eq!(parsed, original);
+    }
+
+    // =========================================================================
+    // ColumnType::from_tx_metadata_field
+    // =========================================================================
+
+    #[test]
+    fn test_from_tx_metadata_field_block_number() {
+        assert_eq!(
+            ColumnType::from_tx_metadata_field("rindexer_block_number"),
+            Some(ColumnType::Uint64)
+        );
+    }
+
+    #[test]
+    fn test_from_tx_metadata_field_block_timestamp() {
+        assert_eq!(
+            ColumnType::from_tx_metadata_field("rindexer_block_timestamp"),
+            Some(ColumnType::Timestamp)
+        );
+    }
+
+    #[test]
+    fn test_from_tx_metadata_field_tx_hash() {
+        assert_eq!(
+            ColumnType::from_tx_metadata_field("rindexer_tx_hash"),
+            Some(ColumnType::String)
+        );
+    }
+
+    #[test]
+    fn test_from_tx_metadata_field_block_hash() {
+        assert_eq!(
+            ColumnType::from_tx_metadata_field("rindexer_block_hash"),
+            Some(ColumnType::String)
+        );
+    }
+
+    #[test]
+    fn test_from_tx_metadata_field_contract_address() {
+        assert_eq!(
+            ColumnType::from_tx_metadata_field("rindexer_contract_address"),
+            Some(ColumnType::Address)
+        );
+    }
+
+    #[test]
+    fn test_from_tx_metadata_field_log_index() {
+        assert_eq!(
+            ColumnType::from_tx_metadata_field("rindexer_log_index"),
+            Some(ColumnType::Uint256)
+        );
+    }
+
+    #[test]
+    fn test_from_tx_metadata_field_tx_index() {
+        assert_eq!(
+            ColumnType::from_tx_metadata_field("rindexer_tx_index"),
+            Some(ColumnType::Uint64)
+        );
+    }
+
+    #[test]
+    fn test_from_tx_metadata_field_unknown_returns_none() {
+        assert_eq!(ColumnType::from_tx_metadata_field("tx_hash"), None); // missing prefix
+        assert_eq!(ColumnType::from_tx_metadata_field("block_number"), None);
+        assert_eq!(ColumnType::from_tx_metadata_field(""), None);
+        assert_eq!(ColumnType::from_tx_metadata_field("unknown"), None);
+    }
+
+    // =========================================================================
+    // IterateBinding::parse
+    // =========================================================================
+
+    #[test]
+    fn test_iterate_binding_parse_valid() {
+        let binding = IterateBinding::parse("$ids as id").unwrap();
+        assert_eq!(binding.array_field, "ids");
+        assert_eq!(binding.alias, "id");
+    }
+
+    #[test]
+    fn test_iterate_binding_parse_strips_dollar_prefix() {
+        let binding = IterateBinding::parse("$amounts as amount").unwrap();
+        assert_eq!(binding.array_field, "amounts");
+        assert_eq!(binding.alias, "amount");
+    }
+
+    #[test]
+    fn test_iterate_binding_parse_trims_whitespace() {
+        let binding = IterateBinding::parse("  $values as val  ").unwrap();
+        assert_eq!(binding.array_field, "values");
+        assert_eq!(binding.alias, "val");
+    }
+
+    #[test]
+    fn test_iterate_binding_parse_no_dollar_returns_none() {
+        assert!(IterateBinding::parse("ids as id").is_none());
+    }
+
+    #[test]
+    fn test_iterate_binding_parse_no_as_returns_none() {
+        assert!(IterateBinding::parse("$ids").is_none());
+    }
+
+    #[test]
+    fn test_iterate_binding_parse_empty_returns_none() {
+        assert!(IterateBinding::parse("").is_none());
+    }
+
+    #[test]
+    fn test_iterate_binding_parse_multiple_as_returns_none() {
+        // "as" appears more than once → too many parts
+        assert!(IterateBinding::parse("$ids as id as extra").is_none());
+    }
+
+    // =========================================================================
+    // parse_interval
+    // =========================================================================
+
+    #[test]
+    fn test_parse_interval_seconds() {
+        assert_eq!(parse_interval("30s").unwrap(), std::time::Duration::from_secs(30));
+    }
+
+    #[test]
+    fn test_parse_interval_minutes() {
+        assert_eq!(parse_interval("5m").unwrap(), std::time::Duration::from_secs(300));
+    }
+
+    #[test]
+    fn test_parse_interval_hours() {
+        assert_eq!(parse_interval("1h").unwrap(), std::time::Duration::from_secs(3600));
+    }
+
+    #[test]
+    fn test_parse_interval_days() {
+        assert_eq!(parse_interval("1d").unwrap(), std::time::Duration::from_secs(86400));
+    }
+
+    #[test]
+    fn test_parse_interval_large_value() {
+        assert_eq!(parse_interval("24h").unwrap(), std::time::Duration::from_secs(86400));
+    }
+
+    #[test]
+    fn test_parse_interval_empty_is_error() {
+        assert!(parse_interval("").is_err());
+    }
+
+    #[test]
+    fn test_parse_interval_no_unit_is_error() {
+        assert!(parse_interval("60").is_err());
+    }
+
+    #[test]
+    fn test_parse_interval_zero_is_error() {
+        assert!(parse_interval("0s").is_err());
+    }
+
+    #[test]
+    fn test_parse_interval_invalid_unit_is_error() {
+        assert!(parse_interval("5x").is_err());
+        assert!(parse_interval("5ms").is_err());
+    }
+
+    #[test]
+    fn test_parse_interval_whitespace_trimmed() {
+        assert_eq!(parse_interval("  10m  ").unwrap(), std::time::Duration::from_secs(600));
+    }
+
+    // =========================================================================
+    // Table::is_insert_only
+    // =========================================================================
+
+    fn make_operation(op_type: OperationType, where_cols: &[(&str, &str)]) -> TableOperation {
+        TableOperation {
+            operation_type: op_type,
+            where_clause: where_cols.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            if_condition: None,
+            filter: None,
+            set: vec![],
+        }
+    }
+
+    fn make_table_with_event_ops(ops: Vec<TableOperation>) -> Table {
+        Table {
+            name: "test_table".to_string(),
+            global: false,
+            cross_chain: false,
+            columns: vec![],
+            events: vec![TableEventMapping {
+                event: "Transfer".to_string(),
+                iterate: vec![],
+                operations: ops,
+            }],
+            cron: None,
+            timestamp: false,
+            database: None,
+        }
+    }
+
+    #[test]
+    fn test_is_insert_only_true_when_all_insert() {
+        let table = make_table_with_event_ops(vec![
+            make_operation(OperationType::Insert, &[]),
+            make_operation(OperationType::Insert, &[]),
+        ]);
+        assert!(table.is_insert_only());
+    }
+
+    #[test]
+    fn test_is_insert_only_false_when_mixed() {
+        let table = make_table_with_event_ops(vec![
+            make_operation(OperationType::Insert, &[]),
+            make_operation(OperationType::Upsert, &[("id", "$id")]),
+        ]);
+        assert!(!table.is_insert_only());
+    }
+
+    #[test]
+    fn test_is_insert_only_false_when_all_upsert() {
+        let table = make_table_with_event_ops(vec![make_operation(
+            OperationType::Upsert,
+            &[("id", "$id")],
+        )]);
+        assert!(!table.is_insert_only());
+    }
+
+    #[test]
+    fn test_is_insert_only_false_when_no_ops() {
+        let table = Table {
+            name: "empty".to_string(),
+            global: false,
+            cross_chain: false,
+            columns: vec![],
+            events: vec![],
+            cron: None,
+            timestamp: false,
+            database: None,
+        };
+        assert!(!table.is_insert_only());
+    }
+
+    // =========================================================================
+    // Table::primary_key_columns
+    // =========================================================================
+
+    #[test]
+    fn test_primary_key_columns_from_upsert_where() {
+        let table = make_table_with_event_ops(vec![make_operation(
+            OperationType::Upsert,
+            &[("user", "$from"), ("token_id", "$id")],
+        )]);
+        let mut pk = table.primary_key_columns();
+        pk.sort();
+        assert_eq!(pk, vec!["token_id", "user"]);
+    }
+
+    #[test]
+    fn test_primary_key_columns_deduped_across_operations() {
+        let table = make_table_with_event_ops(vec![
+            make_operation(OperationType::Upsert, &[("user", "$from")]),
+            make_operation(OperationType::Upsert, &[("user", "$from")]),
+        ]);
+        let pk = table.primary_key_columns();
+        assert_eq!(pk, vec!["user"]);
+    }
+
+    #[test]
+    fn test_primary_key_columns_empty_for_insert_only() {
+        let table = make_table_with_event_ops(vec![make_operation(OperationType::Insert, &[])]);
+        let pk = table.primary_key_columns();
+        assert!(pk.is_empty());
+    }
+
+    // =========================================================================
+    // Table::validate_where_columns
+    // =========================================================================
+
+    #[test]
+    fn test_validate_where_columns_consistent_ok() {
+        let table = make_table_with_event_ops(vec![
+            make_operation(OperationType::Upsert, &[("user", "$from")]),
+            make_operation(OperationType::Upsert, &[("user", "$from")]),
+        ]);
+        assert!(table.validate_where_columns().is_ok());
+    }
+
+    #[test]
+    fn test_validate_where_columns_inconsistent_err() {
+        let table = make_table_with_event_ops(vec![
+            make_operation(OperationType::Upsert, &[("user", "$from")]),
+            make_operation(OperationType::Upsert, &[("token", "$id")]),
+        ]);
+        assert!(table.validate_where_columns().is_err());
+    }
+
+    #[test]
+    fn test_validate_where_columns_insert_no_where_ok() {
+        let table = make_table_with_event_ops(vec![make_operation(OperationType::Insert, &[])]);
+        assert!(table.validate_where_columns().is_ok());
+    }
+
+    #[test]
+    fn test_validate_where_columns_insert_with_where_err() {
+        let table = make_table_with_event_ops(vec![make_operation(
+            OperationType::Insert,
+            &[("id", "$id")],
+        )]);
+        assert!(table.validate_where_columns().is_err());
+    }
+
+    #[test]
+    fn test_validate_where_columns_upsert_without_where_err() {
+        // Non-global table with upsert but no where clause → error
+        let op = TableOperation {
+            operation_type: OperationType::Upsert,
+            where_clause: HashMap::new(),
+            if_condition: None,
+            filter: None,
+            set: vec![],
+        };
+        let table = make_table_with_event_ops(vec![op]);
+        assert!(table.validate_where_columns().is_err());
+    }
+
+    #[test]
+    fn test_validate_where_columns_global_with_where_err() {
+        let mut table = make_table_with_event_ops(vec![make_operation(
+            OperationType::Upsert,
+            &[("user", "$from")],
+        )]);
+        table.global = true;
+        assert!(table.validate_where_columns().is_err());
+    }
+
+    #[test]
+    fn test_validate_where_columns_global_insert_err() {
+        let mut table = make_table_with_event_ops(vec![make_operation(OperationType::Insert, &[])]);
+        table.global = true;
+        assert!(table.validate_where_columns().is_err());
+    }
+
+    #[test]
+    fn test_validate_where_columns_global_upsert_no_where_ok() {
+        let mut table = make_table_with_event_ops(vec![make_operation(OperationType::Upsert, &[])]);
+        table.global = true;
+        assert!(table.validate_where_columns().is_ok());
+    }
+
+    #[test]
+    fn test_set_action_reverse() {
+        assert_eq!(SetAction::Add.reverse(), Some(SetAction::Subtract));
+        assert_eq!(SetAction::Subtract.reverse(), Some(SetAction::Add));
+        assert_eq!(SetAction::Increment.reverse(), Some(SetAction::Decrement));
+        assert_eq!(SetAction::Decrement.reverse(), Some(SetAction::Increment));
+        assert_eq!(SetAction::Set.reverse(), None);
+        assert_eq!(SetAction::Max.reverse(), None);
+        assert_eq!(SetAction::Min.reverse(), None);
     }
 }

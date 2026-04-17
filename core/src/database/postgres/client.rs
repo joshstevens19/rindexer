@@ -9,6 +9,7 @@ use bb8_postgres::PostgresConnectionManager;
 use bytes::Buf;
 use dotenv::dotenv;
 use futures::pin_mut;
+use rust_decimal::Decimal;
 use tokio::{task, time::timeout};
 pub use tokio_postgres::types::{ToSql, Type as PgType};
 use tokio_postgres::{
@@ -56,6 +57,9 @@ pub enum PostgresError {
 
     #[error("Connection pool error: {0}")]
     ConnectionPoolError(#[from] RunError<tokio_postgres::Error>),
+
+    #[error("{0}")]
+    Custom(String),
 }
 
 #[allow(unused)]
@@ -459,5 +463,107 @@ impl PostgresClient {
         let conn = self.pool.get().await?;
 
         Ok(conn)
+    }
+
+    /// Delete events in a block range for a given network from a specific table.
+    /// Returns the number of rows deleted.
+    pub async fn delete_by_block_range(
+        &self,
+        table_name: &str,
+        network: &str,
+        fork_point: u64,
+        detection_point: u64,
+    ) -> Result<u64, String> {
+        let query = format!(
+            "DELETE FROM {} WHERE network = $1 AND block_number >= $2 AND block_number <= $3",
+            table_name
+        );
+        let fork_point =
+            i64::try_from(fork_point).map_err(|_| "fork_point exceeds i64 range".to_string())?;
+        let detection_point = i64::try_from(detection_point)
+            .map_err(|_| "detection_point exceeds i64 range".to_string())?;
+        self.execute(&query, &[&network, &fork_point, &detection_point])
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    /// Execute a full reorg rollback atomically in a single PostgreSQL transaction:
+    /// 1. Delete stale events from all given event tables (returning affected tx hashes)
+    /// 2. Delete stale entries from `rindexer_internal.reorg_block_hashes` for the block range
+    /// 3. Insert corrected reorg_block_hashes entries (marking reorg as handled)
+    /// 4. Rewind checkpoint cursors
+    ///
+    /// Returns `(total_rows_deleted, affected_tx_hashes)`.
+    pub async fn reorg_rollback_transaction(
+        &self,
+        event_table_names: &[&str],
+        network: &str,
+        fork_point: u64,
+        detection_point: u64,
+        corrected_blocks: &[(u64, &str, &str)], // (block_number, block_hash, parent_hash)
+        checkpoint_tables: &[&str],
+    ) -> Result<(u64, Vec<String>), PostgresError> {
+        let mut conn = self.pool.get().await?;
+        let transaction = conn.transaction().await?;
+
+        let fork_point_i64 = i64::try_from(fork_point)
+            .map_err(|_| PostgresError::Custom("fork_point exceeds i64 range".to_string()))?;
+        let detection_point_i64 = i64::try_from(detection_point)
+            .map_err(|_| PostgresError::Custom("detection_point exceeds i64 range".to_string()))?;
+        let fork_point_decimal = Decimal::from(fork_point);
+        let detection_point_decimal = Decimal::from(detection_point);
+        let mut total_deleted: u64 = 0;
+        let mut all_affected_tx_hashes: Vec<String> = Vec::new();
+
+        // 1. Delete stale events and collect affected tx hashes in one round-trip per table
+        for table_name in event_table_names {
+            let query = format!(
+                "DELETE FROM {} WHERE network = $1 AND block_number >= $2 AND block_number <= $3 RETURNING tx_hash",
+                table_name
+            );
+            let rows = transaction
+                .query(&query, &[&network, &fork_point_decimal, &detection_point_decimal])
+                .await?;
+            total_deleted += rows.len() as u64;
+            let hashes: Vec<String> = rows.iter().map(|r| r.get::<_, String>("tx_hash")).collect();
+            all_affected_tx_hashes.extend(hashes);
+        }
+
+        all_affected_tx_hashes.sort();
+        all_affected_tx_hashes.dedup();
+
+        // 2. Delete stale entries from rindexer_internal.reorg_block_hashes
+        let delete_reorg_hashes_query = "DELETE FROM rindexer_internal.reorg_block_hashes \
+             WHERE network = $1 AND block_number >= $2 AND block_number <= $3";
+        transaction
+            .execute(delete_reorg_hashes_query, &[&network, &fork_point_i64, &detection_point_i64])
+            .await?;
+
+        // 3. Insert corrected reorg_block_hashes entries
+        let insert_query = "INSERT INTO rindexer_internal.reorg_block_hashes \
+             (network, block_number, block_hash, parent_hash) \
+             VALUES ($1, $2, $3, $4)";
+        for &(block_number, block_hash, parent_hash) in corrected_blocks {
+            let block_number_i64 = i64::try_from(block_number).map_err(|_| {
+                PostgresError::Custom(format!("block_number {} exceeds i64 range", block_number))
+            })?;
+            transaction
+                .execute(insert_query, &[&network, &block_number_i64, &block_hash, &parent_hash])
+                .await?;
+        }
+
+        // 4. Rewind last_synced_block checkpoints to fork_point - 1
+        let rewind_block = Decimal::from(fork_point.saturating_sub(1));
+        for table in checkpoint_tables {
+            let query = format!(
+                "UPDATE rindexer_internal.{} SET last_synced_block = $1 WHERE network = $2",
+                table
+            );
+            transaction.execute(&query, &[&rewind_block, &network]).await?;
+        }
+
+        transaction.commit().await?;
+
+        Ok((total_deleted, all_affected_tx_hashes))
     }
 }

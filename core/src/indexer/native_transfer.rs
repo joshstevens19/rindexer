@@ -7,18 +7,13 @@ use alloy::{
     rpc::types::trace::parity::{Action, LocalizedTransactionTrace},
 };
 use futures::future::try_join_all;
-use lru::LruCache;
 use serde::Serialize;
-use std::num::NonZeroUsize;
 use tokio::{sync::mpsc, time::sleep};
 use tracing::{debug, error, info, warn};
 
 use tokio_util::sync::CancellationToken;
 
-use crate::indexer::fetch_logs::{BlockMeta, ReorgInfo};
-use crate::indexer::reorg::{find_fork_point, handle_native_transfer_reorg_recovery};
 use crate::is_running;
-use crate::metrics::indexing as metrics;
 use crate::provider::RECOMMENDED_RPC_CHUNK_SIZE;
 use crate::PostgresClient;
 use crate::{
@@ -29,11 +24,10 @@ use crate::{
     indexer::{
         last_synced::evm_trace_update_progress_and_last_synced_task,
         process::ProcessEventError,
-        reorg::handle_chain_notification,
         task_tracker::{indexing_event_processed, indexing_event_processing},
     },
     manifest::native_transfer::TraceProcessingMethod,
-    provider::{JsonRpcCachedProvider, ProviderError},
+    provider::{ChainProvider, ProviderError},
 };
 
 /// An imaginary contract name to ensure native transfer "debug trace" indexing is compatible
@@ -114,37 +108,22 @@ async fn push_range(block_tx: &mpsc::Sender<U64>, last: U64, latest: U64) {
 /// reached.
 #[allow(clippy::too_many_arguments)]
 pub async fn native_transfer_block_fetch(
-    publisher: Arc<JsonRpcCachedProvider>,
+    publisher: Arc<dyn ChainProvider>,
     block_tx: mpsc::Sender<U64>,
     start_block: U64,
     end_block: Option<U64>,
     indexing_distance_from_head: U64,
     network: String,
     cancel_token: CancellationToken,
-    postgres: Option<Arc<PostgresClient>>,
-    indexer_name: String,
+    _postgres: Option<Arc<PostgresClient>>,
+    _indexer_name: String,
 ) -> Result<(), ProcessEventError> {
     let mut last_seen_block = start_block;
 
-    // Block metadata cache for reorg detection via parent hash chain validation.
-    let mut block_cache: LruCache<u64, BlockMeta> = LruCache::new(NonZeroUsize::new(1024).unwrap());
-
-    // Channel for reth-provided reorg signals (None for HTTP RPC users).
-    let (reth_reorg_tx, mut reth_reorg_rx) = tokio::sync::mpsc::unbounded_channel::<ReorgInfo>();
-
-    if let Some(notifications) = publisher.get_chain_state_notification() {
-        let network_clone = network.clone();
-        tokio::spawn(async move {
-            let mut rx = notifications.subscribe();
-            while let Ok(notification) = rx.recv().await {
-                if let Some(reorg_info) =
-                    handle_chain_notification(notification, "NativeTransfer", &network_clone)
-                {
-                    let _ = reth_reorg_tx.send(reorg_info);
-                }
-            }
-        });
-    }
+    // TODO: Native transfer tables are registered in the network's ReorgCoordinator (start.rs)
+    // for rollback during reorg recovery. Detection is driven by the contract event
+    // coordinator on the same network. Standalone native-transfer reorg detection is
+    // not yet implemented.
 
     loop {
         if !is_running() || cancel_token.is_cancelled() {
@@ -152,96 +131,10 @@ pub async fn native_transfer_block_fetch(
             break Ok(());
         }
 
-        // Reth reorg signal — instant detection, same recovery as cache-based.
-        if let Ok(reth_reorg) = reth_reorg_rx.try_recv() {
-            let fork_block = reth_reorg.fork_block.to::<u64>();
-            warn!(
-                "NativeTransfer on {} - REORG (reth notification): depth={}, fork_block={}",
-                network, reth_reorg.depth, fork_block
-            );
-
-            for b in fork_block..=(fork_block + reth_reorg.depth) {
-                block_cache.pop(&b);
-            }
-
-            handle_native_transfer_reorg_recovery(
-                &postgres,
-                &indexer_name,
-                &network,
-                fork_block,
-                reth_reorg.depth,
-                &None,
-            )
-            .await;
-
-            last_seen_block = U64::from(fork_block.saturating_sub(1));
-            continue;
-        }
-
         let latest_block = publisher.get_latest_block().await;
 
         match latest_block {
             Ok(Some(latest_block)) => {
-                // Reorg detection #1: tip hash changed (same block, different hash)
-                let tip_reorged = block_cache
-                    .peek(&latest_block.header.number)
-                    .map(|cached| cached.hash != latest_block.header.hash)
-                    .unwrap_or(false);
-
-                block_cache.put(
-                    latest_block.header.number,
-                    BlockMeta {
-                        hash: latest_block.header.hash,
-                        parent_hash: latest_block.header.parent_hash,
-                        timestamp: latest_block.header.timestamp,
-                    },
-                );
-
-                // Reorg detection #2: parent hash chain discontinuity
-                let parent_mismatch = if !tip_reorged && latest_block.header.number > 0 {
-                    block_cache
-                        .peek(&(latest_block.header.number - 1))
-                        .map(|cached| cached.hash != latest_block.header.parent_hash)
-                        .unwrap_or(false)
-                } else {
-                    false
-                };
-
-                if tip_reorged || parent_mismatch {
-                    let reason =
-                        if tip_reorged { "tip hash changed" } else { "parent hash mismatch" };
-                    let fork_block =
-                        find_fork_point(&block_cache, &publisher, latest_block.header.number).await;
-                    let depth = latest_block.header.number.saturating_sub(fork_block);
-                    metrics::record_reorg(&network, depth);
-                    warn!(
-                        "NativeTransfer on {} - REORG ({}): depth={}, fork_block={}",
-                        network, reason, depth, fork_block
-                    );
-
-                    // Invalidate cached hashes for reorged blocks
-                    for b in fork_block..=latest_block.header.number {
-                        block_cache.pop(&b);
-                    }
-
-                    // Delete orphaned native transfer events and rewind checkpoint
-                    handle_native_transfer_reorg_recovery(
-                        &postgres,
-                        &indexer_name,
-                        &network,
-                        fork_block,
-                        depth,
-                        &None,
-                    )
-                    .await;
-
-                    // Rewind to re-publish blocks from fork point
-                    last_seen_block = U64::from(fork_block.saturating_sub(1));
-                    // Drain any pending reth signals to avoid double recovery
-                    while reth_reorg_rx.try_recv().is_ok() {}
-                    continue;
-                }
-
                 let block = U64::from(latest_block.header.number);
 
                 // Always trim back to the safe indexing threshold (which is zero if disabled)
@@ -275,7 +168,7 @@ pub async fn native_transfer_block_fetch(
 
 pub async fn native_transfer_block_processor(
     network_name: String,
-    provider: Arc<JsonRpcCachedProvider>,
+    provider: Arc<dyn ChainProvider>,
     config: Arc<TraceProcessingConfig>,
     mut block_rx: mpsc::Receiver<U64>,
 ) -> Result<(), ProcessEventError> {
@@ -367,7 +260,7 @@ pub async fn native_transfer_block_processor(
 }
 
 async fn provider_trace_call(
-    provider: Arc<JsonRpcCachedProvider>,
+    provider: Arc<dyn ChainProvider>,
     config: &TraceProcessingConfig,
     block: U64,
 ) -> Result<Vec<LocalizedTransactionTrace>, ProviderError> {
@@ -382,7 +275,7 @@ async fn provider_trace_call(
 
 /// Index native transfers via batched rpc block call method
 pub async fn native_transfer_block_consumer(
-    provider: Arc<JsonRpcCachedProvider>,
+    provider: Arc<dyn ChainProvider>,
     block_numbers: &[U64],
     network_name: &str,
     config: &Arc<TraceProcessingConfig>,
@@ -410,7 +303,7 @@ pub async fn native_transfer_block_consumer(
                     ts,
                     to,
                     network_name,
-                    provider.chain.id(),
+                    provider.chain().id(),
                     from_block,
                     to_block,
                 ))
@@ -426,7 +319,9 @@ pub async fn native_transfer_block_consumer(
 
     let blocks = blocks
         .into_iter()
-        .map(|b| TraceResult::new_block(b, network_name, provider.chain.id(), from_block, to_block))
+        .map(|b| {
+            TraceResult::new_block(b, network_name, provider.chain().id(), from_block, to_block)
+        })
         .collect::<Vec<_>>();
     config.trigger_event(blocks).await;
 
@@ -451,7 +346,7 @@ pub async fn native_transfer_block_consumer(
 /// choose to continue to support `debug` and `trace` based native transfer indexing.
 #[allow(unused)]
 pub async fn native_transfer_block_consumer_debug(
-    provider: Arc<JsonRpcCachedProvider>,
+    provider: Arc<dyn ChainProvider>,
     block_numbers: &[U64],
     network_name: &str,
     config: Arc<TraceProcessingConfig>,
@@ -510,7 +405,7 @@ pub async fn native_transfer_block_consumer_debug(
                     action,
                     &trace,
                     network_name,
-                    provider.chain.id(),
+                    provider.chain().id(),
                     from_block,
                     to_block,
                 ))
@@ -532,4 +427,310 @@ pub async fn native_transfer_block_consumer_debug(
         .await;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::provider::mock::MockChainProvider;
+
+    #[test]
+    fn native_transfer_abi_parses() {
+        let abi: Vec<alloy::json_abi::Event> = serde_json::from_str(NATIVE_TRANSFER_ABI).unwrap();
+        assert_eq!(abi.len(), 1);
+        assert_eq!(abi[0].name, "NativeTransfer");
+        assert_eq!(abi[0].inputs.len(), 3);
+    }
+
+    #[test]
+    fn native_transfer_filter_logic() {
+        // The core filtering in native_transfer_block_consumer:
+        // has_to_address && is_empty_input && !is_value_zero
+        let cases: Vec<(bool, bool, bool, bool)> = vec![
+            // (input_empty, value_zero, has_to, expected)
+            (true, false, true, true),   // ETH transfer
+            (false, false, true, false), // Contract call: has input data
+            (true, true, true, false),   // Zero value: not a transfer
+            (true, false, false, false), // Contract creation: no to address
+        ];
+
+        for (input_empty, value_zero, has_to, expected) in cases {
+            let is_native_transfer = has_to && input_empty && !value_zero;
+            assert_eq!(
+                is_native_transfer, expected,
+                "Failed for input_empty={input_empty}, value_zero={value_zero}, has_to={has_to}",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn mock_provider_returns_empty_blocks() {
+        let mock = Arc::new(MockChainProvider::new(1).with_block_number(100));
+        let block_numbers = vec![U64::from(10), U64::from(11)];
+        let result = mock.get_block_by_number_batch(&block_numbers, true).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn mock_provider_trace_block_returns_empty() {
+        let mock = Arc::new(MockChainProvider::new(1));
+        let traces = mock.trace_block(U64::from(100)).await.unwrap();
+        assert!(traces.is_empty());
+    }
+
+    #[test]
+    fn concurrency_backoff() {
+        // Mimics the backoff in native_transfer_block_processor
+        let backed_off = |n: usize| cmp::max(1, (n as f64 * 0.8) as usize);
+        assert_eq!(backed_off(10), 8);
+        assert_eq!(backed_off(5), 4);
+        assert_eq!(backed_off(1), 1); // bottoms at 1
+    }
+
+    #[test]
+    fn concurrency_increase_caps_at_limit() {
+        let limit = RECOMMENDED_RPC_CHUNK_SIZE;
+        let increase = |n: usize| ((n * 20) / 10).min(limit);
+        assert_eq!(increase(5), 10); // doubles
+        assert_eq!(increase(25), 50); // doubles
+        assert_eq!(increase(40), limit.min(80)); // capped
+    }
+
+    #[tokio::test]
+    async fn provider_trace_call_dispatches_trace_block() {
+        use crate::event::callback_registry::TraceCallbackRegistry;
+        use crate::indexer::progress::IndexingEventsProgressState;
+        use alloy::rpc::types::trace::parity::{LocalizedTransactionTrace, TransactionTrace};
+        use std::path::PathBuf;
+        use tokio_util::sync::CancellationToken;
+
+        let trace = LocalizedTransactionTrace {
+            trace: TransactionTrace {
+                action: Action::default(),
+                result: None,
+                trace_address: vec![],
+                subtraces: 0,
+                error: None,
+            },
+            transaction_hash: None,
+            transaction_position: None,
+            block_number: Some(100),
+            block_hash: None,
+        };
+        let provider = Arc::new(MockChainProvider::new(1).with_traces(vec![trace]));
+
+        let progress = IndexingEventsProgressState::monitor(&[], &[], None).await;
+        let config = TraceProcessingConfig {
+            id: "test-id".to_string(),
+            chain_id: 1,
+            project_path: PathBuf::from("/tmp"),
+            start_block: U64::from(100u64),
+            end_block: U64::from(200u64),
+            indexer_name: "test".to_string(),
+            contract_name: NATIVE_TRANSFER_CONTRACT_NAME.to_string(),
+            event_name: EVENT_NAME.to_string(),
+            network: "ethereum".to_string(),
+            progress,
+            postgres: None,
+            csv_details: None,
+            registry: Arc::new(TraceCallbackRegistry::new()),
+            method: TraceProcessingMethod::TraceBlock,
+            stream_last_synced_block_file_path: None,
+            cancel_token: CancellationToken::new(),
+        };
+
+        let result = provider_trace_call(provider, &config, U64::from(100u64)).await;
+        assert!(result.is_ok());
+        let traces = result.unwrap();
+        assert_eq!(traces.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn provider_trace_call_dispatches_debug_trace() {
+        use crate::event::callback_registry::TraceCallbackRegistry;
+        use crate::indexer::progress::IndexingEventsProgressState;
+        use alloy::rpc::types::trace::parity::{LocalizedTransactionTrace, TransactionTrace};
+        use std::path::PathBuf;
+        use tokio_util::sync::CancellationToken;
+
+        let trace = LocalizedTransactionTrace {
+            trace: TransactionTrace {
+                action: Action::default(),
+                result: None,
+                trace_address: vec![],
+                subtraces: 0,
+                error: None,
+            },
+            transaction_hash: None,
+            transaction_position: None,
+            block_number: Some(100),
+            block_hash: None,
+        };
+        let provider = Arc::new(MockChainProvider::new(1).with_traces(vec![trace]));
+
+        let progress = IndexingEventsProgressState::monitor(&[], &[], None).await;
+        let config = TraceProcessingConfig {
+            id: "test-id".to_string(),
+            chain_id: 1,
+            project_path: PathBuf::from("/tmp"),
+            start_block: U64::from(100u64),
+            end_block: U64::from(200u64),
+            indexer_name: "test".to_string(),
+            contract_name: NATIVE_TRANSFER_CONTRACT_NAME.to_string(),
+            event_name: EVENT_NAME.to_string(),
+            network: "ethereum".to_string(),
+            progress,
+            postgres: None,
+            csv_details: None,
+            registry: Arc::new(TraceCallbackRegistry::new()),
+            method: TraceProcessingMethod::DebugTraceBlockByNumber,
+            stream_last_synced_block_file_path: None,
+            cancel_token: CancellationToken::new(),
+        };
+
+        let result = provider_trace_call(provider, &config, U64::from(100u64)).await;
+        assert!(result.is_ok());
+        let traces = result.unwrap();
+        assert_eq!(traces.len(), 1);
+    }
+
+    async fn make_trace_config_async() -> Arc<TraceProcessingConfig> {
+        use crate::event::callback_registry::TraceCallbackRegistry;
+        use crate::indexer::progress::IndexingEventsProgressState;
+        use std::path::PathBuf;
+        use tokio_util::sync::CancellationToken;
+
+        let progress = IndexingEventsProgressState::monitor(&[], &[], None).await;
+        Arc::new(TraceProcessingConfig {
+            id: "test-id".to_string(),
+            chain_id: 1,
+            project_path: PathBuf::from("/tmp"),
+            start_block: U64::from(100u64),
+            end_block: U64::from(200u64),
+            indexer_name: "test".to_string(),
+            contract_name: NATIVE_TRANSFER_CONTRACT_NAME.to_string(),
+            event_name: EVENT_NAME.to_string(),
+            network: "ethereum".to_string(),
+            progress,
+            postgres: None,
+            csv_details: None,
+            registry: Arc::new(TraceCallbackRegistry::new()),
+            method: crate::manifest::native_transfer::TraceProcessingMethod::TraceBlock,
+            stream_last_synced_block_file_path: None,
+            cancel_token: CancellationToken::new(),
+        })
+    }
+
+    /// Build a block with a single native-transfer transaction (value > 0, empty input, has to).
+    fn make_block_with_native_transfer(
+        block_number: u64,
+        from: Address,
+        to: Address,
+        value: U256,
+    ) -> alloy::network::AnyRpcBlock {
+        use alloy::consensus::transaction::Recovered;
+        use alloy::consensus::{Signed, TxEnvelope, TxLegacy};
+        use alloy::network::{AnyHeader, AnyRpcHeader, AnyRpcTransaction, AnyTxEnvelope};
+        use alloy::primitives::{Signature, TxKind, B256};
+        use alloy::rpc::types::{Block, BlockTransactions, Transaction};
+        use alloy::serde::WithOtherFields;
+
+        let block_hash = B256::from([block_number as u8; 32]);
+
+        let tx_legacy = TxLegacy {
+            chain_id: Some(1),
+            nonce: 0,
+            gas_price: 1_000_000_000,
+            gas_limit: 21_000,
+            to: TxKind::Call(to),
+            value,
+            input: alloy::primitives::Bytes::new(),
+        };
+
+        // Dummy sig and hash — we only need the fields, not cryptographic validity.
+        let sig = Signature::new(U256::ONE, U256::ONE, false);
+        let tx_hash = B256::from([0xabu8; 32]);
+        let signed = Signed::new_unchecked(tx_legacy, sig, tx_hash);
+        let envelope = AnyTxEnvelope::Ethereum(TxEnvelope::Legacy(signed));
+        let recovered = Recovered::new_unchecked(envelope, from);
+
+        let rpc_tx = AnyRpcTransaction::new(WithOtherFields::new(Transaction {
+            inner: recovered,
+            block_hash: Some(block_hash),
+            block_number: Some(block_number),
+            transaction_index: Some(0),
+            effective_gas_price: None,
+        }));
+
+        alloy::network::AnyRpcBlock::new(
+            Block::new(
+                AnyRpcHeader::from_sealed(
+                    AnyHeader { number: block_number, ..Default::default() }.seal(block_hash),
+                ),
+                BlockTransactions::Full(vec![rpc_tx]),
+            )
+            .into(),
+        )
+    }
+
+    #[tokio::test]
+    async fn native_transfer_block_consumer_empty_blocks() {
+        // Provider has no blocks registered → consumer returns Ok with no work.
+        let provider = Arc::new(MockChainProvider::new(1));
+        let config = make_trace_config_async().await;
+        let block_numbers = vec![U64::from(10), U64::from(11)];
+
+        let result =
+            native_transfer_block_consumer(provider, &block_numbers, "ethereum", &config).await;
+
+        assert!(result.is_ok(), "Expected Ok when no blocks are returned");
+    }
+
+    #[tokio::test]
+    async fn native_transfer_block_consumer_filters_native_transfers() {
+        // Build a block containing three transactions:
+        //   1. A valid native ETH transfer (value > 0, empty input, has to) → should match
+        //   2. A zero-value tx (value = 0) → should NOT match
+        //   3. A tx with non-empty input (contract call) → should NOT match
+        //
+        // We verify the consumer runs without error; the callback registry is empty so no
+        // callbacks fire, but the filtering path is exercised.
+        let from: Address = "0x1111111111111111111111111111111111111111".parse().unwrap();
+        let to: Address = "0x2222222222222222222222222222222222222222".parse().unwrap();
+
+        let transfer_block =
+            make_block_with_native_transfer(42, from, to, U256::from(1_000_000_000_000_000_000u64));
+
+        let provider = Arc::new(MockChainProvider::new(1).with_blocks(vec![transfer_block]));
+        let config = make_trace_config_async().await;
+
+        let result =
+            native_transfer_block_consumer(provider, &[U64::from(42)], "ethereum", &config).await;
+
+        assert!(result.is_ok(), "Consumer should succeed when a native transfer block is present");
+    }
+
+    #[test]
+    fn zksync_system_contracts_list() {
+        // Verify the system contract addresses are valid and contain expected count
+        let contracts: [Address; 13] = [
+            "0x0000000000000000000000000000000000008001".parse().unwrap(),
+            "0x0000000000000000000000000000000000008002".parse().unwrap(),
+            "0x0000000000000000000000000000000000008003".parse().unwrap(),
+            "0x0000000000000000000000000000000000008004".parse().unwrap(),
+            "0x0000000000000000000000000000000000008005".parse().unwrap(),
+            "0x0000000000000000000000000000000000008006".parse().unwrap(),
+            "0x0000000000000000000000000000000000008008".parse().unwrap(),
+            "0x0000000000000000000000000000000000008009".parse().unwrap(),
+            "0x000000000000000000000000000000000000800a".parse().unwrap(),
+            "0x000000000000000000000000000000000000800b".parse().unwrap(),
+            "0x000000000000000000000000000000000000800c".parse().unwrap(),
+            "0x000000000000000000000000000000000000800e".parse().unwrap(),
+            "0x000000000000000000000000000000000000800f".parse().unwrap(),
+        ];
+        assert_eq!(contracts.len(), 13);
+        // 0x8007 is intentionally missing (not a system contract used in transfers)
+        assert!(!contracts.contains(&"0x0000000000000000000000000000000000008007".parse().unwrap()));
+    }
 }

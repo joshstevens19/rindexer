@@ -34,6 +34,7 @@ contracts:
     abi: ./abis/erc20-abi.json
     include_events:
       - Transfer
+      - Approval
     generate_csv: true
   - name: UniswapV3Pool
     details:

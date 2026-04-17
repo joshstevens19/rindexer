@@ -250,4 +250,299 @@ impl RindexerEventFilter {
             RindexerEventFilter::Factory(filter) => filter.contract_address().await,
         }
     }
+
+    /// Creates a minimal filter for use in tests.
+    #[cfg(test)]
+    pub fn empty_for_test() -> Self {
+        RindexerEventFilter::Filter(SimpleEventFilter {
+            address: None,
+            topic_id: B256::ZERO,
+            topics: Default::default(),
+            current_block: U64::ZERO,
+            next_block: U64::ZERO,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::contract_setup::{AddressDetails, FilterDetails};
+    use alloy::primitives::{Address, B256, U64};
+    use alloy::rpc::types::ValueOrArray;
+    use std::str::FromStr;
+
+    fn make_topic_id() -> B256 {
+        B256::from([1u8; 32])
+    }
+
+    fn make_address() -> Address {
+        Address::from_str("0xdEADbeefdEAdbeefdEadbEEFdeadbeEFdEaDbeeF").unwrap()
+    }
+
+    // ---- empty_for_test ----
+
+    #[test]
+    fn empty_for_test_returns_filter_variant() {
+        let f = RindexerEventFilter::empty_for_test();
+        assert!(matches!(f, RindexerEventFilter::Filter(_)));
+    }
+
+    #[test]
+    fn empty_for_test_has_zero_blocks() {
+        let f = RindexerEventFilter::empty_for_test();
+        assert_eq!(f.from_block(), U64::ZERO);
+        assert_eq!(f.to_block(), U64::ZERO);
+    }
+
+    #[test]
+    fn empty_for_test_has_zero_topic_id() {
+        let f = RindexerEventFilter::empty_for_test();
+        assert_eq!(f.event_signature(), B256::ZERO);
+    }
+
+    // ---- event_signature ----
+
+    #[test]
+    fn event_signature_returns_topic_id_for_address_variant() {
+        let topic_id = make_topic_id();
+        let f = RindexerEventFilter::Address(SimpleEventFilter {
+            address: None,
+            topic_id,
+            topics: Default::default(),
+            current_block: U64::ZERO,
+            next_block: U64::ZERO,
+        });
+        assert_eq!(f.event_signature(), topic_id);
+    }
+
+    #[test]
+    fn event_signature_returns_topic_id_for_filter_variant() {
+        let topic_id = make_topic_id();
+        let f = RindexerEventFilter::Filter(SimpleEventFilter {
+            address: None,
+            topic_id,
+            topics: Default::default(),
+            current_block: U64::ZERO,
+            next_block: U64::ZERO,
+        });
+        assert_eq!(f.event_signature(), topic_id);
+    }
+
+    // ---- from_block / to_block ----
+
+    #[test]
+    fn from_block_returns_current_block() {
+        let f = RindexerEventFilter::Filter(SimpleEventFilter {
+            address: None,
+            topic_id: B256::ZERO,
+            topics: Default::default(),
+            current_block: U64::from(42u64),
+            next_block: U64::from(100u64),
+        });
+        assert_eq!(f.from_block(), U64::from(42u64));
+    }
+
+    #[test]
+    fn to_block_returns_next_block() {
+        let f = RindexerEventFilter::Filter(SimpleEventFilter {
+            address: None,
+            topic_id: B256::ZERO,
+            topics: Default::default(),
+            current_block: U64::from(42u64),
+            next_block: U64::from(100u64),
+        });
+        assert_eq!(f.to_block(), U64::from(100u64));
+    }
+
+    // ---- set_from_block / set_to_block ----
+
+    #[test]
+    fn set_from_block_updates_current_block() {
+        let f = RindexerEventFilter::empty_for_test();
+        let f = f.set_from_block(U64::from(55u64));
+        assert_eq!(f.from_block(), U64::from(55u64));
+    }
+
+    #[test]
+    fn set_to_block_updates_next_block() {
+        let f = RindexerEventFilter::empty_for_test();
+        let f = f.set_to_block(U64::from(200u64));
+        assert_eq!(f.to_block(), U64::from(200u64));
+    }
+
+    #[test]
+    fn set_from_block_does_not_affect_to_block() {
+        let f = RindexerEventFilter::Filter(SimpleEventFilter {
+            address: None,
+            topic_id: B256::ZERO,
+            topics: Default::default(),
+            current_block: U64::ZERO,
+            next_block: U64::from(999u64),
+        });
+        let f = f.set_from_block(U64::from(10u64));
+        assert_eq!(f.to_block(), U64::from(999u64));
+    }
+
+    #[test]
+    fn set_to_block_does_not_affect_from_block() {
+        let f = RindexerEventFilter::Filter(SimpleEventFilter {
+            address: None,
+            topic_id: B256::ZERO,
+            topics: Default::default(),
+            current_block: U64::from(7u64),
+            next_block: U64::ZERO,
+        });
+        let f = f.set_to_block(U64::from(50u64));
+        assert_eq!(f.from_block(), U64::from(7u64));
+    }
+
+    #[test]
+    fn set_from_block_preserves_address_variant() {
+        let f = RindexerEventFilter::Address(SimpleEventFilter {
+            address: None,
+            topic_id: B256::ZERO,
+            topics: Default::default(),
+            current_block: U64::ZERO,
+            next_block: U64::ZERO,
+        });
+        let f = f.set_from_block(U64::from(3u64));
+        assert!(matches!(f, RindexerEventFilter::Address(_)));
+        assert_eq!(f.from_block(), U64::from(3u64));
+    }
+
+    // ---- topic1 / topic2 / topic3 ----
+
+    #[test]
+    fn topic1_topic2_topic3_are_none_on_empty_filter() {
+        let f = RindexerEventFilter::empty_for_test();
+        // Default Topic is None (no constraint)
+        assert!(f.topic1().is_empty());
+        assert!(f.topic2().is_empty());
+        assert!(f.topic3().is_empty());
+    }
+
+    // ---- contract_addresses (Simple variant) ----
+
+    #[tokio::test]
+    async fn contract_addresses_none_when_no_address() {
+        let f = RindexerEventFilter::empty_for_test();
+        let addrs = f.contract_addresses().await;
+        assert!(addrs.is_none());
+    }
+
+    #[tokio::test]
+    async fn contract_addresses_single_address() {
+        let addr = make_address();
+        let f = RindexerEventFilter::Filter(SimpleEventFilter {
+            address: Some(ValueOrArray::Value(addr)),
+            topic_id: B256::ZERO,
+            topics: Default::default(),
+            current_block: U64::ZERO,
+            next_block: U64::ZERO,
+        });
+        let addrs = f.contract_addresses().await.expect("expected Some");
+        assert_eq!(addrs.len(), 1);
+        assert!(addrs.contains(&addr));
+    }
+
+    #[tokio::test]
+    async fn contract_addresses_multiple_addresses() {
+        let addr1 = make_address();
+        let addr2 = Address::from_str("0xCAfEBAbECAFEbAbEcAFEbabECAfebAbEcAFEBAbE").unwrap();
+        let f = RindexerEventFilter::Filter(SimpleEventFilter {
+            address: Some(ValueOrArray::Array(vec![addr1, addr2])),
+            topic_id: B256::ZERO,
+            topics: Default::default(),
+            current_block: U64::ZERO,
+            next_block: U64::ZERO,
+        });
+        let addrs = f.contract_addresses().await.expect("expected Some");
+        assert_eq!(addrs.len(), 2);
+        assert!(addrs.contains(&addr1));
+        assert!(addrs.contains(&addr2));
+    }
+
+    // ---- new_filter ----
+
+    #[test]
+    fn new_filter_creates_filter_variant_without_address() {
+        let topic_id = make_topic_id();
+        let filter_details = FilterDetails {
+            events: ValueOrArray::Value("Transfer".to_string()),
+            indexed_filters: None,
+        };
+        let f = RindexerEventFilter::new_filter(
+            &topic_id,
+            "Transfer",
+            &filter_details,
+            U64::from(1u64),
+            U64::from(100u64),
+        )
+        .unwrap();
+
+        assert!(matches!(f, RindexerEventFilter::Filter(_)));
+        assert_eq!(f.event_signature(), topic_id);
+        assert_eq!(f.from_block(), U64::from(1u64));
+        assert_eq!(f.to_block(), U64::from(100u64));
+    }
+
+    #[tokio::test]
+    async fn new_filter_has_no_contract_addresses() {
+        let topic_id = make_topic_id();
+        let filter_details = FilterDetails {
+            events: ValueOrArray::Value("Transfer".to_string()),
+            indexed_filters: None,
+        };
+        let f = RindexerEventFilter::new_filter(
+            &topic_id,
+            "Transfer",
+            &filter_details,
+            U64::ZERO,
+            U64::ZERO,
+        )
+        .unwrap();
+        assert!(f.contract_addresses().await.is_none());
+    }
+
+    // ---- new_address_filter ----
+
+    #[test]
+    fn new_address_filter_creates_filter_variant_with_address() {
+        let topic_id = make_topic_id();
+        let addr = make_address();
+        let address_details =
+            AddressDetails { address: ValueOrArray::Value(addr), indexed_filters: None };
+        let f = RindexerEventFilter::new_address_filter(
+            &topic_id,
+            "Transfer",
+            &address_details,
+            U64::from(10u64),
+            U64::from(200u64),
+        )
+        .unwrap();
+
+        assert!(matches!(f, RindexerEventFilter::Filter(_)));
+        assert_eq!(f.event_signature(), topic_id);
+        assert_eq!(f.from_block(), U64::from(10u64));
+        assert_eq!(f.to_block(), U64::from(200u64));
+    }
+
+    #[tokio::test]
+    async fn new_address_filter_has_contract_address() {
+        let topic_id = make_topic_id();
+        let addr = make_address();
+        let address_details =
+            AddressDetails { address: ValueOrArray::Value(addr), indexed_filters: None };
+        let f = RindexerEventFilter::new_address_filter(
+            &topic_id,
+            "Transfer",
+            &address_details,
+            U64::ZERO,
+            U64::ZERO,
+        )
+        .unwrap();
+        let addrs = f.contract_addresses().await.expect("expected Some");
+        assert!(addrs.contains(&addr));
+    }
 }

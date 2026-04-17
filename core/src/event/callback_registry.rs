@@ -1,5 +1,3 @@
-use std::{any::Any, sync::Arc, time::Duration};
-
 use alloy::consensus::Transaction;
 use alloy::network::{AnyRpcTransaction, TransactionResponse};
 use alloy::{
@@ -12,13 +10,20 @@ use alloy::{
 use chrono::Utc;
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::{any::Any, sync::Arc, time::Duration};
+use tokio::sync::broadcast::Sender;
 use tokio::time::sleep;
 use tracing::{debug, error, info};
 
+use crate::indexer::tables::TableRuntime;
+use crate::manifest::core::Constants;
+use crate::provider::ChainProvider;
+use crate::streams::StreamsClients;
 use crate::{
     event::contract_setup::{ContractInformation, NetworkContract, TraceInformation},
     indexer::start::ProcessedNetworkContract,
-    is_running,
+    is_running, ReorgEvent,
 };
 
 pub type Decoder = Arc<dyn Fn(Vec<TxHash>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync>;
@@ -98,7 +103,7 @@ impl EventResult {
             log: log.clone(),
             decoded_data: network_contract.decode_log(log.inner),
             tx_information: TxInformation {
-                chain_id: network_contract.cached_provider.chain.id(),
+                chain_id: network_contract.cached_provider.chain().id(),
                 network: network_contract.network.to_string(),
                 address: log_address,
                 block_hash: log.block_hash.expect("log should contain block_hash"),
@@ -124,6 +129,16 @@ pub type EventCallbackType =
 pub type TraceCallbackType =
     Arc<dyn Fn(Vec<TraceResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync>;
 
+#[derive(Clone)]
+pub struct ReorgNotification {
+    pub network: String,
+    pub fork_block: u64,
+    pub detection_block: u64,
+    pub invalidated_tx_hashes: Vec<TxHash>,
+}
+
+pub type OnReorgCallback = Arc<dyn Fn(ReorgNotification) -> BoxFuture<'static, ()> + Send + Sync>;
+
 pub struct EventCallbackRegistryInformation {
     pub id: String,
     pub indexer_name: String,
@@ -133,18 +148,17 @@ pub struct EventCallbackRegistryInformation {
     pub contract: ContractInformation,
     pub callback: EventCallbackType,
     /// Derived/custom tables for this event (for reorg cleanup).
-    pub tables: Arc<Vec<crate::indexer::tables::TableRuntime>>,
+    pub tables: Arc<Vec<TableRuntime>>,
     /// Broadcast sender for reorg events (code-gen mode).
-    pub reorg_sender: Option<tokio::sync::broadcast::Sender<crate::indexer::reorg::ReorgEvent>>,
+    pub reorg_sender: Option<Sender<ReorgEvent>>,
     /// Streams clients for reorg retraction.
-    pub streams_clients: Arc<Option<crate::streams::StreamsClients>>,
+    pub streams_clients: Arc<Option<StreamsClients>>,
     /// RPC providers by network, required for replaying table operations with view calls.
-    pub providers:
-        Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>>,
+    pub providers: Arc<HashMap<String, Arc<dyn ChainProvider>>>,
     /// Manifest constants used by table expressions.
-    pub constants: Arc<crate::manifest::core::Constants>,
+    pub constants: Arc<Constants>,
     /// Multicall address overrides by network.
-    pub multicall_addresses: Arc<std::collections::HashMap<String, Option<String>>>,
+    pub multicall_addresses: Arc<HashMap<String, Option<String>>>,
 }
 
 impl EventCallbackRegistryInformation {
@@ -186,6 +200,7 @@ impl Clone for EventCallbackRegistryInformation {
 #[derive(Clone)]
 pub struct EventCallbackRegistry {
     pub events: Vec<EventCallbackRegistryInformation>,
+    pub on_reorg: Vec<OnReorgCallback>,
 }
 
 impl Default for EventCallbackRegistry {
@@ -196,7 +211,7 @@ impl Default for EventCallbackRegistry {
 
 impl EventCallbackRegistry {
     pub fn new() -> Self {
-        EventCallbackRegistry { events: Vec::new() }
+        EventCallbackRegistry { events: Vec::new(), on_reorg: Vec::new() }
     }
 
     pub fn find_event(&self, id: &String) -> Option<&EventCallbackRegistryInformation> {
@@ -205,6 +220,16 @@ impl EventCallbackRegistry {
 
     pub fn register_event(&mut self, event: EventCallbackRegistryInformation) {
         self.events.push(event);
+    }
+
+    pub fn register_on_reorg(&mut self, callback: OnReorgCallback) {
+        self.on_reorg.push(callback);
+    }
+
+    pub async fn fire_on_reorg(&self, notification: ReorgNotification) {
+        for callback in &self.on_reorg {
+            callback(notification.clone()).await;
+        }
     }
 
     pub async fn trigger_event(&self, id: &String, data: Vec<EventResult>) -> Result<(), String> {

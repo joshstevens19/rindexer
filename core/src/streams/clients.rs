@@ -216,7 +216,8 @@ impl StreamsClients {
 
         let mut chunks = Vec::new();
         for item in data_array {
-            let item_str = serde_json::to_string(item).unwrap();
+            let item_str = serde_json::to_string(item)
+                .expect("serde_json::to_string on Value cannot fail for valid JSON data");
             let item_size = item_str.len();
 
             if current_size + item_size > MAX_CHUNK_SIZE {
@@ -259,7 +260,8 @@ impl StreamsClients {
             network: event_message.network.clone(),
         };
 
-        serde_json::to_string(&chunk_message).unwrap()
+        serde_json::to_string(&chunk_message)
+            .expect("serde_json::to_string on EventMessage cannot fail for valid JSON data")
     }
 
     fn create_chunk_message_json(
@@ -275,7 +277,8 @@ impl StreamsClients {
             network: event_message.network.clone(),
         };
 
-        serde_json::to_value(&chunk_message).unwrap()
+        serde_json::to_value(&chunk_message)
+            .expect("serde_json::to_value on EventMessage cannot fail for valid JSON data")
     }
 
     fn generate_publish_message_id(
@@ -869,12 +872,88 @@ impl StreamsClients {
 
 #[cfg(test)]
 mod tests {
-    use super::StreamsClients;
-    use crate::manifest::stream::StreamEvent;
+    use super::*;
+    use crate::manifest::stream::{
+        CloudflareQueuesStreamConfig, CloudflareQueuesStreamQueueConfig, StreamEvent,
+        WebhookStreamConfig,
+    };
+    use alloy::primitives::B256;
+    use serde_json::json;
+
+    // ---- helpers ----
 
     fn stream_event(name: &str) -> StreamEvent {
         StreamEvent { event_name: name.to_string(), conditions: None, alias: None }
     }
+
+    fn stream_event_with_alias(name: &str, alias: &str) -> StreamEvent {
+        StreamEvent {
+            event_name: name.to_string(),
+            conditions: None,
+            alias: Some(alias.to_string()),
+        }
+    }
+
+    fn empty_clients() -> StreamsClients {
+        StreamsClients {
+            sns: None,
+            webhook: None,
+            rabbitmq: None,
+            #[cfg(feature = "kafka")]
+            kafka: None,
+            redis: None,
+            cloudflare_queues: None,
+        }
+    }
+
+    fn webhook_clients(config: Vec<WebhookStreamConfig>) -> StreamsClients {
+        StreamsClients {
+            sns: None,
+            webhook: Some(WebhookStream { config, client: Arc::new(Webhook::new()) }),
+            rabbitmq: None,
+            #[cfg(feature = "kafka")]
+            kafka: None,
+            redis: None,
+            cloudflare_queues: None,
+        }
+    }
+
+    fn cloudflare_clients(
+        base_url: &str,
+        queues: Vec<CloudflareQueuesStreamQueueConfig>,
+    ) -> StreamsClients {
+        let config = CloudflareQueuesStreamConfig {
+            api_token: "test-token".to_string(),
+            account_id: "acc-123".to_string(),
+            queues,
+        };
+        StreamsClients {
+            sns: None,
+            webhook: None,
+            rabbitmq: None,
+            #[cfg(feature = "kafka")]
+            kafka: None,
+            redis: None,
+            cloudflare_queues: Some(CloudflareQueuesStream {
+                config,
+                client: Arc::new(
+                    CloudflareQueues::new("test-token".to_string(), "acc-123".to_string())
+                        .with_base_url(base_url.to_string()),
+                ),
+            }),
+        }
+    }
+
+    fn sample_event_message() -> EventMessage {
+        EventMessage {
+            event_name: "Transfer".to_string(),
+            event_data: json!([{"from": "0x1", "to": "0x2", "value": "100"}]),
+            event_signature_hash: B256::ZERO,
+            network: "ethereum".to_string(),
+        }
+    }
+
+    // ---- should_send_for_config ----
 
     #[test]
     fn should_send_for_config_requires_event_without_force_or_trace() {
@@ -894,5 +973,399 @@ mod tests {
     fn should_send_for_config_trace_event_bypasses_event_match() {
         let events = vec![stream_event("Transfer")];
         assert!(StreamsClients::should_send_for_config(&events, "NativeTransfer", true, false,));
+    }
+
+    #[test]
+    fn should_send_for_config_matching_event() {
+        let events = vec![stream_event("Transfer")];
+        assert!(StreamsClients::should_send_for_config(&events, "Transfer", false, false));
+    }
+
+    #[test]
+    fn should_send_for_config_empty_events() {
+        let events: Vec<StreamEvent> = vec![];
+        assert!(!StreamsClients::should_send_for_config(&events, "Transfer", false, false));
+    }
+
+    // ---- has_any_streams ----
+
+    #[test]
+    fn has_any_streams_false_when_empty() {
+        assert!(!empty_clients().has_any_streams());
+    }
+
+    #[test]
+    fn has_any_streams_true_with_webhook() {
+        assert!(webhook_clients(vec![]).has_any_streams());
+    }
+
+    // ---- chunk_data ----
+
+    #[test]
+    fn chunk_data_empty_input() {
+        assert!(empty_clients().chunk_data(&vec![]).is_empty());
+    }
+
+    #[test]
+    fn chunk_data_single_chunk_for_small_data() {
+        let data = vec![json!({"key": "value"})];
+        let chunks = empty_clients().chunk_data(&data);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], data);
+    }
+
+    #[test]
+    fn chunk_data_splits_when_exceeding_max_size() {
+        let large = "x".repeat(40 * 1024); // 40KB each, MAX_CHUNK_SIZE is 75KB
+        let data = vec![json!({"d": large.clone()}), json!({"d": large})];
+        let chunks = empty_clients().chunk_data(&data);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].len(), 1);
+        assert_eq!(chunks[1].len(), 1);
+    }
+
+    #[test]
+    fn chunk_data_keeps_small_items_together() {
+        let small = "x".repeat(100);
+        let data: Vec<Value> = (0..10).map(|i| json!({"i": i, "d": small})).collect();
+        let chunks = empty_clients().chunk_data(&data);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].len(), 10);
+    }
+
+    // ---- get_event_name ----
+
+    #[test]
+    fn get_event_name_returns_original_when_no_alias() {
+        let events = vec![stream_event("Transfer")];
+        let msg = sample_event_message();
+        assert_eq!(empty_clients().get_event_name(&events, &msg), "Transfer");
+    }
+
+    #[test]
+    fn get_event_name_returns_alias_when_set() {
+        let events = vec![stream_event_with_alias("Transfer", "TokenTransfer")];
+        let msg = sample_event_message();
+        assert_eq!(empty_clients().get_event_name(&events, &msg), "TokenTransfer");
+    }
+
+    #[test]
+    fn get_event_name_falls_back_when_event_not_found() {
+        let events = vec![stream_event("Approval")];
+        let msg = sample_event_message();
+        assert_eq!(empty_clients().get_event_name(&events, &msg), "Transfer");
+    }
+
+    // ---- generate_publish_message_id ----
+
+    #[test]
+    fn generate_id_without_prefix() {
+        let id = empty_clients().generate_publish_message_id("MyEvent", 0, &None);
+        assert_eq!(id, "rindexer_stream__-myevent-chunk-0");
+    }
+
+    #[test]
+    fn generate_id_with_prefix() {
+        let id =
+            empty_clients().generate_publish_message_id("MyEvent", 3, &Some("pfx".to_string()));
+        assert_eq!(id, "rindexer_stream__pfx-myevent-chunk-3");
+    }
+
+    // ---- create_chunk_message_raw ----
+
+    #[test]
+    fn create_chunk_message_raw_structure() {
+        let events = vec![stream_event("Transfer")];
+        let msg = sample_event_message();
+        let chunk = vec![json!({"from": "0x1"})];
+        let raw = empty_clients().create_chunk_message_raw(&events, &msg, &chunk);
+        let parsed: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(parsed["event_name"], "Transfer");
+        assert_eq!(parsed["network"], "ethereum");
+        assert!(parsed["event_data"].is_array());
+    }
+
+    #[test]
+    fn create_chunk_message_raw_applies_alias() {
+        let events = vec![stream_event_with_alias("Transfer", "Xfer")];
+        let msg = sample_event_message();
+        let chunk = vec![json!({"v": 1})];
+        let raw = empty_clients().create_chunk_message_raw(&events, &msg, &chunk);
+        let parsed: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(parsed["event_name"], "Xfer");
+    }
+
+    // ---- create_chunk_message_json ----
+
+    #[test]
+    fn create_chunk_message_json_structure() {
+        let events = vec![stream_event("Transfer")];
+        let msg = sample_event_message();
+        let chunk = vec![json!({"a": 1}), json!({"a": 2})];
+        let val = empty_clients().create_chunk_message_json(&events, &msg, &chunk);
+        assert_eq!(val["event_name"], "Transfer");
+        assert_eq!(val["event_data"].as_array().unwrap().len(), 2);
+        assert_eq!(val["network"], "ethereum");
+    }
+
+    // ---- filter_chunk_event_data_by_conditions ----
+
+    #[test]
+    fn filter_chunk_force_send_passes_all() {
+        let events = vec![stream_event("Transfer")];
+        let msg = sample_event_message();
+        let chunk = vec![json!({"v": 1}), json!({"v": 2})];
+        let result =
+            empty_clients().filter_chunk_event_data_by_conditions(&events, &msg, &chunk, true);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn filter_chunk_no_conditions_passes_all() {
+        let events = vec![stream_event("Transfer")];
+        let msg = sample_event_message();
+        let chunk = vec![json!({"v": 1}), json!({"v": 2})];
+        let result =
+            empty_clients().filter_chunk_event_data_by_conditions(&events, &msg, &chunk, false);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn filter_chunk_with_conditions_filters() {
+        let mut m = serde_json::Map::new();
+        m.insert("value".to_string(), json!(">=100"));
+        let events = vec![StreamEvent {
+            event_name: "Transfer".to_string(),
+            conditions: Some(vec![m]),
+            alias: None,
+        }];
+        let msg = sample_event_message();
+        let chunk = vec![json!({"value": "200"}), json!({"value": "50"}), json!({"value": "100"})];
+        let result =
+            empty_clients().filter_chunk_event_data_by_conditions(&events, &msg, &chunk, false);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn filter_chunk_native_transfer_without_config_passes_all() {
+        let events = vec![stream_event("Transfer")]; // NativeTransfer not defined
+        let msg = EventMessage {
+            event_name: EVENT_NAME.to_string(),
+            event_data: json!([]),
+            event_signature_hash: B256::ZERO,
+            network: "ethereum".to_string(),
+        };
+        let chunk = vec![json!({"v": 1})];
+        let result =
+            empty_clients().filter_chunk_event_data_by_conditions(&events, &msg, &chunk, false);
+        assert_eq!(result.len(), 1);
+    }
+
+    // ---- stream (async) ----
+
+    #[tokio::test]
+    async fn stream_returns_zero_with_no_streams() {
+        let msg = sample_event_message();
+        let result = empty_clients().stream("id".to_string(), &msg, false, false).await;
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn stream_skips_webhook_on_network_mismatch() {
+        let config = WebhookStreamConfig {
+            endpoint: "http://127.0.0.1:1/hook".to_string(),
+            shared_secret: "s".to_string(),
+            networks: vec!["polygon".to_string()],
+            events: vec![stream_event("Transfer")],
+            delivery: None,
+        };
+        let msg = sample_event_message(); // network: ethereum
+        let result =
+            webhook_clients(vec![config]).stream("id".to_string(), &msg, false, false).await;
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn stream_skips_webhook_on_event_mismatch() {
+        let config = WebhookStreamConfig {
+            endpoint: "http://127.0.0.1:1/hook".to_string(),
+            shared_secret: "s".to_string(),
+            networks: vec!["ethereum".to_string()],
+            events: vec![stream_event("Approval")],
+            delivery: None,
+        };
+        let msg = sample_event_message(); // event: Transfer
+        let result =
+            webhook_clients(vec![config]).stream("id".to_string(), &msg, false, false).await;
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn stream_publishes_to_webhook() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/hook")
+            .match_header("content-type", "application/json")
+            .with_status(200)
+            .create_async()
+            .await;
+
+        let config = WebhookStreamConfig {
+            endpoint: format!("{}/hook", server.url()),
+            shared_secret: "secret".to_string(),
+            networks: vec!["ethereum".to_string()],
+            events: vec![stream_event("Transfer")],
+            delivery: None,
+        };
+
+        let msg = sample_event_message();
+        let result =
+            webhook_clients(vec![config]).stream("id".to_string(), &msg, false, false).await;
+
+        assert_eq!(result.unwrap(), 1);
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn stream_webhook_propagates_error() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server.mock("POST", "/hook").with_status(500).create_async().await;
+
+        let config = WebhookStreamConfig {
+            endpoint: format!("{}/hook", server.url()),
+            shared_secret: "s".to_string(),
+            networks: vec!["ethereum".to_string()],
+            events: vec![stream_event("Transfer")],
+            delivery: None,
+        };
+
+        let msg = sample_event_message();
+        let result =
+            webhook_clients(vec![config]).stream("id".to_string(), &msg, false, false).await;
+
+        assert!(result.is_err());
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn stream_trace_event_bypasses_event_match() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server.mock("POST", "/hook").with_status(200).create_async().await;
+
+        let config = WebhookStreamConfig {
+            endpoint: format!("{}/hook", server.url()),
+            shared_secret: "s".to_string(),
+            networks: vec!["ethereum".to_string()],
+            events: vec![stream_event("Transfer")], // does not include NativeTransfer
+            delivery: None,
+        };
+
+        let msg = EventMessage {
+            event_name: "NativeTransfer".to_string(),
+            event_data: json!([{"from": "0x1", "to": "0x2", "value": "1000"}]),
+            event_signature_hash: B256::ZERO,
+            network: "ethereum".to_string(),
+        };
+
+        let result = webhook_clients(vec![config])
+            .stream("id".to_string(), &msg, false, true) // is_trace_event = true
+            .await;
+
+        assert!(result.is_ok());
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn stream_multiple_webhooks() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server.mock("POST", "/hook").with_status(200).expect(2).create_async().await;
+
+        let config = WebhookStreamConfig {
+            endpoint: format!("{}/hook", server.url()),
+            shared_secret: "s".to_string(),
+            networks: vec!["ethereum".to_string()],
+            events: vec![stream_event("Transfer")],
+            delivery: None,
+        };
+
+        let msg = sample_event_message();
+        let result = webhook_clients(vec![config.clone(), config])
+            .stream("id".to_string(), &msg, false, false)
+            .await;
+
+        assert_eq!(result.unwrap(), 2);
+        mock.assert_async().await;
+    }
+
+    // ---- stream_reorg ----
+
+    #[tokio::test]
+    async fn stream_reorg_returns_zero_without_streams() {
+        let result = empty_clients().stream_reorg("ethereum", 100, 2, &[]).await;
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn stream_reorg_publishes_to_webhook() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server.mock("POST", "/hook").with_status(200).create_async().await;
+
+        let config = WebhookStreamConfig {
+            endpoint: format!("{}/hook", server.url()),
+            shared_secret: "s".to_string(),
+            networks: vec!["ethereum".to_string()],
+            events: vec![stream_event("Transfer")], // doesn't matter, force_send
+            delivery: None,
+        };
+
+        let result =
+            webhook_clients(vec![config]).stream_reorg("ethereum", 100, 2, &[B256::ZERO]).await;
+
+        assert!(result.is_ok());
+        mock.assert_async().await;
+    }
+
+    // ---- cloudflare_queues end-to-end ----
+
+    #[tokio::test]
+    async fn stream_publishes_to_cloudflare_queues() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/client/v4/accounts/acc-123/queues/q-456/messages")
+            .with_status(200)
+            .create_async()
+            .await;
+
+        let queue_config = CloudflareQueuesStreamQueueConfig {
+            queue_id: "q-456".to_string(),
+            networks: vec!["ethereum".to_string()],
+            events: vec![stream_event("Transfer")],
+            delivery: None,
+        };
+
+        let msg = sample_event_message();
+        let result = cloudflare_clients(&server.url(), vec![queue_config])
+            .stream("id".to_string(), &msg, false, false)
+            .await;
+
+        assert_eq!(result.unwrap(), 1);
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn stream_skips_cloudflare_on_network_mismatch() {
+        let queue_config = CloudflareQueuesStreamQueueConfig {
+            queue_id: "q-456".to_string(),
+            networks: vec!["polygon".to_string()],
+            events: vec![stream_event("Transfer")],
+            delivery: None,
+        };
+
+        let msg = sample_event_message(); // network: ethereum
+        let result = cloudflare_clients("http://127.0.0.1:1", vec![queue_config])
+            .stream("id".to_string(), &msg, false, false)
+            .await;
+
+        assert_eq!(result.unwrap(), 0);
     }
 }

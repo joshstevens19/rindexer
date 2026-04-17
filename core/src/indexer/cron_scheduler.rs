@@ -26,7 +26,7 @@ use crate::indexer::last_synced::{
 use crate::is_running;
 use crate::manifest::contract::{parse_interval, ColumnType, Table, TableCronMapping};
 use crate::manifest::core::Manifest;
-use crate::provider::JsonRpcCachedProvider;
+use crate::provider::ChainProvider;
 use alloy::primitives::U64;
 
 use super::tables::{TableRowData, TxMetadata};
@@ -242,7 +242,7 @@ pub struct CronScheduler {
     pub tasks: Vec<CronTask>,
     pub postgres: Option<Arc<PostgresClient>>,
     pub clickhouse: Option<Arc<ClickhouseClient>>,
-    pub providers: Arc<HashMap<String, Arc<JsonRpcCachedProvider>>>,
+    pub providers: Arc<HashMap<String, Arc<dyn ChainProvider>>>,
     /// Indexer name for factory address lookup
     pub indexer_name: String,
 }
@@ -256,7 +256,7 @@ impl CronScheduler {
         manifest: &Manifest,
         postgres: Option<Arc<PostgresClient>>,
         clickhouse: Option<Arc<ClickhouseClient>>,
-        providers: Arc<HashMap<String, Arc<JsonRpcCachedProvider>>>,
+        providers: Arc<HashMap<String, Arc<dyn ChainProvider>>>,
     ) -> Self {
         let mut tasks = Vec::new();
 
@@ -590,7 +590,7 @@ async fn run_cron_task(
     task: CronTask,
     postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickhouseClient>>,
-    providers: Arc<HashMap<String, Arc<JsonRpcCachedProvider>>>,
+    providers: Arc<HashMap<String, Arc<dyn ChainProvider>>>,
     context: CronContext,
 ) {
     let is_factory = task.factory_config.is_some();
@@ -663,7 +663,7 @@ async fn run_historical_sync(
     task: &CronTask,
     postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickhouseClient>>,
-    providers: Arc<HashMap<String, Arc<JsonRpcCachedProvider>>>,
+    providers: Arc<HashMap<String, Arc<dyn ChainProvider>>>,
     context: &CronContext,
 ) -> bool {
     let start_block = task.cron_entry.start_block.unwrap().to::<u64>();
@@ -855,7 +855,7 @@ async fn execute_cron_operations_batch(
     task: &CronTask,
     postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickhouseClient>>,
-    providers: Arc<HashMap<String, Arc<JsonRpcCachedProvider>>>,
+    providers: Arc<HashMap<String, Arc<dyn ChainProvider>>>,
     blocks: &[u64],
     addresses_with_blocks: &HashMap<Address, u64>,
     rate_limiter: Arc<AdaptiveRateLimiter>,
@@ -1026,7 +1026,7 @@ async fn execute_cron_operations_batch(
         "RPC calls completed: {}/{} successful ({}%)",
         successful_calls,
         total_calls,
-        if total_calls > 0 { (successful_calls * 100) / total_calls } else { 0 }
+        (successful_calls * 100).checked_div(total_calls).unwrap_or(0)
     );
     let mut all_rows: Vec<TableRowData> =
         Vec::with_capacity(blocks.len() * addresses_with_blocks.len());
@@ -1226,7 +1226,7 @@ async fn run_live_cron_loop(
     task: &CronTask,
     postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickhouseClient>>,
-    providers: Arc<HashMap<String, Arc<JsonRpcCachedProvider>>>,
+    providers: Arc<HashMap<String, Arc<dyn ChainProvider>>>,
     context: &CronContext,
 ) {
     loop {
@@ -1378,7 +1378,7 @@ async fn execute_cron_operations(
     task: &CronTask,
     postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickhouseClient>>,
-    providers: Arc<HashMap<String, Arc<JsonRpcCachedProvider>>>,
+    providers: Arc<HashMap<String, Arc<dyn ChainProvider>>>,
     addresses: &[Address],
 ) -> Result<(), String> {
     let provider = providers.get(&task.network);
@@ -1576,7 +1576,7 @@ async fn extract_cron_value(
     tx_metadata: &TxMetadata,
     contract_address: &Address,
     column_type: &ColumnType,
-    provider: Option<&JsonRpcCachedProvider>,
+    provider: Option<&dyn ChainProvider>,
     network: &str,
 ) -> Option<EthereumSqlTypeWrapper> {
     // Handle $call(...) - view function calls

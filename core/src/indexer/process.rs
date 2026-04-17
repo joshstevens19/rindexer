@@ -2,8 +2,6 @@ use alloy::primitives::{B256, U64};
 
 use futures::future::join_all;
 use futures::StreamExt;
-use lru::LruCache;
-use std::num::NonZeroUsize;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
 use tokio::{
@@ -11,14 +9,14 @@ use tokio::{
     task::{JoinError, JoinHandle},
     time::Instant,
 };
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use crate::helpers::is_relevant_block;
 use crate::indexer::reorg::{
-    find_fork_point, handle_reorg_recovery, reorg_safe_distance_for_chain,
+    detect_and_handle_reorg, reorg_safe_distance_for_chain, ReorgContext, ReorgCoordinator,
 };
 use crate::metrics::indexing as metrics;
-use crate::provider::JsonRpcCachedProvider;
+use crate::provider::ChainProvider;
 use crate::{
     event::{
         callback_registry::EventResult, config::EventProcessingConfig, BuildRindexerFilterError,
@@ -26,7 +24,7 @@ use crate::{
     },
     indexer::{
         dependency::{ContractEventsDependenciesConfig, EventDependencies},
-        fetch_logs::{fetch_logs_stream, BlockMeta, FetchLogsResult, ReorgInfo},
+        fetch_logs::{fetch_logs_stream, FetchLogsResult},
         last_synced::update_progress_and_last_synced_task,
         progress::IndexingEventProgressStatus,
         task_tracker::{indexing_event_processed, indexing_event_processing},
@@ -52,10 +50,11 @@ pub enum ProcessEventError {
 /// This function returns immediately without waiting for the indexing to complete.
 pub async fn process_non_blocking_event(
     config: EventProcessingConfig,
+    reorg_coordinator: Option<ReorgCoordinator>,
 ) -> Result<(), ProcessEventError> {
     debug!("{} - Processing non blocking event", config.info_log_name());
 
-    process_event_logs(Arc::new(config), false, false).await?;
+    process_event_logs(Arc::new(config), false, false, reorg_coordinator).await?;
 
     Ok(())
 }
@@ -67,7 +66,9 @@ pub async fn process_blocking_event_historical_data(
 ) -> Result<(), Box<ProviderError>> {
     debug!("{} - Processing blocking event historical data", config.info_log_name());
 
-    process_event_logs(config, true, true).await?;
+    // Historical data processing does not use reorg coordinator — reorgs are only
+    // handled during live indexing.
+    process_event_logs(config, true, true, None).await?;
 
     Ok(())
 }
@@ -79,6 +80,7 @@ async fn process_event_logs(
     config: Arc<EventProcessingConfig>,
     force_no_live_indexing: bool,
     block_until_indexed: bool,
+    reorg_coordinator: Option<ReorgCoordinator>,
 ) -> Result<(), Box<ProviderError>> {
     // The concurrency with which we can call the trigger. If the indexer is running in-order
     // we can only call one at a time, otherwise we can call multiple in parallel based on what is
@@ -94,7 +96,8 @@ async fn process_event_logs(
 
     let callback_permits = Arc::new(Semaphore::new(callback_concurrency));
 
-    let mut logs_stream = fetch_logs_stream(Arc::clone(&config), force_no_live_indexing);
+    let mut logs_stream =
+        fetch_logs_stream(Arc::clone(&config), force_no_live_indexing, reorg_coordinator);
     let mut tasks = Vec::new();
 
     while let Some(result) = logs_stream.next().await {
@@ -139,6 +142,7 @@ pub async fn process_contracts_events_with_dependencies(
             process_contract_events_with_dependencies(
                 contract_events.event_dependencies,
                 Arc::new(contract_events.events_config),
+                contract_events.reorg_coordinators,
             )
             .await
         });
@@ -184,6 +188,7 @@ pub struct OrderedLiveIndexingDetails {
 async fn process_contract_events_with_dependencies(
     dependencies: EventDependencies,
     events_processing_config: Arc<Vec<Arc<EventProcessingConfig>>>,
+    mut reorg_coordinators: HashMap<String, ReorgCoordinator>,
 ) -> Result<(), ProcessContractEventsWithDependenciesError> {
     let mut stack = vec![dependencies.tree];
 
@@ -225,6 +230,7 @@ async fn process_contract_events_with_dependencies(
                                     network: network_contract.network.clone(),
                                     cached_provider: network_contract.cached_provider.clone(),
                                     events: Vec::new(),
+                                    reorg_coordinator: None,
                                 });
 
                             let rindexer_event_filter =
@@ -266,14 +272,21 @@ async fn process_contract_events_with_dependencies(
         }
     }
 
-    let live_indexing_events = live_indexing_events.lock().await;
+    let mut live_indexing_events = live_indexing_events.lock().await;
     if live_indexing_events.is_empty() {
         return Ok(());
     }
 
+    // Inject per-network reorg coordinators into the live indexing configs
+    for (network, coordinator) in reorg_coordinators.drain() {
+        if let Some(config) = live_indexing_events.get_mut(&network) {
+            config.reorg_coordinator = Some(coordinator);
+        }
+    }
+
     let live_indexing_tasks = live_indexing_events
-        .values()
-        .map(|config| tokio::spawn(live_indexing_for_contract_event_dependencies(config.clone())))
+        .drain()
+        .map(|(_, config)| tokio::spawn(live_indexing_for_contract_event_dependencies(config)))
         .collect::<Vec<_>>();
 
     futures::future::try_join_all(live_indexing_tasks).await?;
@@ -281,18 +294,23 @@ async fn process_contract_events_with_dependencies(
     Ok(())
 }
 
-#[derive(Clone)]
 pub struct EventDependenciesIndexingConfig {
     pub network: String,
-    pub cached_provider: Arc<JsonRpcCachedProvider>,
+    pub cached_provider: Arc<dyn ChainProvider>,
     pub events: Vec<(Arc<EventProcessingConfig>, RindexerEventFilter)>,
+    pub reorg_coordinator: Option<ReorgCoordinator>,
 }
 
 // TODO - this is a similar to live_indexing_stream but has to be a bit different we should merge
 // code
 #[allow(clippy::type_complexity)]
 async fn live_indexing_for_contract_event_dependencies(
-    EventDependenciesIndexingConfig { cached_provider, events, network }: EventDependenciesIndexingConfig,
+    EventDependenciesIndexingConfig {
+        cached_provider,
+        events,
+        network,
+        reorg_coordinator,
+    }: EventDependenciesIndexingConfig,
 ) {
     debug!(
         "Live indexing events on {} in order: {}",
@@ -334,8 +352,15 @@ async fn live_indexing_for_contract_event_dependencies(
     // Use the first event's cancel_token -- all events in this generation share the same token.
     let generation_cancel = events.first().map(|(config, _)| config.cancel_token().clone());
 
-    // Block metadata cache for reorg detection via parent hash chain validation.
-    let mut block_cache: LruCache<u64, BlockMeta> = LruCache::new(NonZeroUsize::new(1024).unwrap());
+    // Reorg coordinator is mutated in-place during the loop
+    let mut reorg_coordinator = reorg_coordinator;
+
+    let (pg_client, ch_client, streams_clients, event_registry) = events
+        .first()
+        .map(|(config, _)| {
+            (config.postgres(), config.clickhouse(), config.streams_clients(), config.registry())
+        })
+        .expect("live_indexing_for_contract_event_dependencies called with no events");
 
     loop {
         if !is_running() {
@@ -369,64 +394,50 @@ async fn live_indexing_for_contract_event_dependencies(
                 continue;
             }
         };
-        let latest_block_number = U64::from(latest_block.header.number);
 
-        // Reorg detection #1: tip hash changed (same block, different hash)
-        let tip_reorged = block_cache
-            .peek(&latest_block.header.number)
-            .map(|cached| cached.hash != latest_block.header.hash)
-            .unwrap_or(false);
-
-        block_cache.put(
-            latest_block.header.number,
-            BlockMeta {
-                hash: latest_block.header.hash,
-                parent_hash: latest_block.header.parent_hash,
-                timestamp: latest_block.header.timestamp,
-            },
-        );
-
-        // Reorg detection #2: parent hash chain discontinuity
-        let parent_mismatch = if !tip_reorged && latest_block.header.number > 0 {
-            block_cache
-                .peek(&(latest_block.header.number - 1))
-                .map(|cached| cached.hash != latest_block.header.parent_hash)
-                .unwrap_or(false)
-        } else {
-            false
-        };
-
-        if tip_reorged || parent_mismatch {
-            let reason = if tip_reorged { "tip hash changed" } else { "parent hash mismatch" };
-            let fork_block =
-                find_fork_point(&block_cache, &cached_provider, latest_block.header.number).await;
-            let depth = latest_block.header.number.saturating_sub(fork_block);
-            metrics::record_reorg(&network, depth);
-            warn!(
-                "Dependency indexer on {} - REORG ({}): depth={}, fork_block={}",
-                network, reason, depth, fork_block
-            );
-
-            // Invalidate cached hashes for reorged blocks
-            for b in fork_block..=latest_block.header.number {
-                block_cache.pop(&b);
+        // Reorg detection: validate parent hash via coordinator
+        if let Some(ref mut coordinator) = reorg_coordinator {
+            let log_prefix = format!("{} - {}", network, IndexingEventProgressStatus::live_log());
+            let reorg_ctx = ReorgContext {
+                postgres: pg_client.as_deref(),
+                clickhouse: ch_client.as_ref(),
+                registry: Some(&event_registry),
+                streams_clients: streams_clients.as_ref().as_ref(),
+            };
+            match detect_and_handle_reorg(
+                coordinator,
+                latest_block.header.number,
+                latest_block.header.hash,
+                latest_block.header.parent_hash,
+                &log_prefix,
+                &reorg_ctx,
+            )
+            .await
+            {
+                Ok(Some(fork_point)) => {
+                    // Rewind all event filters to re-fetch logs for the corrected blocks
+                    for (config, _) in events.iter() {
+                        let mut details = ordering_live_indexing_details_map
+                            .get(&config.processor_id())
+                            .expect("Failed to get ordering_live_indexing_details_map")
+                            .lock()
+                            .await;
+                        details.filter =
+                            details.filter.clone().set_from_block(U64::from(fork_point));
+                        details.last_seen_block_number = U64::from(fork_point.saturating_sub(1));
+                    }
+                    continue;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    error!("{} - Reorg handling failed, pausing before retry: {:?}", network, e);
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    continue;
+                }
             }
-
-            // Recovery: delete reorged events and rewind checkpoints for all events
-            let reorg_info =
-                ReorgInfo { fork_block: U64::from(fork_block), depth, affected_tx_hashes: vec![] };
-            for (config, _) in events.iter() {
-                let _affected_hashes = handle_reorg_recovery(config, &reorg_info).await;
-                let mut details = ordering_live_indexing_details_map
-                    .get(&config.processor_id())
-                    .expect("ordering_live_indexing_details_map")
-                    .lock()
-                    .await;
-                details.filter = details.filter.clone().set_from_block(U64::from(fork_block));
-                details.last_seen_block_number = U64::from(fork_block.saturating_sub(1));
-            }
-            continue;
         }
+
+        let latest_block_number = U64::from(latest_block.header.number);
 
         for (config, _) in events.iter() {
             let mut ordering_live_indexing_details = ordering_live_indexing_details_map
@@ -475,11 +486,11 @@ async fn live_indexing_for_contract_event_dependencies(
             if from_block > safe_block_number {
                 if reorg_safe_distance.is_zero() {
                     let block_distance = from_block - latest_block_number;
-                    let is_outside_reorg_range =
-                        block_distance > reorg_safe_distance_for_chain(cached_provider.chain.id());
+                    let is_outside_reorg_range = block_distance
+                        > reorg_safe_distance_for_chain(cached_provider.chain().id());
 
                     // it should never get under normal conditions outside the reorg range,
-                    // therefore, we log an error as means RCP state is not in sync with the blockchain
+                    // therefore, we log an error as means RPC state is not in sync with the blockchain
                     if is_outside_reorg_range {
                         error!(
                             "{} - {} - RPC has gone back on latest block: rpc returned {}, last seen: {}",
@@ -584,50 +595,8 @@ async fn live_indexing_for_contract_event_dependencies(
                         to_block
                     );
 
-                    // Reorg detection: check for removed logs from RPC
-                    if logs.iter().any(|log| log.removed) {
-                        let min_removed_block = logs
-                            .iter()
-                            .filter(|l| l.removed)
-                            .filter_map(|l| l.block_number)
-                            .min()
-                            .unwrap_or(from_block.to::<u64>());
-                        let depth = from_block.to::<u64>().saturating_sub(min_removed_block);
-                        metrics::record_reorg(&network, depth);
-                        warn!(
-                            "{} - REORG (removed logs): fork_block={}, depth={}",
-                            config.info_log_name(),
-                            min_removed_block,
-                            depth
-                        );
-
-                        let affected_tx_hashes: Vec<B256> = logs
-                            .iter()
-                            .filter(|l| l.removed)
-                            .filter_map(|l| l.transaction_hash)
-                            .collect::<std::collections::HashSet<_>>()
-                            .into_iter()
-                            .collect();
-                        let reorg_info = ReorgInfo {
-                            fork_block: U64::from(min_removed_block),
-                            depth,
-                            affected_tx_hashes,
-                        };
-                        let _affected_hashes = handle_reorg_recovery(config, &reorg_info).await;
-
-                        // Rewind cursor for this event
-                        ordering_live_indexing_details.filter = ordering_live_indexing_details
-                            .filter
-                            .set_from_block(U64::from(min_removed_block));
-                        ordering_live_indexing_details.last_seen_block_number =
-                            U64::from(min_removed_block.saturating_sub(1));
-                        *ordering_live_indexing_details_map
-                            .get(&config.processor_id())
-                            .expect("ordering_live_indexing_details_map")
-                            .lock()
-                            .await = ordering_live_indexing_details;
-                        continue;
-                    }
+                    // Filter out removed logs — the coordinator handles reorg detection.
+                    let logs: Vec<_> = logs.into_iter().filter(|l| !l.removed).collect();
 
                     let logs_empty = logs.is_empty();
                     // clone here over the full logs way less overhead
@@ -762,9 +731,9 @@ async fn handle_logs_result(
 ) -> Result<JoinHandle<()>, Box<dyn std::error::Error + Send>> {
     match result {
         Ok(result) => {
-            // Handle reorg recovery before processing logs
-            if let Some(reorg) = &result.reorg {
-                let _affected_hashes = handle_reorg_recovery(&config, reorg).await;
+            // Reorg signal from reth ExEx — the coordinator handles rollback,
+            // so we just skip processing these empty results.
+            if result.reorg.is_some() {
                 return Ok(tokio::spawn(async {}));
             }
 

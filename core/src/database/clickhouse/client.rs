@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::{env, time::Instant};
 
 use clickhouse::{Client, Row};
@@ -44,6 +45,9 @@ pub enum ClickhouseConnectionError {
 pub enum ClickhouseError {
     #[error("ClickhouseError: {0}")]
     ClickhouseError(#[from] clickhouse::error::Error),
+
+    #[error("{0}")]
+    Custom(String),
 }
 
 pub struct ClickhouseClient {
@@ -206,6 +210,105 @@ impl ClickhouseClient {
         bulk_data: &[Vec<EthereumSqlTypeWrapper>],
     ) -> Result<u64, ClickhouseError> {
         self.bulk_insert_via_query(table_name, column_names, bulk_data).await
+    }
+
+    pub async fn delete_by_block_range(
+        &self,
+        table_name: &str,
+        network: &str,
+        fork_point: u64,
+        detection_point: u64,
+    ) -> Result<(), ClickhouseError> {
+        let sql = format!(
+            "ALTER TABLE {table_name} DELETE WHERE block_number >= {fork_point} AND block_number <= {detection_point} AND network = '{network}' SETTINGS mutations_sync = 1"
+        );
+        self.execute(&sql).await
+    }
+
+    /// Reorg rollback for ClickHouse. Operations are ordered for crash safety:
+    /// 1. Rewind checkpoints first (most important — ensures re-indexing on restart)
+    /// 2. Count and collect affected tx hashes
+    /// 3. Delete stale events (synchronous via mutations_sync = 1)
+    /// 4. Update reorg_block_hashes with corrected blocks
+    ///
+    /// All DELETE operations use `mutations_sync = 1` for synchronous execution.
+    /// Each step is idempotent, so a crash mid-sequence can be retried from the start.
+    pub async fn reorg_rollback(
+        &self,
+        event_tables: &[(String, String)], // (database, table_name)
+        network: &str,
+        fork_point: u64,
+        detection_point: u64,
+        checkpoint_tables: &[String],
+        corrected_blocks: &[(u64, &str, &str)],
+    ) -> Result<(u64, Vec<String>), ClickhouseError> {
+        #[derive(Row, Deserialize)]
+        struct CountAndHashes {
+            c: u64,
+            hashes: Vec<String>,
+        }
+
+        // Step 1: Rewind checkpoint tables first — on restart, the indexer will
+        // re-index from the rewound block regardless of whether later steps completed.
+        let rewind_block = fork_point.saturating_sub(1);
+        for table in checkpoint_tables {
+            let delete_sql = format!(
+                "ALTER TABLE rindexer_internal.{} DELETE WHERE network = '{}' SETTINGS mutations_sync = 1",
+                table, network
+            );
+            self.execute(&delete_sql).await?;
+
+            let insert_sql = format!(
+                "INSERT INTO rindexer_internal.{} (network, last_synced_block) VALUES ('{}', {})",
+                table, network, rewind_block
+            );
+            self.execute(&insert_sql).await?;
+        }
+
+        // Step 2: Count affected rows and collect tx hashes before deletion.
+        let predicate = format!(
+            "block_number >= {} AND block_number <= {} AND network = '{}'",
+            fork_point, detection_point, network
+        );
+
+        let mut total_deleted: u64 = 0;
+        let mut all_tx_hashes: HashSet<String> = HashSet::new();
+
+        for (database, table_name) in event_tables {
+            let fq_name = format!("{}.{}", database, table_name);
+            let sql = format!(
+                "SELECT count() as c, groupArray(DISTINCT tx_hash) as hashes FROM {} WHERE {}",
+                fq_name, predicate
+            );
+            let row: CountAndHashes = self.conn.query(&sql).fetch_one().await?;
+            total_deleted += row.c;
+            all_tx_hashes.extend(row.hashes);
+        }
+
+        // Step 3: Delete stale events (synchronous — mutations_sync = 1 in delete_by_block_range).
+        for (database, table_name) in event_tables {
+            let fq_name = format!("{}.{}", database, table_name);
+            self.delete_by_block_range(&fq_name, network, fork_point, detection_point).await?;
+        }
+
+        // Step 4: Update reorg_block_hashes — delete stale, insert corrected.
+        self.delete_by_block_range(
+            "rindexer_internal.reorg_block_hashes",
+            network,
+            fork_point,
+            detection_point,
+        )
+        .await?;
+
+        for (block_number, block_hash, parent_hash) in corrected_blocks {
+            let sql = format!(
+                "INSERT INTO rindexer_internal.reorg_block_hashes (network, block_number, block_hash, parent_hash) VALUES ('{}', {}, '{}', '{}')",
+                network, block_number, block_hash, parent_hash
+            );
+            self.execute(&sql).await?;
+        }
+
+        Ok((total_deleted, all_tx_hashes.into_iter().collect()))
     }
 }
 
