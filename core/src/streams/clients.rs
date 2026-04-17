@@ -193,6 +193,23 @@ impl StreamsClients {
         }
     }
 
+    /// Redirects the Cloudflare Queues client to a different base URL. Intended
+    /// solely for integration tests that mock the Cloudflare REST API with
+    /// `mockito` — prefer configuring the real `api_token`/`account_id` in
+    /// production code.
+    #[doc(hidden)]
+    pub fn set_cloudflare_base_url_for_test(&mut self, base_url: &str) {
+        if let Some(cf) = self.cloudflare_queues.as_mut() {
+            cf.client = Arc::new(
+                CloudflareQueues::new(
+                    cf.config.api_token.clone(),
+                    cf.config.account_id.clone(),
+                )
+                .with_base_url(base_url.to_string()),
+            );
+        }
+    }
+
     fn has_any_streams(&self) -> bool {
         self.sns.is_some()
             || self.webhook.is_some()
@@ -834,6 +851,36 @@ impl StreamsClients {
     }
 
     /// Publishes a `__rindexer_reorg` retraction event to all configured streams.
+    ///
+    /// Routing is delegated to the internal `stream_with_mode` path with
+    /// `force_send_network_wide = true`, which bypasses the per-stream
+    /// `events` filter: every destination whose `networks` list contains the
+    /// affected `network` receives the reorg payload regardless of whether
+    /// `__rindexer_reorg` appears in its configured events. Per-stream-type
+    /// routing behaviour:
+    ///
+    /// - **Webhook**: POST to every endpoint whose `networks` matches.
+    ///   Body is the JSON `EventMessage` with `event_name = "__rindexer_reorg"`.
+    /// - **SNS**: publishes to every topic whose `networks` matches. The
+    ///   payload is the JSON-encoded `EventMessage` string; `event_name` is
+    ///   carried inside the payload (no SNS message attributes are set).
+    /// - **Kafka** *(feature-gated)*: publishes to every configured topic
+    ///   whose `networks` matches. The record `key` is the per-topic
+    ///   `key` from config (not derived from `event_name`); the
+    ///   `x-rindexer-id` header carries the generated message id.
+    /// - **RabbitMQ**: publishes to the configured `exchange` with the
+    ///   configured `routing_key`. Fanout exchanges ignore the routing
+    ///   key. Topic and direct exchanges require a non-`None` routing key
+    ///   at manifest-validation time — this is enforced by
+    ///   [`crate::manifest::stream::RabbitMQStreamConfig::validate`].
+    /// - **Redis**: `XADD`s to every configured stream whose `networks`
+    ///   matches, under the `payload` field.
+    /// - **CloudflareQueues**: enqueues (via the Cloudflare REST API) to
+    ///   every queue whose `networks` matches.
+    ///
+    /// All types reach publish through the shared `force_send_network_wide`
+    /// path — no destination is silently dropped because its `events` list
+    /// omits `__rindexer_reorg`.
     pub async fn stream_reorg(
         &self,
         network: &str,

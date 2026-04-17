@@ -15,7 +15,7 @@ include = ["src/**", "resources/**", "Cargo.toml", "build.rs"]
 tempfile = "3.23"
 mockito = "1.7.0"
 testcontainers = "0.27"
-testcontainers-modules = { version = "0.15", features = ["postgres", "clickhouse"] }
+testcontainers-modules = { version = "0.15", features = ["postgres", "clickhouse", "redis", "rabbitmq", "kafka"] }
 tokio-postgres = { version = "0.7", features = ["with-serde_json-1"] }
 rust_decimal = { version = "1.39.0", features = ["db-tokio-postgres"] }
 tokio = { version = "1", features = ["test-util"] }
