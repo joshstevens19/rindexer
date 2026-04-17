@@ -11,7 +11,7 @@ use tracing::{debug, warn};
 
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::postgres::client::PostgresClient;
-use crate::event::callback_registry::EventCallbackRegistry;
+use crate::event::callback_registry::{EventCallbackRegistry, TraceCallbackRegistry};
 use crate::indexer::fetch_logs::ReorgInfo;
 use crate::metrics::indexing as metrics;
 use crate::notifications::ChainStateNotification;
@@ -82,6 +82,7 @@ pub struct ReorgContext<'a> {
     pub postgres: Option<&'a PostgresClient>,
     pub clickhouse: Option<&'a Arc<ClickhouseClient>>,
     pub registry: Option<&'a EventCallbackRegistry>,
+    pub trace_registry: Option<&'a TraceCallbackRegistry>,
     pub streams_clients: Option<&'a StreamsClients>,
 }
 

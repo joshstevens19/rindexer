@@ -213,7 +213,8 @@ pub async fn setup_no_code(
                 &network_providers,
             )
             .await?;
-            let trace_registry = TraceCallbackRegistry { events: trace_events };
+            let trace_registry =
+                TraceCallbackRegistry { events: trace_events, on_reorg: vec![] };
 
             if manifest.has_enabled_native_transfers() {
                 info!(

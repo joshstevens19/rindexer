@@ -361,14 +361,19 @@ impl ReorgCoordinator {
         let affected_tx_hashes: Vec<B256> =
             result.affected_tx_hashes.iter().filter_map(|h| B256::from_str(h).ok()).collect();
 
-        if let Some(registry) = ctx.registry {
+        if ctx.registry.is_some() || ctx.trace_registry.is_some() {
             let notification = ReorgNotification {
                 network: reorg_task.network.clone(),
                 fork_block: reorg_task.fork_point,
                 detection_block: reorg_task.detection_point,
                 invalidated_tx_hashes: affected_tx_hashes.clone(),
             };
-            registry.fire_on_reorg(notification).await;
+            if let Some(registry) = ctx.registry {
+                registry.fire_on_reorg(notification.clone()).await;
+            }
+            if let Some(trace_registry) = ctx.trace_registry {
+                trace_registry.fire_on_reorg(notification).await;
+            }
         }
 
         // Publish reorg retraction through instant-mode streams (fire-and-forget)
@@ -600,6 +605,7 @@ mod tests {
             postgres: None,
             clickhouse: None,
             registry: Some(&registry),
+            trace_registry: None,
             streams_clients: None,
         };
 
@@ -611,6 +617,80 @@ mod tests {
         assert_eq!(notification.fork_block, 11);
         assert_eq!(notification.detection_block, 12);
         assert!(notification.invalidated_tx_hashes.is_empty(), "no PG → no affected hashes");
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_fires_on_reorg_callback_on_trace_registry() {
+        use crate::event::callback_registry::{ReorgNotification, TraceCallbackRegistry};
+        use std::sync::Mutex;
+
+        let window = make_window_with_blocks(&[(10, 10, 9), (11, 11, 10), (12, 12, 11)]);
+        let mut coordinator = make_coordinator(window);
+
+        let task = ReorgTask {
+            network: "test".to_string(),
+            fork_point: 11,
+            detection_point: 12,
+            event_tables: vec![],
+            derived_tables: vec![],
+            canonical_blocks: vec![],
+        };
+
+        let captured: Arc<Mutex<Option<ReorgNotification>>> = Arc::new(Mutex::new(None));
+        let captured_clone = Arc::clone(&captured);
+        let mut trace_registry = TraceCallbackRegistry::new();
+        trace_registry.register_on_reorg(Arc::new(move |notification| {
+            let captured = Arc::clone(&captured_clone);
+            Box::pin(async move {
+                *captured.lock().unwrap() = Some(notification);
+            })
+        }));
+
+        let ctx = ReorgContext {
+            postgres: None,
+            clickhouse: None,
+            registry: None,
+            trace_registry: Some(&trace_registry),
+            streams_clients: None,
+        };
+
+        coordinator.handle_reorg(task, &ctx).await.unwrap();
+
+        let notification =
+            captured.lock().unwrap().take().expect("trace_registry on_reorg callback was not fired");
+        assert_eq!(notification.network, "test");
+        assert_eq!(notification.fork_block, 11);
+        assert_eq!(notification.detection_block, 12);
+        assert!(notification.invalidated_tx_hashes.is_empty(), "no PG → no affected hashes");
+    }
+
+    #[tokio::test]
+    async fn test_trace_registry_fire_on_reorg_direct() {
+        use crate::event::callback_registry::{ReorgNotification, TraceCallbackRegistry};
+        use std::sync::Mutex;
+
+        let captured: Arc<Mutex<Option<ReorgNotification>>> = Arc::new(Mutex::new(None));
+        let captured_clone = Arc::clone(&captured);
+        let mut trace_registry = TraceCallbackRegistry::new();
+        trace_registry.register_on_reorg(Arc::new(move |notification| {
+            let captured = Arc::clone(&captured_clone);
+            Box::pin(async move {
+                *captured.lock().unwrap() = Some(notification);
+            })
+        }));
+
+        let notification = ReorgNotification {
+            network: "test".to_string(),
+            fork_block: 11,
+            detection_block: 12,
+            invalidated_tx_hashes: vec![],
+        };
+        trace_registry.fire_on_reorg(notification).await;
+
+        let observed = captured.lock().unwrap().take().expect("callback was not fired");
+        assert_eq!(observed.network, "test");
+        assert_eq!(observed.fork_block, 11);
+        assert_eq!(observed.detection_block, 12);
     }
 
     #[test]
