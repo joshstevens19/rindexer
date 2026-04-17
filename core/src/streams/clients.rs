@@ -839,6 +839,7 @@ impl StreamsClients {
         network: &str,
         fork_block: u64,
         depth: u64,
+        events_deleted: u64,
         affected_tx_hashes: &[B256],
         affected_tables: &[AffectedTable],
     ) -> Result<usize, StreamError> {
@@ -851,6 +852,7 @@ impl StreamsClients {
             "network": network,
             "fork_block": fork_block,
             "depth": depth,
+            "events_deleted": events_deleted,
             "affected_tx_hashes": affected_tx_hashes.iter().map(|h| format!("{:#x}", h)).collect::<Vec<_>>(),
             "affected_events": affected_tables.iter().map(|t| json!({
                 "indexer": t.indexer_name,
@@ -1320,7 +1322,6 @@ mod tests {
             schema: schema.to_string(),
             table_name: table.to_string(),
             rows_deleted: 0,
-            event_signature_hash: None,
             indexer_name: indexer.to_string(),
             contract_name: contract.to_string(),
             event_name: event.to_string(),
@@ -1330,7 +1331,7 @@ mod tests {
     #[tokio::test]
     async fn stream_reorg_returns_zero_without_streams() {
         // No streams configured — empty `affected_tables` slice is fine.
-        let result = empty_clients().stream_reorg("ethereum", 100, 2, &[], &[]).await;
+        let result = empty_clients().stream_reorg("ethereum", 100, 2, 0, &[], &[]).await;
         assert_eq!(result.unwrap(), 0);
     }
 
@@ -1350,6 +1351,7 @@ mod tests {
                     "network": "ethereum",
                     "fork_block": 100,
                     "depth": 2,
+                    "events_deleted": 42,
                     "affected_events": [{
                         "indexer": "my_indexer",
                         "contract": "USDC",
@@ -1380,7 +1382,7 @@ mod tests {
             "Transfer",
         )];
         let result = webhook_clients(vec![config])
-            .stream_reorg("ethereum", 100, 2, &[B256::ZERO], &tables)
+            .stream_reorg("ethereum", 100, 2, 42, &[B256::ZERO], &tables)
             .await;
 
         assert!(result.is_ok());
@@ -1425,7 +1427,47 @@ mod tests {
             "NativeTransfer",
         )];
         let result = webhook_clients(vec![config])
-            .stream_reorg("ethereum", 500, 1, &[], &tables)
+            .stream_reorg("ethereum", 500, 1, 0, &[], &tables)
+            .await;
+
+        assert!(result.is_ok());
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn stream_reorg_empty_affected_serializes_empty_array() {
+        // Streams configured, but no affected tables and no affected tx hashes.
+        // The payload must still serialize with `affected_events: []` and
+        // `events_deleted: 0` so downstream consumers can rely on their presence.
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/hook")
+            .match_body(mockito::Matcher::PartialJson(json!({
+                "event_name": "__rindexer_reorg",
+                "network": "ethereum",
+                "event_data": [{
+                    "type": "reorg",
+                    "network": "ethereum",
+                    "fork_block": 7,
+                    "depth": 1,
+                    "events_deleted": 0,
+                    "affected_events": [],
+                }],
+            })))
+            .with_status(200)
+            .create_async()
+            .await;
+
+        let config = WebhookStreamConfig {
+            endpoint: format!("{}/hook", server.url()),
+            shared_secret: "s".to_string(),
+            networks: vec!["ethereum".to_string()],
+            events: vec![stream_event("Transfer")],
+            delivery: None,
+        };
+
+        let result = webhook_clients(vec![config])
+            .stream_reorg("ethereum", 7, 1, 0, &[], &[])
             .await;
 
         assert!(result.is_ok());

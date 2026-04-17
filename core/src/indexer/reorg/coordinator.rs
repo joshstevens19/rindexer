@@ -388,7 +388,14 @@ impl ReorgCoordinator {
             // Since we only have a reference here, we cannot move it into a spawn.
             // Keep the await inline (the method is fast — it just publishes to queues).
             if let Err(e) = clients
-                .stream_reorg(&network, fork_point, depth, &tx_hashes, &result.affected_tables)
+                .stream_reorg(
+                    &network,
+                    fork_point,
+                    depth,
+                    result.events_deleted,
+                    &tx_hashes,
+                    &result.affected_tables,
+                )
                 .await
             {
                 tracing::error!(
