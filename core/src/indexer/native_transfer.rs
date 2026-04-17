@@ -255,10 +255,66 @@ pub async fn native_transfer_block_fetch(
             break Ok(());
         }
 
+        // Pace the poll loop so the per-poll tip reorg check below doesn't spin
+        // the CPU when the chain tip is idle. Mirrors the
+        // `target_iteration_duration` used in the contract-event fetch loop.
+        sleep(Duration::from_millis(200)).await;
+
         let latest_block = publisher.get_latest_block().await;
 
         match latest_block {
             Ok(Some(latest_block)) => {
+                // Per-poll tip reorg check: mirrors the contract-event path in
+                // `fetch_logs.rs`. Runs on every iteration — even when no blocks
+                // advanced — so we catch reorgs that rewrite the tip without
+                // moving the block number (e.g. Anvil `anvil_reorg(depth)` that
+                // keeps or lowers the tip height).
+                if let Some(coordinator) = reorg_coordinator.as_ref() {
+                    let tip_number = latest_block.header.number;
+                    let tip_hash = latest_block.header.hash;
+                    let tip_parent = latest_block.header.parent_hash;
+                    let mut guard = coordinator.lock().await;
+                    let ctx = ReorgContext {
+                        postgres: postgres.as_deref(),
+                        clickhouse: clickhouse.as_ref(),
+                        registry: None,
+                        trace_registry: Some(trace_registry.as_ref()),
+                        streams_clients: streams_clients.as_ref().as_ref(),
+                    };
+                    match detect_and_handle_reorg(
+                        &mut guard,
+                        tip_number,
+                        tip_hash,
+                        tip_parent,
+                        "NativeTransfers",
+                        &ctx,
+                    )
+                    .await
+                    {
+                        Ok(Some(fork_point)) => {
+                            drop(guard);
+                            warn!(
+                                network = %network,
+                                fork_point,
+                                "Native transfer tip reorg - rewinding fetch cursor",
+                            );
+                            last_seen_block = U64::from(fork_point.saturating_sub(1));
+                            continue;
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            drop(guard);
+                            error!(
+                                network = %network,
+                                error = ?e,
+                                "Native transfer tip reorg detection failed",
+                            );
+                            sleep(Duration::from_secs(2)).await;
+                            continue;
+                        }
+                    }
+                }
+
                 let block = U64::from(latest_block.header.number);
 
                 // Always trim back to the safe indexing threshold (which is zero if disabled)
