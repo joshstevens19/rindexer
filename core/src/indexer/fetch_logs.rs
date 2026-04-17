@@ -27,6 +27,7 @@ use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
+use tokio::sync::Mutex;
 use tokio::{sync::mpsc, time::Instant};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
@@ -61,7 +62,7 @@ pub struct FetchLogsResult {
 pub fn fetch_logs_stream(
     config: Arc<EventProcessingConfig>,
     force_no_live_indexing: bool,
-    reorg_coordinator: Option<ReorgCoordinator>,
+    reorg_coordinator: Option<Arc<Mutex<ReorgCoordinator>>>,
 ) -> impl tokio_stream::Stream<Item = Result<FetchLogsResult, Box<dyn Error + Send>>> + Send + Unpin
 {
     // If the sink is slower than the producer it can lead to unbounded memory growth and
@@ -1107,7 +1108,7 @@ async fn live_indexing_stream(
     disable_logs_bloom_checks: bool,
     original_max_limit: Option<U64>,
     cancel_token: CancellationToken,
-    mut reorg_coordinator: Option<ReorgCoordinator>,
+    reorg_coordinator: Option<Arc<Mutex<ReorgCoordinator>>>,
     postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickhouseClient>>,
     streams_clients: Arc<Option<StreamsClients>>,
@@ -1165,9 +1166,10 @@ async fn live_indexing_stream(
 
             // Route through coordinator for full recovery (event deletion, checkpoint
             // rewind, derived table rollback, window update) when available.
-            if let Some(ref mut coordinator) = reorg_coordinator {
+            if let Some(coordinator) = reorg_coordinator.as_ref() {
                 let detection_point = fork_block + reth_reorg.depth;
-                match coordinator.on_exex_reorg(detection_point, fork_block) {
+                let mut guard = coordinator.lock().await;
+                match guard.on_exex_reorg(detection_point, fork_block) {
                     Ok(task) => {
                         let reorg_ctx = ReorgContext {
                             postgres: postgres.as_deref(),
@@ -1175,7 +1177,7 @@ async fn live_indexing_stream(
                             registry: Some(registry),
                             streams_clients: streams_clients.as_ref().as_ref(),
                         };
-                        if let Err(e) = coordinator.handle_reorg(task, &reorg_ctx).await {
+                        if let Err(e) = guard.handle_reorg(task, &reorg_ctx).await {
                             error!("{} - Failed to handle ExEx reorg: {:?}", info_log_name, e);
                         }
                     }
@@ -1236,7 +1238,7 @@ async fn live_indexing_stream(
                     }
 
                     // Reorg detection via coordinator (parent hash validation)
-                    if let Some(ref mut coordinator) = reorg_coordinator {
+                    if let Some(coordinator) = reorg_coordinator.as_ref() {
                         let log_prefix = format!(
                             "{} - {}",
                             info_log_name,
@@ -1248,8 +1250,9 @@ async fn live_indexing_stream(
                             registry: Some(registry),
                             streams_clients: streams_clients.as_ref().as_ref(),
                         };
+                        let mut guard = coordinator.lock().await;
                         match detect_and_handle_reorg(
-                            coordinator,
+                            &mut guard,
                             latest_block.header.number,
                             latest_block.header.hash,
                             latest_block.header.parent_hash,
@@ -1430,8 +1433,9 @@ async fn live_indexing_stream(
                                             // (event deletion, checkpoint rewind, window update).
                                             // Fall back to sending ReorgInfo through the stream when
                                             // the coordinator is not configured.
-                                            if let Some(ref mut coordinator) = reorg_coordinator {
-                                                match coordinator
+                                            if let Some(coordinator) = reorg_coordinator.as_ref() {
+                                                let mut guard = coordinator.lock().await;
+                                                match guard
                                                     .try_create_reorg_task_for_block_range(
                                                         min_removed_block,
                                                         to_block.to::<u64>(),
@@ -1445,7 +1449,7 @@ async fn live_indexing_stream(
                                                                 .as_ref()
                                                                 .as_ref(),
                                                         };
-                                                        if let Err(e) = coordinator
+                                                        if let Err(e) = guard
                                                             .handle_reorg(task, &reorg_ctx)
                                                             .await
                                                         {

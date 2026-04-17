@@ -52,7 +52,7 @@ pub enum ProcessEventError {
 /// This function returns immediately without waiting for the indexing to complete.
 pub async fn process_non_blocking_event(
     config: EventProcessingConfig,
-    reorg_coordinator: Option<ReorgCoordinator>,
+    reorg_coordinator: Option<Arc<Mutex<ReorgCoordinator>>>,
 ) -> Result<(), ProcessEventError> {
     debug!("{} - Processing non blocking event", config.info_log_name());
 
@@ -82,7 +82,7 @@ async fn process_event_logs(
     config: Arc<EventProcessingConfig>,
     force_no_live_indexing: bool,
     block_until_indexed: bool,
-    reorg_coordinator: Option<ReorgCoordinator>,
+    reorg_coordinator: Option<Arc<Mutex<ReorgCoordinator>>>,
 ) -> Result<(), Box<ProviderError>> {
     // The concurrency with which we can call the trigger. If the indexer is running in-order
     // we can only call one at a time, otherwise we can call multiple in parallel based on what is
@@ -310,7 +310,7 @@ pub struct OrderedLiveIndexingDetails {
 async fn process_contract_events_with_dependencies(
     dependencies: EventDependencies,
     events_processing_config: Arc<Vec<Arc<EventProcessingConfig>>>,
-    mut reorg_coordinators: HashMap<String, ReorgCoordinator>,
+    mut reorg_coordinators: HashMap<String, Arc<Mutex<ReorgCoordinator>>>,
 ) -> Result<(), ProcessContractEventsWithDependenciesError> {
     let mut stack = vec![dependencies.tree];
 
@@ -420,7 +420,7 @@ pub struct EventDependenciesIndexingConfig {
     pub network: String,
     pub cached_provider: Arc<dyn ChainProvider>,
     pub events: Vec<(Arc<EventProcessingConfig>, RindexerEventFilter)>,
-    pub reorg_coordinator: Option<ReorgCoordinator>,
+    pub reorg_coordinator: Option<Arc<Mutex<ReorgCoordinator>>>,
 }
 
 // TODO - this is a similar to live_indexing_stream but has to be a bit different we should merge
@@ -469,8 +469,7 @@ async fn live_indexing_for_contract_event_dependencies(
     // Use the first event's cancel_token -- all events in this generation share the same token.
     let generation_cancel = events.first().map(|(config, _)| config.cancel_token().clone());
 
-    // Reorg coordinator is mutated in-place during the loop
-    let mut reorg_coordinator = reorg_coordinator;
+    let reorg_coordinator = reorg_coordinator;
 
     let (pg_client, ch_client, streams_clients, event_registry) = events
         .first()
@@ -513,7 +512,7 @@ async fn live_indexing_for_contract_event_dependencies(
         };
 
         // Reorg detection: validate parent hash via coordinator
-        if let Some(ref mut coordinator) = reorg_coordinator {
+        if let Some(coordinator) = reorg_coordinator.as_ref() {
             let log_prefix = format!("{} - {}", network, IndexingEventProgressStatus::live_log());
             let reorg_ctx = ReorgContext {
                 postgres: pg_client.as_deref(),
@@ -521,8 +520,9 @@ async fn live_indexing_for_contract_event_dependencies(
                 registry: Some(&event_registry),
                 streams_clients: streams_clients.as_ref().as_ref(),
             };
+            let mut guard = coordinator.lock().await;
             match detect_and_handle_reorg(
-                coordinator,
+                &mut guard,
                 latest_block.header.number,
                 latest_block.header.hash,
                 latest_block.header.parent_hash,

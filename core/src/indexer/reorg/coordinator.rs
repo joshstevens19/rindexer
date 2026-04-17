@@ -491,6 +491,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_on_new_block_idempotent_for_same_hash() {
+        // Simulate two concurrent detectors (contract events + native transfers)
+        // calling on_new_block with identical (number, hash, parent_hash) after the
+        // Mutex serializes them. The second call must be idempotent — the window
+        // already contains the block with a matching hash, so validation passes
+        // and no reorg is reported.
+        let window = make_window_with_blocks(&[(10, 10, 9), (11, 11, 10)]);
+        let mut coordinator = make_coordinator(window);
+
+        // First call inserts block 12.
+        let first = coordinator.on_new_block(12, hash(12), hash(11)).await.unwrap();
+        assert!(first.is_none(), "first insert should be clean");
+        assert!(coordinator.window.get(12).is_some(), "block 12 should be in window");
+
+        // Second call with the SAME (number, hash, parent_hash) must not panic or
+        // fabricate a reorg. The window's `validate_parent` sees matching parent
+        // hash on block 11 and the insert is a no-op overwrite.
+        let second = coordinator.on_new_block(12, hash(12), hash(11)).await.unwrap();
+        assert!(second.is_none(), "second identical insert must be idempotent");
+        assert!(coordinator.window.get(12).is_some(), "block 12 still in window");
+    }
+
+    #[tokio::test]
     async fn test_on_new_block_reorg_detected() {
         // Build a window with blocks 10, 11, 12
         let window = make_window_with_blocks(&[(10, 10, 9), (11, 11, 10), (12, 12, 11)]);
