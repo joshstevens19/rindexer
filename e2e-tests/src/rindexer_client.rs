@@ -422,11 +422,7 @@ impl RindexerInstance {
                 csv: crate::test_suite::CsvConfig { enabled: true },
                 clickhouse: None,
             },
-            native_transfers: crate::test_suite::NativeTransfersConfig {
-                enabled: false,
-                networks: None,
-                generate_csv: None,
-            },
+            native_transfers: crate::test_suite::NativeTransfersConfig::default(),
             contracts: vec![],
         }
     }

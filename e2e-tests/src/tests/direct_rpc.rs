@@ -111,11 +111,7 @@ fn build_direct_rpc_config(
             csv: CsvConfig { enabled: true },
             clickhouse: None,
         },
-        native_transfers: NativeTransfersConfig {
-            enabled: false,
-            networks: None,
-            generate_csv: None,
-        },
+        native_transfers: NativeTransfersConfig::default(),
         contracts: vec![ContractConfig {
             name: "ERC20".to_string(),
             details: vec![ContractDetail {

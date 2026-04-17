@@ -310,6 +310,42 @@ impl AnvilInstance {
         Ok(tx_hash)
     }
 
+    /// Send a native ETH transfer. Returns the tx hash.
+    /// Does NOT auto-mine — call `mine_block()` afterwards if using manual mining.
+    pub async fn send_native_eth(
+        &self,
+        to: &ethers::types::Address,
+        amount: ethers::types::U256,
+    ) -> Result<String> {
+        use ethers::middleware::MiddlewareBuilder;
+        use ethers::providers::{Http, Middleware, Provider};
+        use ethers::signers::{LocalWallet, Signer};
+        use ethers::types::TransactionRequest;
+
+        let base_provider = Provider::<Http>::try_from(&self.rpc_url)?;
+        let chain_id = base_provider.get_chainid().await?.as_u64();
+        let wallet: LocalWallet = ANVIL_DEFAULT_PRIVATE_KEY.parse()?;
+        let wallet = wallet.with_chain_id(chain_id);
+        let signer_address = wallet.address();
+        let provider = base_provider.with_signer(wallet);
+        let nonce = provider.get_transaction_count(signer_address, None).await?;
+
+        let tx = TransactionRequest {
+            from: Some(signer_address),
+            to: Some((*to).into()),
+            data: None,
+            gas: Some(21000u64.into()),
+            nonce: Some(nonce),
+            gas_price: Some(20000000000u128.into()),
+            value: Some(amount),
+            chain_id: None,
+        };
+
+        let pending = provider.send_transaction(tx, None).await?;
+        let tx_hash = format!("{:?}", pending.tx_hash()).to_lowercase();
+        Ok(tx_hash)
+    }
+
     /// Send multiple ERC20 transfers without mining between them.
     /// All transactions sit in the mempool until the next `mine_block()`.
     /// Returns tx hashes in submission order.
