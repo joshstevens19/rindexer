@@ -336,10 +336,7 @@ async fn live_indexing_for_contract_event_dependencies(
 
         ordering_live_indexing_details_map.insert(
             config.processor_id(),
-            Arc::new(Mutex::new(OrderedLiveIndexingDetails {
-                filter,
-                last_seen_block_number,
-            })),
+            Arc::new(Mutex::new(OrderedLiveIndexingDetails { filter, last_seen_block_number })),
         );
     }
 
