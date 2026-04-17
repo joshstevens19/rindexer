@@ -68,13 +68,19 @@ pub struct CsvConfig {
     pub enabled: bool,
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct NativeTransfersConfig {
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub networks: Option<Vec<NativeTransferNetworkDetail>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub streams: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub generate_csv: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reorg_safe_distance: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tables: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -84,6 +90,8 @@ pub struct NativeTransferNetworkDetail {
     pub start_block: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end_block: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
