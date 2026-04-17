@@ -47,6 +47,12 @@ pub struct Config {
     /// - `20-50` - For dedicated/paid nodes with high rate limits
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_concurrent_view_calls: Option<usize>,
+
+    /// Number of concurrent eth_getLogs workers during historical backfill.
+    /// Default: None (sequential, current behavior).
+    /// Recommended: 4-10 for dedicated RPC nodes. Ignored for factory contracts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetch_concurrency: Option<usize>,
 }
 
 #[cfg(test)]
@@ -78,5 +84,25 @@ mod tests {
 
         assert_eq!(transfer.buffer, Some(4));
         assert_eq!(transfer.callback_concurrency, None);
+    }
+
+    #[test]
+    fn test_config_fetch_concurrency() {
+        let yaml = r#"
+          fetch_concurrency: 8
+          buffer: 8
+        "#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.fetch_concurrency, Some(8));
+        assert_eq!(config.buffer, Some(8));
+    }
+
+    #[test]
+    fn test_config_fetch_concurrency_default() {
+        let yaml = r#"
+          buffer: 4
+        "#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.fetch_concurrency, None);
     }
 }
