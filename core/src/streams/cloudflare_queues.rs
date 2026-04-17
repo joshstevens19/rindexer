@@ -37,8 +37,8 @@ impl CloudflareQueues {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn with_base_url(mut self, base_url: String) -> Self {
+    #[doc(hidden)]
+    pub fn with_base_url(mut self, base_url: String) -> Self {
         self.base_url = base_url;
         self
     }
