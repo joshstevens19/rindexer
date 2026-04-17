@@ -647,6 +647,7 @@ impl<TExtensions> {event_type_name}<TExtensions> where TExtensions: 'static + Se
             contract_name: contract_name.to_string(),
             trace_information: trace_information,
             callback,
+            streams_clients: Arc::new(None),
         }});
     }}
 }}

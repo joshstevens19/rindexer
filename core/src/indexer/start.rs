@@ -302,6 +302,52 @@ async fn start_indexing_traces(
     Ok(non_blocking_process_events)
 }
 
+/// Find a provider for a network, falling back to the trace registry so that
+/// native-transfer-only networks (which have no entry in `registry.events`) still
+/// resolve to their configured provider.
+fn find_provider_for_network(
+    registry: &EventCallbackRegistry,
+    trace_registry: &TraceCallbackRegistry,
+    network_name: &str,
+) -> Option<Arc<dyn ChainProvider>> {
+    registry
+        .events
+        .iter()
+        .flat_map(|e| e.contract.details.iter())
+        .find(|nc| nc.network == network_name)
+        .map(|nc| nc.cached_provider.clone())
+        .or_else(|| {
+            trace_registry
+                .events
+                .iter()
+                .flat_map(|e| e.trace_information.details.iter())
+                .find(|nd| nd.network == network_name)
+                .map(|nd| nd.cached_provider.clone())
+        })
+}
+
+/// Find streams clients for a network, falling back to the trace registry so that
+/// native-transfer-only networks still publish startup-rollback notifications to
+/// their configured stream.
+fn find_streams_clients_for_network(
+    registry: &EventCallbackRegistry,
+    trace_registry: &TraceCallbackRegistry,
+    network_name: &str,
+) -> Option<Arc<Option<crate::streams::StreamsClients>>> {
+    registry
+        .events
+        .iter()
+        .find(|e| e.contract.details.iter().any(|d| d.network == network_name))
+        .map(|e| e.streams_clients.clone())
+        .or_else(|| {
+            trace_registry
+                .events
+                .iter()
+                .find(|e| e.trace_information.details.iter().any(|d| d.network == network_name))
+                .map(|e| e.streams_clients.clone())
+        })
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn start_indexing_contract_events(
     manifest: &Manifest,
@@ -310,6 +356,7 @@ async fn start_indexing_contract_events(
     clickhouse: Option<Arc<ClickhouseClient>>,
     indexer: &Indexer,
     registry: Arc<EventCallbackRegistry>,
+    trace_registry: Arc<TraceCallbackRegistry>,
     dependencies: &[ContractEventDependencies],
     no_live_indexing_forced: bool,
     cancel_token: CancellationToken,
@@ -586,13 +633,10 @@ async fn start_indexing_contract_events(
             }
         };
 
-        // Get a provider for this network from any registry event targeting it
-        let provider = registry
-            .events
-            .iter()
-            .flat_map(|e| e.contract.details.iter())
-            .find(|nc| nc.network == *network_name)
-            .map(|nc| nc.cached_provider.clone());
+        // Get a provider for this network from any registry event targeting it.
+        // Native-transfer-only networks have no entry in `registry.events`, so fall back
+        // to `trace_registry.events[].trace_information.details` for those providers.
+        let provider = find_provider_for_network(&registry, &trace_registry, network_name);
 
         if let Some(provider) = provider {
             let derived_tables =
@@ -606,12 +650,11 @@ async fn start_indexing_contract_events(
                 derived_tables,
             )?;
 
-            // Get streams_clients for this network (if any event has one)
-            let startup_streams_clients = registry
-                .events
-                .iter()
-                .find(|e| e.contract.details.iter().any(|d| d.network == *network_name))
-                .map(|e| e.streams_clients.clone());
+            // Get streams_clients for this network (if any event has one). Fall back to
+            // the trace registry so native-transfer-only networks still publish
+            // startup-rollback notifications to their configured stream.
+            let startup_streams_clients =
+                find_streams_clients_for_network(&registry, &trace_registry, network_name);
 
             // Run startup validation
             match coordinator.validate_on_startup().await {
@@ -885,12 +928,22 @@ async fn start_indexing_contract_events(
                     }
                 };
 
-                // Get a provider from any dependency event config for this network
+                // Get a provider from any dependency event config for this network.
+                // Fall back to the trace registry so native-transfer-only networks still
+                // have a provider available when this branch is reached.
                 let provider = dependency_event_processing_configs
                     .iter()
                     .flat_map(|dep| dep.events_config.iter())
                     .find(|e| e.network_contract().network == *network_name)
-                    .map(|e| e.network_contract().cached_provider.clone());
+                    .map(|e| e.network_contract().cached_provider.clone())
+                    .or_else(|| {
+                        trace_registry
+                            .events
+                            .iter()
+                            .flat_map(|e| e.trace_information.details.iter())
+                            .find(|nd| nd.network == *network_name)
+                            .map(|nd| nd.cached_provider.clone())
+                    });
 
                 if let Some(provider) = provider {
                     let derived_tables =
@@ -904,12 +957,25 @@ async fn start_indexing_contract_events(
                         derived_tables,
                     )?;
 
-                    // Get streams_clients for this network from dependency events
+                    // Get streams_clients for this network from dependency events, with a
+                    // fall back to the trace registry for native-transfer-only networks.
                     let dep_streams_clients = dependency_event_processing_configs
                         .iter()
                         .flat_map(|dep| dep.events_config.iter())
                         .find(|e| e.network_contract().network == *network_name)
-                        .map(|e| e.streams_clients());
+                        .map(|e| e.streams_clients())
+                        .or_else(|| {
+                            trace_registry
+                                .events
+                                .iter()
+                                .find(|e| {
+                                    e.trace_information
+                                        .details
+                                        .iter()
+                                        .any(|d| d.network == *network_name)
+                                })
+                                .map(|e| e.streams_clients.clone())
+                        });
 
                     match coordinator.validate_on_startup().await {
                         Ok(Some(startup_task)) => {
@@ -1068,6 +1134,7 @@ async fn start_indexing(
             clickhouse.clone(),
             &indexer,
             registry.clone(),
+            trace_registry.clone(),
             dependencies,
             no_live_indexing_forced,
             cancel_token.clone(),
@@ -1500,5 +1567,104 @@ mod tests {
         );
         assert_eq!(end, U64::from(1000));
         assert_eq!(distance, U64::ZERO);
+    }
+
+    // --- Provider / streams_clients lookup tests ---
+    //
+    // These cover the fallback from `registry.events` → `trace_registry.events` for
+    // native-transfer-only networks (Task 1, Step 2 verification).
+
+    use crate::event::callback_registry::{
+        TraceCallbackRegistry, TraceCallbackRegistryInformation,
+    };
+    use crate::event::contract_setup::{NetworkTrace, TraceInformation};
+    use crate::manifest::native_transfer::TraceProcessingMethod;
+    use crate::provider::ChainProvider;
+    use futures::future::{BoxFuture, FutureExt};
+
+    fn trace_registry_with_network(
+        network: &str,
+        provider: Arc<dyn ChainProvider>,
+    ) -> TraceCallbackRegistry {
+        let noop_callback: Arc<
+            dyn Fn(
+                    Vec<crate::event::callback_registry::TraceResult>,
+                ) -> BoxFuture<
+                    'static,
+                    crate::event::callback_registry::EventCallbackResult<()>,
+                > + Send
+                + Sync,
+        > = Arc::new(|_| async { Ok(()) }.boxed());
+
+        let trace_info = TraceInformation {
+            name: "NativeTransfer".to_string(),
+            details: vec![NetworkTrace {
+                id: "anvil-trace".to_string(),
+                network: network.to_string(),
+                cached_provider: provider,
+                start_block: None,
+                end_block: None,
+                method: TraceProcessingMethod::EthGetBlockByNumber,
+            }],
+            reorg_safe_distance: None,
+        };
+
+        let info = TraceCallbackRegistryInformation {
+            id: "test-id".to_string(),
+            indexer_name: "test_indexer".to_string(),
+            event_name: "NativeTransfer".to_string(),
+            contract_name: "EvmTraces".to_string(),
+            trace_information: trace_info,
+            callback: noop_callback,
+            streams_clients: Arc::new(None),
+        };
+
+        TraceCallbackRegistry { events: vec![info] }
+    }
+
+    #[test]
+    fn provider_lookup_falls_back_to_trace_registry() {
+        // Network "anvil" has no contract events but IS present as a native-transfer
+        // target. The provider lookup must resolve to the trace registry's provider.
+        let mock_provider: Arc<dyn ChainProvider> =
+            Arc::new(MockChainProvider::new(31337).with_block_number(100));
+        let empty_registry = EventCallbackRegistry::new();
+        let trace_registry = trace_registry_with_network("anvil", mock_provider.clone());
+
+        let found = find_provider_for_network(&empty_registry, &trace_registry, "anvil");
+
+        assert!(found.is_some(), "expected provider to be found via trace registry fallback");
+        // Identity check: same Arc instance (contract/trace chain provider is the same pointer).
+        assert!(Arc::ptr_eq(&found.unwrap(), &mock_provider));
+    }
+
+    #[test]
+    fn provider_lookup_returns_none_for_unknown_network() {
+        // Network "mainnet" is not present in either registry → None.
+        let mock_provider: Arc<dyn ChainProvider> =
+            Arc::new(MockChainProvider::new(31337).with_block_number(100));
+        let empty_registry = EventCallbackRegistry::new();
+        let trace_registry = trace_registry_with_network("anvil", mock_provider);
+
+        let found = find_provider_for_network(&empty_registry, &trace_registry, "mainnet");
+
+        assert!(found.is_none(), "expected no provider for unknown network");
+    }
+
+    #[test]
+    fn streams_clients_lookup_falls_back_to_trace_registry() {
+        // Native-transfer-only network: streams_clients must fall back to the trace
+        // registry so the coordinator still fires startup-rollback notifications.
+        let mock_provider: Arc<dyn ChainProvider> =
+            Arc::new(MockChainProvider::new(31337).with_block_number(100));
+        let empty_registry = EventCallbackRegistry::new();
+        let trace_registry = trace_registry_with_network("anvil", mock_provider);
+
+        let found = find_streams_clients_for_network(&empty_registry, &trace_registry, "anvil");
+
+        // The fixture uses `Arc::new(None)` — we just need to confirm the fallback
+        // path is exercised and returns Some(Arc<Option<...>>) instead of None.
+        assert!(found.is_some(), "expected streams_clients fallback to trace registry");
+        assert!(found.unwrap().is_none(), "fixture carries Arc::new(None) for streams_clients");
     }
 }

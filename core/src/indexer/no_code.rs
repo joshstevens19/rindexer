@@ -1050,6 +1050,7 @@ pub async fn process_trace_events(
         } else {
             None
         };
+        let streams_arc = Arc::new(streams_client);
 
         let chat_clients = if let Some(chats) = &contract.chat {
             Some(ChatClients::new(chats.clone()).await)
@@ -1085,7 +1086,7 @@ pub async fn process_trace_events(
             clickhouse: clickhouse.clone(),
             sql_event_table_name,
             sql_column_names,
-            streams_clients: Arc::new(streams_client),
+            streams_clients: Arc::clone(&streams_arc),
             chat_clients: Arc::new(chat_clients),
             tables: Arc::new(Vec::new()), // Native transfers don't support custom tables
             store_raw_events: true,       // Native transfers always store raw events
@@ -1101,6 +1102,7 @@ pub async fn process_trace_events(
             contract_name: contract_name.clone(),
             trace_information: trace_information.clone(),
             callback: no_code_callback(callback_params).trace_callback,
+            streams_clients: streams_arc,
         };
 
         events.push(event);
