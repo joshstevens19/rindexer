@@ -66,10 +66,6 @@ pub struct AffectedTable {
     /// the total is on `ReorgTaskResult.events_deleted`. Set to 0 until a
     /// cheap per-table tally is added.
     pub rows_deleted: u64,
-    /// TODO(future): thread event selector through `EventTableInfo` so this
-    /// can be populated for contract events. Native transfers and derived
-    /// tables will remain `None`.
-    pub event_signature_hash: Option<B256>,
     pub indexer_name: String,
     pub contract_name: String,
     /// "NativeTransfer" for native-transfer tables.
@@ -919,8 +915,6 @@ impl ReorgTask {
                 // TODO(future): per-table counts from DB layer; total is on
                 // `events_deleted`.
                 rows_deleted: 0,
-                // TODO(future): thread event selector through `EventTableInfo`.
-                event_signature_hash: None,
                 indexer_name: t.indexer_name.clone(),
                 contract_name: t.contract_name.clone(),
                 event_name: t.event_name.clone(),
