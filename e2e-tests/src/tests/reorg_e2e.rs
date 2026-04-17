@@ -1744,7 +1744,23 @@ fn create_mixed_reorg_config(
             end_block: None,
             method: None,
         }]),
-        streams: None,
+        // Attach the webhook to NT too so reorgs detected first by the NT
+        // fetch path (before the contract fetcher polls) still reach the
+        // webhook. stream_reorg uses force_send_network_wide, so the
+        // __rindexer_reorg payload fires on every configured stream on the
+        // network — but only from the StreamsClients the coordinator holds
+        // for the detecting path. Wiring both ensures the test sees both
+        // event types regardless of which path detects the reorg first.
+        streams: Some(serde_json::json!({
+            "webhooks": [{
+                "endpoint": webhook_endpoint,
+                "shared_secret": "test-secret",
+                "networks": ["polygon"],
+                "events": [
+                    { "event_name": "NativeTransfer" }
+                ]
+            }]
+        })),
         reorg_safe_distance: Some(serde_json::json!(false)),
         tables: None,
     };
