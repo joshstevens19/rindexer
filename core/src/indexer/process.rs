@@ -111,34 +111,33 @@ async fn process_event_logs(
 
         // Process the first result. Reorg-bearing batches are forwarded as-is
         // (no coalescing) so the coordinator's rollback semantics are preserved.
-        let (mut coalesced_logs, mut final_from_block, mut final_to_block, had_reorg) =
-            match result {
-                Ok(fetch_result) => {
-                    let had_reorg = fetch_result.reorg.is_some();
-                    if had_reorg {
-                        let task = handle_logs_result(
-                            Arc::clone(&config),
-                            callback_permits.clone(),
-                            Ok(fetch_result),
-                        )
-                        .await
-                        .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
-                        if block_until_indexed {
-                            task.await.map_err(|e| {
-                                Box::new(ProviderError::CustomError(e.to_string()))
-                            })?;
-                        } else {
-                            tasks.push(task);
-                        }
-                        continue;
+        let (mut coalesced_logs, mut final_from_block, mut final_to_block, had_reorg) = match result
+        {
+            Ok(fetch_result) => {
+                let had_reorg = fetch_result.reorg.is_some();
+                if had_reorg {
+                    let task = handle_logs_result(
+                        Arc::clone(&config),
+                        callback_permits.clone(),
+                        Ok(fetch_result),
+                    )
+                    .await
+                    .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
+                    if block_until_indexed {
+                        task.await
+                            .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
+                    } else {
+                        tasks.push(task);
                     }
-                    let logs: Vec<Log> = fetch_result.logs;
-                    (logs, fetch_result.from_block, fetch_result.to_block, had_reorg)
+                    continue;
                 }
-                Err(e) => {
-                    return Err(Box::new(ProviderError::CustomError(e.to_string())));
-                }
-            };
+                let logs: Vec<Log> = fetch_result.logs;
+                (logs, fetch_result.from_block, fetch_result.to_block, had_reorg)
+            }
+            Err(e) => {
+                return Err(Box::new(ProviderError::CustomError(e.to_string())));
+            }
+        };
         let _ = had_reorg;
 
         // Drain any additional READY results (non-blocking via now_or_never).
@@ -168,9 +167,8 @@ async fn process_event_logs(
                         .await
                         .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
                         if block_until_indexed {
-                            task.await.map_err(|e| {
-                                Box::new(ProviderError::CustomError(e.to_string()))
-                            })?;
+                            task.await
+                                .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
                         } else {
                             tasks.push(task);
                         }
@@ -183,9 +181,9 @@ async fn process_event_logs(
                         .await
                         .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
                         if block_until_indexed {
-                            reorg_task.await.map_err(|e| {
-                                Box::new(ProviderError::CustomError(e.to_string()))
-                            })?;
+                            reorg_task
+                                .await
+                                .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
                         } else {
                             tasks.push(reorg_task);
                         }
@@ -222,13 +220,10 @@ async fn process_event_logs(
             reorg: None,
         };
 
-        let task = handle_logs_result(
-            Arc::clone(&config),
-            callback_permits.clone(),
-            Ok(coalesced_result),
-        )
-        .await
-        .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
+        let task =
+            handle_logs_result(Arc::clone(&config), callback_permits.clone(), Ok(coalesced_result))
+                .await
+                .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
 
         if block_until_indexed {
             task.await.map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
@@ -241,8 +236,7 @@ async fn process_event_logs(
                 let mut pending = Vec::with_capacity(tasks.len());
                 for t in tasks.drain(..) {
                     if t.is_finished() {
-                        t.await
-                            .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
+                        t.await.map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
                     } else {
                         pending.push(t);
                     }
