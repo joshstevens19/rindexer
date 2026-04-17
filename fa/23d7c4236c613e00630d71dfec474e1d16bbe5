@@ -1,0 +1,29 @@
+core/src/indexer/process.rs
+  adda6778677ea374 12,15,346,440-459
+core/src/indexer/heartbeat.rs
+  adda6778677ea374 1-156
+core/src/indexer/mod.rs
+  adda6778677ea374 13
+core/src/indexer/fetch_logs.rs
+  adda6778677ea374 5,448,546-566
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.0",
+  "base_commit_sha": "fa23d7c4236c613e00630d71dfec474e1d16bbe5",
+  "prompts": {
+    "adda6778677ea374": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c267ab75-e228-45d9-86f9-b49107661d31",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 265,
+      "total_deletions": 94,
+      "accepted_lines": 206,
+      "overriden_lines": 0
+    }
+  }
+}
