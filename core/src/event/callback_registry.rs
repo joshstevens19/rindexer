@@ -437,6 +437,8 @@ pub struct TraceCallbackRegistryInformation {
     pub contract_name: String,
     pub trace_information: TraceInformation,
     pub callback: TraceCallbackType,
+    /// Derived/custom tables for this trace event (for reorg cleanup).
+    pub tables: Arc<Vec<TableRuntime>>,
     /// Streams clients for reorg retraction. Shared with the callback params so the
     /// reorg coordinator can publish rollback notifications to the same stream the
     /// native-transfer pipeline writes to.

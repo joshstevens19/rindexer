@@ -353,6 +353,115 @@ fn reorg_ctx_streams(
     startup_streams_clients.as_ref().and_then(|a| a.as_ref().as_ref())
 }
 
+/// Build derived-table rollback + journal entries for an event's tables and merge
+/// them into `accumulator` keyed by `network`. Shared between contract events and
+/// native-transfer trace events so both sources contribute to reorg rollback.
+fn build_derived_tables_for_event(
+    event_name: &str,
+    indexer_name: &str,
+    contract_name: &str,
+    network: &str,
+    tables: &[crate::indexer::tables::TableRuntime],
+    accumulator: &mut HashMap<String, Vec<DerivedTableInfo>>,
+) -> anyhow::Result<()> {
+    let schema = generate_indexer_contract_schema_name(indexer_name, contract_name);
+    let event_table_full = format!("{}.{}", schema, camel_to_snake(event_name));
+
+    for tr in tables.iter() {
+        let derived = accumulator.entry(network.to_string()).or_default();
+
+        let event_table_name = event_table_full.clone();
+        let mut rollback_ops: Vec<DerivedTableRollbackOp> = Vec::new();
+        let mut journal_columns: Vec<DerivedColumnJournal> = Vec::new();
+
+        for table_event in &tr.table.events {
+            if table_event.event != event_name {
+                continue;
+            }
+            for operation in &table_event.operations {
+                use crate::manifest::contract::OperationType;
+                if !matches!(
+                    operation.operation_type,
+                    OperationType::Upsert | OperationType::Update
+                ) {
+                    continue;
+                }
+
+                let mut where_columns: Vec<(String, String)> = operation
+                    .where_clause
+                    .iter()
+                    .filter_map(|(col, val)| {
+                        val.strip_prefix('$').map(|field| (col.clone(), camel_to_snake(field)))
+                    })
+                    .collect();
+                where_columns.sort_by(|a, b| a.0.cmp(&b.0));
+
+                let where_col_names: Vec<String> =
+                    where_columns.iter().map(|(col, _)| col.clone()).collect();
+
+                let columns: Vec<DerivedColumnRollback> = operation
+                    .set
+                    .iter()
+                    .filter(|set_col| {
+                        set_col.action.reverse().is_some() && set_col.event_field_name().is_some()
+                    })
+                    .map(|set_col| {
+                        DerivedColumnRollback::try_new(
+                            set_col.column.clone(),
+                            camel_to_snake(set_col.event_field_name().unwrap()),
+                            set_col.action.clone(),
+                        )
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+
+                // Collect non-reversible columns for journal-based recalculation
+                for set_col in &operation.set {
+                    if set_col.action.reverse().is_some() {
+                        continue; // handled by rollback_ops
+                    }
+                    if !journal_columns.iter().any(|jc| jc.derived_column == set_col.column) {
+                        journal_columns.push(DerivedColumnJournal::try_new(
+                            set_col.column.clone(),
+                            set_col.action.clone(),
+                            where_col_names.clone(),
+                        )?);
+                    }
+                }
+
+                if !columns.is_empty() {
+                    rollback_ops.push(DerivedTableRollbackOp::try_new(
+                        event_table_name.clone(),
+                        where_columns,
+                        columns,
+                        operation.condition().map(String::from),
+                    )?);
+                }
+            }
+        }
+
+        // Merge into existing entry or create a new one
+        if let Some(existing) =
+            derived.iter_mut().find(|d| d.full_table_name == tr.full_table_name)
+        {
+            existing.rollback_ops.extend(rollback_ops);
+            for jc in journal_columns {
+                if !existing.journal_columns.iter().any(|e| e.derived_column == jc.derived_column) {
+                    existing.journal_columns.push(jc);
+                }
+            }
+        } else {
+            derived.push(DerivedTableInfo::try_new(
+                tr.full_table_name.clone(),
+                tr.table.cross_chain,
+                rollback_ops,
+                journal_columns,
+            )?);
+        }
+    }
+
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn start_indexing_contract_events(
     manifest: &Manifest,
@@ -473,113 +582,20 @@ async fn start_indexing_contract_events(
             let schema =
                 generate_indexer_contract_schema_name(&event.indexer_name, &event.contract.name);
             let table_name = camel_to_snake(&event.event_name);
-            let event_table_full = format!("{}.{}", schema, table_name);
             let checkpoint_table = generate_internal_event_table_name(&schema, &event.event_name);
             network_event_tables
                 .entry(network_contract.network.clone())
                 .or_default()
                 .push(EventTableInfo::try_new(schema, table_name, checkpoint_table)?);
 
-            for tr in event.tables.iter() {
-                let derived =
-                    network_derived_tables.entry(network_contract.network.clone()).or_default();
-
-                // Build rollback_ops from table event mappings that reference this event
-                let event_table_name = event_table_full.clone();
-                let mut rollback_ops: Vec<DerivedTableRollbackOp> = Vec::new();
-                let mut journal_columns: Vec<DerivedColumnJournal> = Vec::new();
-
-                for table_event in &tr.table.events {
-                    if table_event.event != event.event_name {
-                        continue;
-                    }
-                    for operation in &table_event.operations {
-                        use crate::manifest::contract::OperationType;
-                        if !matches!(
-                            operation.operation_type,
-                            OperationType::Upsert | OperationType::Update
-                        ) {
-                            continue;
-                        }
-
-                        let mut where_columns: Vec<(String, String)> = operation
-                            .where_clause
-                            .iter()
-                            .filter_map(|(col, val)| {
-                                val.strip_prefix('$')
-                                    .map(|field| (col.clone(), camel_to_snake(field)))
-                            })
-                            .collect();
-                        where_columns.sort_by(|a, b| a.0.cmp(&b.0));
-
-                        let where_col_names: Vec<String> =
-                            where_columns.iter().map(|(col, _)| col.clone()).collect();
-
-                        let columns: Vec<DerivedColumnRollback> = operation
-                            .set
-                            .iter()
-                            .filter(|set_col| {
-                                set_col.action.reverse().is_some()
-                                    && set_col.event_field_name().is_some()
-                            })
-                            .map(|set_col| {
-                                DerivedColumnRollback::try_new(
-                                    set_col.column.clone(),
-                                    camel_to_snake(set_col.event_field_name().unwrap()),
-                                    set_col.action.clone(),
-                                )
-                            })
-                            .collect::<anyhow::Result<Vec<_>>>()?;
-
-                        // Collect non-reversible columns for journal-based recalculation
-                        for set_col in &operation.set {
-                            if set_col.action.reverse().is_some() {
-                                continue; // handled by rollback_ops
-                            }
-                            if !journal_columns.iter().any(|jc| jc.derived_column == set_col.column)
-                            {
-                                journal_columns.push(DerivedColumnJournal::try_new(
-                                    set_col.column.clone(),
-                                    set_col.action.clone(),
-                                    where_col_names.clone(),
-                                )?);
-                            }
-                        }
-
-                        if !columns.is_empty() {
-                            rollback_ops.push(DerivedTableRollbackOp::try_new(
-                                event_table_name.clone(),
-                                where_columns,
-                                columns,
-                                operation.condition().map(String::from),
-                            )?);
-                        }
-                    }
-                }
-
-                // Merge into existing entry or create a new one
-                if let Some(existing) =
-                    derived.iter_mut().find(|d| d.full_table_name == tr.full_table_name)
-                {
-                    existing.rollback_ops.extend(rollback_ops);
-                    for jc in journal_columns {
-                        if !existing
-                            .journal_columns
-                            .iter()
-                            .any(|e| e.derived_column == jc.derived_column)
-                        {
-                            existing.journal_columns.push(jc);
-                        }
-                    }
-                } else {
-                    derived.push(DerivedTableInfo::try_new(
-                        tr.full_table_name.clone(),
-                        tr.table.cross_chain,
-                        rollback_ops,
-                        journal_columns,
-                    )?);
-                }
-            }
+            build_derived_tables_for_event(
+                &event.event_name,
+                &event.indexer_name,
+                &event.contract.name,
+                &network_contract.network,
+                &event.tables,
+                &mut network_derived_tables,
+            )?;
         }
     }
 
@@ -599,6 +615,21 @@ async fn start_indexing_contract_events(
                     .entry(nt_detail.network.clone())
                     .or_default()
                     .push(EventTableInfo::try_new(schema, table_name, checkpoint_table)?);
+            }
+        }
+
+        // Mirror the contract-events pass for native-transfer derived tables: every
+        // trace event contributes rollback ops for each configured network.
+        for trace_event in trace_registry.events.iter() {
+            for network_detail in trace_event.trace_information.details.iter() {
+                build_derived_tables_for_event(
+                    &trace_event.event_name,
+                    &trace_event.indexer_name,
+                    &trace_event.contract_name,
+                    &network_detail.network,
+                    &trace_event.tables,
+                    &mut network_derived_tables,
+                )?;
             }
         }
     }
@@ -1624,6 +1655,7 @@ mod tests {
             contract_name: "EvmTraces".to_string(),
             trace_information: trace_info,
             callback: noop_callback,
+            tables: Arc::new(Vec::new()),
             streams_clients: Arc::new(None),
         };
 
@@ -1707,5 +1739,103 @@ mod tests {
         let none_inner: Option<Arc<Option<crate::streams::StreamsClients>>> =
             Some(Arc::new(None));
         assert!(reorg_ctx_streams(&none_inner).is_none());
+    }
+
+    // --- Derived-table rollback build tests ---
+    //
+    // Verifies that `build_derived_tables_for_event` is symmetric for contract
+    // events and native-transfer trace events: both sources populate
+    // `network_derived_tables` with rollback ops that target their respective
+    // source table.
+
+    #[test]
+    fn build_derived_tables_for_native_transfer_populates_accumulator() {
+        use crate::indexer::tables::TableRuntime;
+        use crate::manifest::contract::{
+            OperationType, SetAction, SetColumn, Table, TableColumn, TableEventMapping,
+            TableOperation,
+        };
+
+        // Minimal derived table: one upsert op keyed by `account` that adds
+        // `$value` to `total_sent` when a NativeTransfer event fires.
+        let table = Table {
+            name: "balances".to_string(),
+            global: false,
+            cross_chain: false,
+            columns: vec![
+                TableColumn {
+                    name: "account".to_string(),
+                    column_type: None,
+                    nullable: false,
+                    default: None,
+                },
+                TableColumn {
+                    name: "total_sent".to_string(),
+                    column_type: None,
+                    nullable: false,
+                    default: None,
+                },
+            ],
+            events: vec![TableEventMapping {
+                event: "NativeTransfer".to_string(),
+                iterate: Vec::new(),
+                operations: vec![TableOperation {
+                    operation_type: OperationType::Upsert,
+                    where_clause: {
+                        let mut m = HashMap::new();
+                        m.insert("account".to_string(), "$from".to_string());
+                        m
+                    },
+                    if_condition: None,
+                    filter: None,
+                    set: vec![SetColumn {
+                        column: "total_sent".to_string(),
+                        action: SetAction::Add,
+                        value: Some("$value".to_string()),
+                    }],
+                }],
+            }],
+            cron: None,
+            timestamp: false,
+            database: None,
+        };
+
+        let runtime =
+            TableRuntime::new(table, "test_indexer", NATIVE_TRANSFER_CONTRACT_NAME);
+        let tables = vec![runtime];
+
+        let mut accumulator: HashMap<String, Vec<DerivedTableInfo>> = HashMap::new();
+        build_derived_tables_for_event(
+            "NativeTransfer",
+            "test_indexer",
+            NATIVE_TRANSFER_CONTRACT_NAME,
+            "anvil",
+            &tables,
+            &mut accumulator,
+        )
+        .expect("build_derived_tables_for_event should succeed");
+
+        let anvil_entries =
+            accumulator.get("anvil").expect("accumulator should contain anvil entry");
+        assert_eq!(anvil_entries.len(), 1, "one derived table expected");
+
+        let entry = &anvil_entries[0];
+        assert!(
+            entry.full_table_name.ends_with("balances"),
+            "full_table_name should end with derived table name, got: {}",
+            entry.full_table_name,
+        );
+        assert_eq!(
+            entry.rollback_ops.len(),
+            1,
+            "one rollback op expected for the upsert-with-add column",
+        );
+        let op = &entry.rollback_ops[0];
+        assert!(
+            op.event_table.contains("native_transfer"),
+            "rollback op should target the native_transfer source table, got: {}",
+            op.event_table,
+        );
+        assert!(entry.journal_columns.is_empty(), "no non-reversible columns in this fixture");
     }
 }
