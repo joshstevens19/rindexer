@@ -1168,6 +1168,10 @@ async fn live_indexing_stream(
             // rewind, derived table rollback, window update) when available.
             if let Some(coordinator) = reorg_coordinator.as_ref() {
                 let detection_point = fork_block + reth_reorg.depth;
+                // Mutex held across reorg handling (DB rollback, stream publishes).
+                // On a real reorg this blocks the other indexing path for the
+                // duration of handle_reorg, which is acceptable for isolation.
+                // If latency becomes a concern, move handle_reorg out of the hot path.
                 let mut guard = coordinator.lock().await;
                 match guard.on_exex_reorg(detection_point, fork_block) {
                     Ok(task) => {
@@ -1250,6 +1254,10 @@ async fn live_indexing_stream(
                             registry: Some(registry),
                             streams_clients: streams_clients.as_ref().as_ref(),
                         };
+                        // Mutex held across reorg handling (DB rollback, stream publishes).
+                        // On a real reorg this blocks the other indexing path for the
+                        // duration of handle_reorg, which is acceptable for isolation.
+                        // If latency becomes a concern, move handle_reorg out of the hot path.
                         let mut guard = coordinator.lock().await;
                         match detect_and_handle_reorg(
                             &mut guard,
@@ -1434,6 +1442,12 @@ async fn live_indexing_stream(
                                             // Fall back to sending ReorgInfo through the stream when
                                             // the coordinator is not configured.
                                             if let Some(coordinator) = reorg_coordinator.as_ref() {
+                                                // Mutex held across reorg handling (DB rollback,
+                                                // stream publishes). On a real reorg this blocks
+                                                // the other indexing path for the duration of
+                                                // handle_reorg, which is acceptable for isolation.
+                                                // If latency becomes a concern, move handle_reorg
+                                                // out of the hot path.
                                                 let mut guard = coordinator.lock().await;
                                                 match guard
                                                     .try_create_reorg_task_for_block_range(

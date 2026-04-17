@@ -514,6 +514,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_on_new_block_concurrent_same_block_through_arc_mutex() {
+        // Regression test for the shared-coordinator wiring (contract events +
+        // native transfers observe the same tip via Arc<Mutex<ReorgCoordinator>>).
+        // Spawn two tokio tasks that both race to call `on_new_block(12, 12, 11)`.
+        // The Mutex must serialize them; the second caller sees the block already
+        // in the window with a matching hash → validation passes → Ok(None).
+        use tokio::sync::Mutex as AsyncMutex;
+
+        let window = make_window_with_blocks(&[(10, 10, 9), (11, 11, 10)]);
+        let coordinator = Arc::new(AsyncMutex::new(make_coordinator(window)));
+
+        let c1 = Arc::clone(&coordinator);
+        let c2 = Arc::clone(&coordinator);
+
+        let h1 = tokio::spawn(async move {
+            let mut guard = c1.lock().await;
+            guard.on_new_block(12, hash(12), hash(11)).await
+        });
+        let h2 = tokio::spawn(async move {
+            let mut guard = c2.lock().await;
+            guard.on_new_block(12, hash(12), hash(11)).await
+        });
+
+        let r1 = h1.await.expect("task 1 panicked").expect("task 1 returned Err");
+        let r2 = h2.await.expect("task 2 panicked").expect("task 2 returned Err");
+
+        assert!(r1.is_none(), "first caller must see no reorg");
+        assert!(r2.is_none(), "second caller must see no reorg (idempotent)");
+
+        let guard = coordinator.lock().await;
+        assert!(guard.window.get(12).is_some(), "block 12 should remain in the window");
+    }
+
+    #[tokio::test]
     async fn test_on_new_block_reorg_detected() {
         // Build a window with blocks 10, 11, 12
         let window = make_window_with_blocks(&[(10, 10, 9), (11, 11, 10), (12, 12, 11)]);
