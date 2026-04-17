@@ -583,6 +583,9 @@ async fn test_reorg_detection_and_rollback() {
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
         )
         .unwrap()],
         derived_tables: vec![],
@@ -693,6 +696,9 @@ async fn test_reorg_single_block() {
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
         )
         .unwrap()],
         derived_tables: vec![],
@@ -756,6 +762,9 @@ async fn test_reorg_deep() {
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
         )
         .unwrap()],
         derived_tables: vec![],
@@ -812,6 +821,9 @@ async fn test_reorg_no_events_in_range() {
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
         )
         .unwrap()],
         derived_tables: vec![],
@@ -911,12 +923,18 @@ async fn test_reorg_multiple_event_tables() {
                 "test_schema".to_string(),
                 "ping_pong_ping".to_string(),
                 "test_schema_ping".to_string(),
+                "test_indexer".to_string(),
+                "PingPong".to_string(),
+                "Ping".to_string(),
             )
             .unwrap(),
             EventTableInfo::try_new(
                 "test_schema".to_string(),
                 "ping_pong_pong".to_string(),
                 "test_schema_pong".to_string(),
+                "test_indexer".to_string(),
+                "PingPong".to_string(),
+                "Pong".to_string(),
             )
             .unwrap(),
         ],
@@ -992,6 +1010,9 @@ async fn test_reorg_checkpoint_rewind() {
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
         )
         .unwrap()],
         derived_tables: vec![],
@@ -1084,6 +1105,9 @@ async fn test_reorg_derived_table_cleanup() {
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
         )
         .unwrap()],
         derived_tables: vec![DerivedTableInfo {
@@ -1180,6 +1204,9 @@ async fn test_reorg_derived_table_cross_chain() {
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
         )
         .unwrap()],
         derived_tables: vec![DerivedTableInfo {
@@ -1251,6 +1278,9 @@ async fn test_reorg_consecutive() {
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
         )
         .unwrap()],
         derived_tables: vec![],
@@ -1279,6 +1309,9 @@ async fn test_reorg_consecutive() {
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
         )
         .unwrap()],
         derived_tables: vec![],
@@ -1438,6 +1471,9 @@ async fn test_reorg_multicall_tx_deduplication() {
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
         )
         .unwrap()],
         derived_tables: vec![],
@@ -1523,6 +1559,9 @@ async fn test_reorg_reindex_continuation() {
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
         )
         .unwrap()],
         derived_tables: vec![],
@@ -1697,6 +1736,9 @@ async fn test_reorg_on_reorg_callback_fired() {
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
         )
         .unwrap()],
         derived_tables: vec![],
@@ -1789,6 +1831,9 @@ async fn test_reorg_unregistered_derived_table_survives() {
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
         )
         .unwrap()],
         derived_tables: vec![],
@@ -1891,6 +1936,9 @@ async fn test_reorg_multiple_derived_tables() {
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
         )
         .unwrap()],
         derived_tables: vec![
@@ -1984,6 +2032,9 @@ async fn test_reorg_derived_table_deep_range() {
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
         )
         .unwrap()],
         derived_tables: vec![DerivedTableInfo {
@@ -2069,6 +2120,9 @@ async fn test_reorg_reversal_add() {
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
         )
         .unwrap()],
         derived_tables: vec![DerivedTableInfo {
@@ -2161,6 +2215,9 @@ async fn test_reorg_reversal_subtract() {
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
         )
         .unwrap()],
         derived_tables: vec![DerivedTableInfo {
@@ -2254,6 +2311,9 @@ async fn test_reorg_reversal_increment() {
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
         )
         .unwrap()],
         derived_tables: vec![DerivedTableInfo {
@@ -2345,6 +2405,9 @@ async fn test_reorg_reversal_with_condition() {
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
         )
         .unwrap()],
         derived_tables: vec![DerivedTableInfo {
@@ -2462,6 +2525,9 @@ async fn test_reorg_journal_max_recalculation() {
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
         )
         .unwrap()],
         derived_tables: vec![DerivedTableInfo {
@@ -2569,6 +2635,9 @@ async fn test_reorg_journal_set_recalculation() {
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
         )
         .unwrap()],
         derived_tables: vec![DerivedTableInfo {
@@ -2660,6 +2729,9 @@ async fn test_reorg_reversal_decrement() {
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
         )
         .unwrap()],
         derived_tables: vec![DerivedTableInfo {
@@ -2767,6 +2839,9 @@ async fn test_reorg_journal_min_recalculation() {
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
         )
         .unwrap()],
         derived_tables: vec![DerivedTableInfo {
@@ -2880,6 +2955,9 @@ async fn test_reorg_mixed_reversible_and_journal() {
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
         )
         .unwrap()],
         derived_tables: vec![DerivedTableInfo {
@@ -2995,6 +3073,9 @@ async fn test_reorg_reversal_uninvolved_row_unchanged() {
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
         )
         .unwrap()],
         derived_tables: vec![DerivedTableInfo {
@@ -3120,6 +3201,9 @@ async fn test_reorg_clickhouse_add_reversal() {
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
         )
         .unwrap()],
         derived_tables: vec![DerivedTableInfo {
@@ -3279,12 +3363,18 @@ async fn test_reorg_two_events_same_table_reversible() {
                 "test_schema".to_string(),
                 "ping_pong_ping".to_string(),
                 "test_schema_ping".to_string(),
+                "test_indexer".to_string(),
+                "PingPong".to_string(),
+                "Ping".to_string(),
             )
             .unwrap(),
             EventTableInfo::try_new(
                 "test_schema".to_string(),
                 "ping_pong_pong".to_string(),
                 "test_schema_pong".to_string(),
+                "test_indexer".to_string(),
+                "PingPong".to_string(),
+                "Pong".to_string(),
             )
             .unwrap(),
         ],
@@ -3462,6 +3552,9 @@ async fn test_reorg_two_events_same_table_journal() {
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
         )
         .unwrap()],
         derived_tables: vec![DerivedTableInfo {

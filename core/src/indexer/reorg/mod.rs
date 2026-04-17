@@ -20,8 +20,8 @@ use crate::streams::StreamsClients;
 pub use coordinator::ReorgCoordinator;
 pub use persistence::ReorgBlockHashPersistence;
 pub use task::{
-    DerivedColumnJournal, DerivedColumnRollback, DerivedTableInfo, DerivedTableRollbackOp,
-    EventTableInfo,
+    AffectedTable, DerivedColumnJournal, DerivedColumnRollback, DerivedTableInfo,
+    DerivedTableRollbackOp, EventTableInfo,
 };
 pub use window::BlockChainWindow;
 

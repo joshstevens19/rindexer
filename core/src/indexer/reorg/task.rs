@@ -20,6 +20,12 @@ pub struct EventTableInfo {
     pub full_name: String,
     /// Checkpoint table name in rindexer_internal (without schema prefix)
     pub checkpoint_table: String,
+    /// Indexer name for stream-payload metadata (not used in SQL).
+    pub indexer_name: String,
+    /// Contract name for stream-payload metadata (not used in SQL).
+    pub contract_name: String,
+    /// Event name for stream-payload metadata (not used in SQL).
+    pub event_name: String,
 }
 
 impl EventTableInfo {
@@ -27,13 +33,47 @@ impl EventTableInfo {
         schema: String,
         table_name: String,
         checkpoint_table: String,
+        indexer_name: String,
+        contract_name: String,
+        event_name: String,
     ) -> anyhow::Result<Self> {
         super::validate_sql_identifier(&schema, "event table schema")?;
         super::validate_sql_identifier(&table_name, "event table name")?;
         super::validate_sql_identifier(&checkpoint_table, "checkpoint table name")?;
+        // indexer/contract/event names are metadata for the stream payload,
+        // not used in SQL, so no SQL validation needed.
         let full_name = format!("{}.{}", schema, table_name);
-        Ok(Self { schema, table_name, full_name, checkpoint_table })
+        Ok(Self {
+            schema,
+            table_name,
+            full_name,
+            checkpoint_table,
+            indexer_name,
+            contract_name,
+            event_name,
+        })
     }
+}
+
+/// Per-table summary emitted to downstream consumers in the `__rindexer_reorg`
+/// stream payload. Tells consumers which source event tables were invalidated
+/// so they can act programmatically.
+#[derive(Clone, Debug)]
+pub struct AffectedTable {
+    pub schema: String,
+    pub table_name: String,
+    /// TODO(future): per-table counts are not available from the DB layer today;
+    /// the total is on `ReorgTaskResult.events_deleted`. Set to 0 until a
+    /// cheap per-table tally is added.
+    pub rows_deleted: u64,
+    /// TODO(future): thread event selector through `EventTableInfo` so this
+    /// can be populated for contract events. Native transfers and derived
+    /// tables will remain `None`.
+    pub event_signature_hash: Option<B256>,
+    pub indexer_name: String,
+    pub contract_name: String,
+    /// "NativeTransfer" for native-transfer tables.
+    pub event_name: String,
 }
 
 /// Describes how to reverse one column's accumulation during reorg.
@@ -167,6 +207,10 @@ pub struct ReorgTaskResult {
     pub events_deleted: u64,
     pub duration_secs: f64,
     pub affected_tx_hashes: Vec<String>,
+    /// Per-table summary of which source event tables were rolled back.
+    /// Derived tables are intentionally NOT included — this is about source
+    /// event tables downstream consumers may need to know about.
+    pub affected_tables: Vec<AffectedTable>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -863,10 +907,31 @@ impl ReorgTask {
             "Reorg task completed"
         );
 
+        // Build the per-table summary for downstream stream consumers. Only
+        // source event tables that were rolled back appear here — derived
+        // tables are intentionally excluded.
+        let affected_tables: Vec<AffectedTable> = self
+            .event_tables
+            .iter()
+            .map(|t| AffectedTable {
+                schema: t.schema.clone(),
+                table_name: t.table_name.clone(),
+                // TODO(future): per-table counts from DB layer; total is on
+                // `events_deleted`.
+                rows_deleted: 0,
+                // TODO(future): thread event selector through `EventTableInfo`.
+                event_signature_hash: None,
+                indexer_name: t.indexer_name.clone(),
+                contract_name: t.contract_name.clone(),
+                event_name: t.event_name.clone(),
+            })
+            .collect();
+
         Ok(ReorgTaskResult {
             events_deleted: total_deleted,
             duration_secs: duration,
             affected_tx_hashes,
+            affected_tables,
         })
     }
 }
