@@ -1,7 +1,7 @@
 use crate::adaptive_concurrency::{AdaptiveConcurrency, ADAPTIVE_CONCURRENCY};
 use crate::blockclock::BlockClock;
 use crate::database::clickhouse::client::ClickhouseClient;
-use crate::event::callback_registry::EventCallbackRegistry;
+use crate::event::callback_registry::{EventCallbackRegistry, TraceCallbackRegistry};
 use crate::helpers::{halved_block_number, is_relevant_block};
 use crate::indexer::heartbeat::{HeartbeatAction, HeartbeatTracker};
 use crate::indexer::reorg::{
@@ -63,6 +63,7 @@ pub fn fetch_logs_stream(
     config: Arc<EventProcessingConfig>,
     force_no_live_indexing: bool,
     reorg_coordinator: Option<Arc<Mutex<ReorgCoordinator>>>,
+    trace_registry: Option<Arc<TraceCallbackRegistry>>,
 ) -> impl tokio_stream::Stream<Item = Result<FetchLogsResult, Box<dyn Error + Send>>> + Send + Unpin
 {
     // If the sink is slower than the producer it can lead to unbounded memory growth and
@@ -244,6 +245,7 @@ pub fn fetch_logs_stream(
                         config.clickhouse(),
                         config.streams_clients(),
                         &registry,
+                        trace_registry.as_deref(),
                     )
                     .await;
                 }
@@ -349,6 +351,7 @@ pub fn fetch_logs_stream(
                 config.clickhouse(),
                 config.streams_clients(),
                 &registry,
+                trace_registry.as_deref(),
             )
             .await;
         }
@@ -1113,6 +1116,7 @@ async fn live_indexing_stream(
     clickhouse: Option<Arc<ClickhouseClient>>,
     streams_clients: Arc<Option<StreamsClients>>,
     registry: &EventCallbackRegistry,
+    trace_registry: Option<&TraceCallbackRegistry>,
 ) {
     let mut last_seen_block_number = last_seen_block_number;
     let mut log_response_to_large_to_block: Option<U64> = None;
@@ -1179,6 +1183,7 @@ async fn live_indexing_stream(
                             postgres: postgres.as_deref(),
                             clickhouse: clickhouse.as_ref(),
                             registry: Some(registry),
+                            trace_registry,
                             streams_clients: streams_clients.as_ref().as_ref(),
                         };
                         if let Err(e) = guard.handle_reorg(task, &reorg_ctx).await {
@@ -1252,6 +1257,7 @@ async fn live_indexing_stream(
                             postgres: postgres.as_deref(),
                             clickhouse: clickhouse.as_ref(),
                             registry: Some(registry),
+                            trace_registry,
                             streams_clients: streams_clients.as_ref().as_ref(),
                         };
                         // Mutex held across reorg handling (DB rollback, stream publishes).
@@ -1459,6 +1465,7 @@ async fn live_indexing_stream(
                                                             postgres: postgres.as_deref(),
                                                             clickhouse: clickhouse.as_ref(),
                                                             registry: Some(registry),
+                                                            trace_registry,
                                                             streams_clients: streams_clients
                                                                 .as_ref()
                                                                 .as_ref(),

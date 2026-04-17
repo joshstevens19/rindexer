@@ -454,11 +454,12 @@ impl TraceCallbackRegistryInformation {
 #[derive(Clone, Default)]
 pub struct TraceCallbackRegistry {
     pub events: Vec<TraceCallbackRegistryInformation>,
+    pub on_reorg: Vec<OnReorgCallback>,
 }
 
 impl TraceCallbackRegistry {
     pub fn new() -> Self {
-        TraceCallbackRegistry { events: Vec::new() }
+        TraceCallbackRegistry { events: Vec::new(), on_reorg: Vec::new() }
     }
 
     pub fn find_event(&self, id: &String) -> Option<&TraceCallbackRegistryInformation> {
@@ -467,6 +468,16 @@ impl TraceCallbackRegistry {
 
     pub fn register_event(&mut self, event: TraceCallbackRegistryInformation) {
         self.events.push(event);
+    }
+
+    pub fn register_on_reorg(&mut self, callback: OnReorgCallback) {
+        self.on_reorg.push(callback);
+    }
+
+    pub async fn fire_on_reorg(&self, notification: ReorgNotification) {
+        for callback in &self.on_reorg {
+            callback(notification.clone()).await;
+        }
     }
 
     pub async fn trigger_event(&self, id: &String, data: Vec<TraceResult>) -> Result<(), String> {

@@ -262,6 +262,7 @@ async fn start_indexing_traces(
         // Create a shared registry for this network's events
         let network_registry = Arc::new(TraceCallbackRegistry {
             events: events.iter().map(|e| (*e).clone()).collect(),
+            on_reorg: trace_registry.on_reorg.clone(),
         });
 
         let config = Arc::new(TraceProcessingConfig {
@@ -298,6 +299,7 @@ async fn start_indexing_traces(
             reorg_coordinator,
             clickhouse.clone(),
             streams_clients,
+            trace_registry.clone(),
         ));
 
         non_blocking_process_events.push(block_fetch_handle);
@@ -716,6 +718,7 @@ async fn start_indexing_contract_events(
                         postgres: postgres.as_deref(),
                         clickhouse: clickhouse.as_ref(),
                         registry: Some(&registry),
+                        trace_registry: Some(&trace_registry),
                         streams_clients: reorg_ctx_streams(&startup_streams_clients),
                     };
                     if let Err(e) = coordinator.handle_reorg(startup_task, &reorg_ctx).await {
@@ -919,6 +922,7 @@ async fn start_indexing_contract_events(
             let process_event = tokio::spawn(process_non_blocking_event(
                 event_processing_config,
                 reorg_coordinator,
+                Some(trace_registry.clone()),
             ));
             non_blocking_process_events.push(process_event);
         }
@@ -1019,6 +1023,7 @@ async fn start_indexing_contract_events(
                                 postgres: postgres.as_deref(),
                                 clickhouse: clickhouse.as_ref(),
                                 registry: Some(&registry),
+                                trace_registry: Some(&trace_registry),
                                 streams_clients: reorg_ctx_streams(&dep_streams_clients),
                             };
                             if let Err(e) = coordinator.handle_reorg(startup_task, &reorg_ctx).await
@@ -1204,6 +1209,7 @@ async fn start_indexing(
     let dependency_handle: JoinHandle<Result<(), ProcessContractsEventsWithDependenciesError>> =
         tokio::spawn(process_contracts_events_with_dependencies(
             dependency_event_processing_configs,
+            trace_registry.clone(),
         ));
 
     let mut handles: Vec<JoinHandle<Result<(), CombinedLogEventProcessingError>>> = Vec::new();
@@ -1659,7 +1665,7 @@ mod tests {
             streams_clients: Arc::new(None),
         };
 
-        TraceCallbackRegistry { events: vec![info] }
+        TraceCallbackRegistry { events: vec![info], on_reorg: vec![] }
     }
 
     #[test]
