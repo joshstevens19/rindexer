@@ -288,16 +288,38 @@ contracts:
     std::fs::write(dir.join("rindexer.yaml"), yaml).expect("write yaml");
 }
 
-/// Rows returned from the Ping event table, normalized to `(id, block_number)`
-/// for cross-run comparison.
-async fn query_ping_rows(pg: &tokio_postgres::Client, schema: &str) -> Vec<(String, i64)> {
+/// Rows returned from the Ping event table, normalized to a tuple of
+/// (id, block_number, tx_hash, log_index) for cross-run comparison. We include
+/// enough columns that any ordering / deduplication / metadata-attachment
+/// regression in the parallel path shows up as a diff.
+#[derive(Debug, PartialEq, Eq, Ord, PartialOrd, Clone)]
+struct PingRow {
+    id: String,
+    block_number: i64,
+    tx_hash: String,
+    log_index: String,
+    block_hash: String,
+    sender: String,
+}
+
+async fn query_ping_rows(pg: &tokio_postgres::Client, schema: &str) -> Vec<PingRow> {
     let table = format!("{}.ping", schema);
     let sql = format!(
-        "SELECT id::text, block_number::bigint FROM {} ORDER BY block_number ASC, id ASC",
+        "SELECT id::text, block_number::bigint, tx_hash, log_index::text, block_hash, sender \
+         FROM {} ORDER BY block_number ASC, log_index ASC, id ASC",
         table
     );
     let rows = pg.query(&sql, &[]).await.unwrap_or_else(|e| panic!("query {} failed: {}", sql, e));
-    rows.into_iter().map(|r| (r.get::<_, String>(0), r.get::<_, i64>(1))).collect()
+    rows.into_iter()
+        .map(|r| PingRow {
+            id: r.get::<_, String>(0),
+            block_number: r.get::<_, i64>(1),
+            tx_hash: r.get::<_, String>(2).trim().to_string(),
+            log_index: r.get::<_, String>(3),
+            block_hash: r.get::<_, String>(4).trim().to_string(),
+            sender: r.get::<_, String>(5).trim().to_string(),
+        })
+        .collect()
 }
 
 /// Run rindexer's historical-only pipeline programmatically and return once
@@ -364,7 +386,7 @@ async fn parallel_fetch_parity_across_worker_counts() {
     // Run 2: fetch_concurrency = 4
     // Run 3: fetch_concurrency = 8
     // -----------------------------------------------------------------
-    let mut per_run_rows: Vec<(usize, Vec<(String, i64)>)> = Vec::new();
+    let mut per_run_rows: Vec<(usize, Vec<PingRow>)> = Vec::new();
     for &concurrency in &[1usize, 4, 8] {
         // Unique indexer name → unique schema → isolated data per run.
         let indexer_name = format!("ParallelFetchC{concurrency}");
@@ -397,27 +419,43 @@ async fn parallel_fetch_parity_across_worker_counts() {
         // Strict block ordering — this is what the reorder buffer guarantees
         // for parallel runs and what the sequential run trivially provides.
         let mut last_block: i64 = -1;
-        for (_, blk) in &rows {
+        for r in &rows {
             assert!(
-                *blk >= last_block,
+                r.block_number >= last_block,
                 "fetch_concurrency={} emitted blocks out of order: {} after {}",
                 concurrency,
-                blk,
+                r.block_number,
                 last_block
             );
-            last_block = *blk;
+            last_block = r.block_number;
         }
 
-        // Every expected ping must be present at its correct block.
+        // Every expected ping must be present at its correct block, with a
+        // non-empty tx_hash and log_index (both populated by the log-fetcher).
         for (id, blk) in &expected_pings {
             let want_id = id.to_string();
             let want_blk = *blk as i64;
+            let row = rows
+                .iter()
+                .find(|r| r.id == want_id && r.block_number == want_blk)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "fetch_concurrency={} missing Ping(id={}, block={})",
+                        concurrency, id, blk
+                    )
+                });
             assert!(
-                rows.iter().any(|(r_id, r_blk)| r_id == &want_id && *r_blk == want_blk),
-                "fetch_concurrency={} missing Ping(id={}, block={})",
+                row.tx_hash.starts_with("0x") && row.tx_hash.len() == 66,
+                "fetch_concurrency={} row for id={} has bad tx_hash: {:?}",
                 concurrency,
                 id,
-                blk
+                row.tx_hash
+            );
+            assert!(
+                !row.log_index.is_empty(),
+                "fetch_concurrency={} row for id={} has empty log_index",
+                concurrency,
+                id
             );
         }
 
@@ -475,19 +513,28 @@ async fn parallel_fetch_large_range_eight_workers() {
     assert_eq!(rows.len(), expected_pings.len());
 
     let mut last_block: i64 = -1;
-    for (_, blk) in &rows {
-        assert!(*blk >= last_block, "out-of-order block {} after {}", blk, last_block);
-        last_block = *blk;
+    for r in &rows {
+        assert!(
+            r.block_number >= last_block,
+            "out-of-order block {} after {}",
+            r.block_number,
+            last_block
+        );
+        last_block = r.block_number;
     }
 
     for (id, blk) in &expected_pings {
         let want_id = id.to_string();
         let want_blk = *blk as i64;
+        let row = rows
+            .iter()
+            .find(|r| r.id == want_id && r.block_number == want_blk)
+            .unwrap_or_else(|| panic!("missing Ping(id={}, block={})", id, blk));
         assert!(
-            rows.iter().any(|(r_id, r_blk)| r_id == &want_id && *r_blk == want_blk),
-            "missing Ping(id={}, block={})",
+            row.tx_hash.starts_with("0x") && row.tx_hash.len() == 66,
+            "row for id={} has bad tx_hash: {:?}",
             id,
-            blk
+            row.tx_hash
         );
     }
 }
