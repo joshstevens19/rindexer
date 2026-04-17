@@ -343,6 +343,45 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
             let (from_block, to_block, network) =
                 results.first_metadata().expect("event_length > 0 guarantees at least one entry");
 
+            // Determine block range and network.
+            // For Trace results, NativeTransfer entries carry the batch metadata; if
+            // a batch has only Block entries (no-op blocks), there's nothing for this
+            // callback to process, so short-circuit.
+            let batch_meta = match &results {
+                CallbackResult::Event(event) => {
+                    let first = event.first().expect("event_length > 0 verified above");
+                    Some((
+                        first.found_in_request.from_block,
+                        first.found_in_request.to_block,
+                        first.tx_information.network.clone(),
+                    ))
+                }
+                CallbackResult::Trace(event) => event.iter().find_map(|result| match result {
+                    TraceResult::NativeTransfer { found_in_request, tx_information, .. } => {
+                        Some((
+                            found_in_request.from_block,
+                            found_in_request.to_block,
+                            tx_information.network.clone(),
+                        ))
+                    }
+                    TraceResult::Block { .. } => None,
+                }),
+            };
+
+            let (from_block, to_block, network) = match batch_meta {
+                Some(meta) => meta,
+                None => {
+                    debug!(
+                        "{} {}: {} - {}",
+                        params.indexer_name,
+                        params.contract_name,
+                        params.event_info.name,
+                        "NO NATIVE TRANSFER EVENTS IN TRACE BATCH"
+                    );
+                    return Ok(());
+                }
+            };
+
             let mut indexed_count = 0;
             let mut sql_bulk_data: Vec<Vec<EthereumSqlTypeWrapper>> = Vec::new();
             let mut sql_bulk_column_types: Vec<PgType> = Vec::new();
