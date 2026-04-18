@@ -1455,11 +1455,10 @@ async fn live_indexing_stream(
                                                 // isolation. If latency becomes a concern, move
                                                 // handle_reorg out of the hot path.
                                                 let mut guard = coordinator.lock().await;
-                                                match guard
-                                                    .try_create_reorg_task_for_block_range(
-                                                        min_removed_block,
-                                                        to_block.to::<u64>(),
-                                                    ) {
+                                                match guard.try_create_reorg_task_for_block_range(
+                                                    min_removed_block,
+                                                    to_block.to::<u64>(),
+                                                ) {
                                                     Ok(task) => {
                                                         let reorg_ctx = ReorgContext {
                                                             postgres: postgres.as_deref(),

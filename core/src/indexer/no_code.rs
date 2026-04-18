@@ -239,8 +239,7 @@ pub async fn setup_no_code(
                 &network_providers,
             )
             .await?;
-            let trace_registry =
-                TraceCallbackRegistry { events: trace_events, on_reorg: vec![] };
+            let trace_registry = TraceCallbackRegistry { events: trace_events, on_reorg: vec![] };
 
             if manifest.has_enabled_native_transfers() {
                 info!(
@@ -383,13 +382,11 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                     ))
                 }
                 CallbackResult::Trace(event) => event.iter().find_map(|result| match result {
-                    TraceResult::NativeTransfer { found_in_request, tx_information, .. } => {
-                        Some((
-                            found_in_request.from_block,
-                            found_in_request.to_block,
-                            tx_information.network.clone(),
-                        ))
-                    }
+                    TraceResult::NativeTransfer { found_in_request, tx_information, .. } => Some((
+                        found_in_request.from_block,
+                        found_in_request.to_block,
+                        tx_information.network.clone(),
+                    )),
                     TraceResult::Block { .. } => None,
                 }),
             };
@@ -1245,11 +1242,8 @@ storage:
         let table = &tables[0];
         assert_eq!(table.name, "balances");
 
-        let account = table
-            .columns
-            .iter()
-            .find(|c| c.name == "account")
-            .expect("account column present");
+        let account =
+            table.columns.iter().find(|c| c.name == "account").expect("account column present");
         assert_eq!(account.resolved_type(), &ColumnType::Address);
 
         let total_sent = table

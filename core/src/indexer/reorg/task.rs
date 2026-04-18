@@ -1094,12 +1094,8 @@ mod tests {
 
     #[test]
     fn test_derived_column_journal_happy_path_empty_where_columns() {
-        let jc = DerivedColumnJournal::try_new(
-            "max_trade".to_string(),
-            SetAction::Max,
-            vec![],
-        )
-        .expect("empty where_columns is allowed");
+        let jc = DerivedColumnJournal::try_new("max_trade".to_string(), SetAction::Max, vec![])
+            .expect("empty where_columns is allowed");
         assert_eq!(jc.derived_column, "max_trade");
         assert!(matches!(jc.action, SetAction::Max));
         assert!(jc.where_columns.is_empty());
@@ -1118,11 +1114,7 @@ mod tests {
 
     #[test]
     fn test_derived_column_journal_rejects_sql_injection() {
-        let err = DerivedColumnJournal::try_new(
-            "bad'--".to_string(),
-            SetAction::Set,
-            vec![],
-        );
+        let err = DerivedColumnJournal::try_new("bad'--".to_string(), SetAction::Set, vec![]);
         assert!(err.is_err(), "derived_column with SQL injection must be rejected");
 
         let err = DerivedColumnJournal::try_new(
@@ -1164,13 +1156,8 @@ mod tests {
 
     #[test]
     fn test_derived_table_info_happy_path_empty_ops() {
-        let dt = DerivedTableInfo::try_new(
-            "myschema.balances".to_string(),
-            false,
-            vec![],
-            vec![],
-        )
-        .expect("valid name should construct");
+        let dt = DerivedTableInfo::try_new("myschema.balances".to_string(), false, vec![], vec![])
+            .expect("valid name should construct");
         assert_eq!(dt.full_table_name, "myschema.balances");
         assert!(!dt.cross_chain);
         assert!(dt.rollback_ops.is_empty());
@@ -1191,13 +1178,8 @@ mod tests {
             None,
         )
         .unwrap();
-        let dt = DerivedTableInfo::try_new(
-            "myschema.balances".to_string(),
-            true,
-            vec![op],
-            vec![],
-        )
-        .expect("valid with one rollback op should construct");
+        let dt = DerivedTableInfo::try_new("myschema.balances".to_string(), true, vec![op], vec![])
+            .expect("valid with one rollback op should construct");
         assert_eq!(dt.full_table_name, "myschema.balances");
         assert!(dt.cross_chain);
         assert_eq!(dt.rollback_ops.len(), 1);

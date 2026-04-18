@@ -359,12 +359,7 @@ fn collect_streams_clients_for_network(
         }
     }
     for trace_event in &trace_registry.events {
-        if trace_event
-            .trace_information
-            .details
-            .iter()
-            .any(|d| d.network == network_name)
-        {
+        if trace_event.trace_information.details.iter().any(|d| d.network == network_name) {
             push(&trace_event.streams_clients);
         }
     }
@@ -459,8 +454,7 @@ fn build_derived_tables_for_event(
         }
 
         // Merge into existing entry or create a new one
-        if let Some(existing) =
-            derived.iter_mut().find(|d| d.full_table_name == tr.full_table_name)
+        if let Some(existing) = derived.iter_mut().find(|d| d.full_table_name == tr.full_table_name)
         {
             existing.rollback_ops.extend(rollback_ops);
             for jc in journal_columns {
@@ -1652,10 +1646,9 @@ mod tests {
         let noop_callback: Arc<
             dyn Fn(
                     Vec<crate::event::callback_registry::TraceResult>,
-                ) -> BoxFuture<
-                    'static,
-                    crate::event::callback_registry::EventCallbackResult<()>,
-                > + Send
+                )
+                    -> BoxFuture<'static, crate::event::callback_registry::EventCallbackResult<()>>
+                + Send
                 + Sync,
         > = Arc::new(|_| async { Ok(()) }.boxed());
 
@@ -1729,8 +1722,8 @@ mod tests {
 
         // Simulate the dep-events primary lookup yielding None, then the fallback.
         let primary: Option<Arc<dyn ChainProvider>> = None;
-        let resolved = primary
-            .or_else(|| find_provider_in_trace_registry(&trace_registry, "anvil"));
+        let resolved =
+            primary.or_else(|| find_provider_in_trace_registry(&trace_registry, "anvil"));
 
         assert!(resolved.is_some(), "dep-events fallback must resolve via trace registry");
         assert!(Arc::ptr_eq(&resolved.unwrap(), &mock_provider));
@@ -1746,13 +1739,9 @@ mod tests {
         let trace_registry = trace_registry_with_network("anvil", mock_provider);
         let registry = EventCallbackRegistry::new();
 
-        let collected =
-            collect_streams_clients_for_network(&registry, &trace_registry, "anvil");
+        let collected = collect_streams_clients_for_network(&registry, &trace_registry, "anvil");
 
-        assert!(
-            collected.is_empty(),
-            "entries with Arc::new(None) must be filtered out"
-        );
+        assert!(collected.is_empty(), "entries with Arc::new(None) must be filtered out");
     }
 
     #[test]
@@ -1764,8 +1753,7 @@ mod tests {
         let trace_registry = trace_registry_with_network("anvil", mock_provider);
         let registry = EventCallbackRegistry::new();
 
-        let collected =
-            collect_streams_clients_for_network(&registry, &trace_registry, "mainnet");
+        let collected = collect_streams_clients_for_network(&registry, &trace_registry, "mainnet");
 
         assert!(collected.is_empty(), "no entry matches network 'mainnet'");
     }
@@ -1829,8 +1817,7 @@ mod tests {
             database: None,
         };
 
-        let runtime =
-            TableRuntime::new(table, "test_indexer", NATIVE_TRANSFER_CONTRACT_NAME);
+        let runtime = TableRuntime::new(table, "test_indexer", NATIVE_TRANSFER_CONTRACT_NAME);
         let tables = vec![runtime];
 
         let mut accumulator: HashMap<String, Vec<DerivedTableInfo>> = HashMap::new();

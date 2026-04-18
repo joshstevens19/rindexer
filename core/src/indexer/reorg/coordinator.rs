@@ -409,10 +409,7 @@ impl ReorgCoordinator {
             let tx_hashes = affected_tx_hashes.clone();
             let affected_tables = affected_tables.clone();
             Some(async move {
-                let clients = clients_arc
-                    .as_ref()
-                    .as_ref()
-                    .expect("filter_map above ensures Some");
+                let clients = clients_arc.as_ref().as_ref().expect("filter_map above ensures Some");
                 clients
                     .stream_reorg(
                         &network,
@@ -696,8 +693,11 @@ mod tests {
 
         coordinator.handle_reorg(task, &ctx).await.unwrap();
 
-        let notification =
-            captured.lock().unwrap().take().expect("trace_registry on_reorg callback was not fired");
+        let notification = captured
+            .lock()
+            .unwrap()
+            .take()
+            .expect("trace_registry on_reorg callback was not fired");
         assert_eq!(notification.network, "test");
         assert_eq!(notification.fork_block, 11);
         assert_eq!(notification.detection_block, 12);
