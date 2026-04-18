@@ -191,9 +191,15 @@ async fn start_indexing_traces(
     cancel_token: CancellationToken,
     progress: Arc<IndexingEventsProgressState>,
     network_coordinators: &HashMap<String, Arc<Mutex<ReorgCoordinator>>>,
+    no_live_indexing_forced: bool,
 ) -> Result<Vec<JoinHandle<Result<(), ProcessEventError>>>, StartIndexingError> {
     if !manifest.native_transfers.enabled {
         info!("Native transfer indexing disabled!");
+        return Ok(vec![]);
+    }
+
+    if no_live_indexing_forced {
+        info!("Native transfer indexing skipped in historical-only pass (no end_block semantic)");
         return Ok(vec![]);
     }
 
@@ -1201,6 +1207,7 @@ async fn start_indexing(
         cancel_token.clone(),
         progress.clone(),
         &network_coordinators,
+        no_live_indexing_forced,
     )
     .await?;
 
