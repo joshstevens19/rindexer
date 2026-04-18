@@ -8,7 +8,6 @@ use crate::indexer::reorg::{
     detect_and_handle_reorg, reorg_safe_distance_for_chain, ReorgContext, ReorgCoordinator,
 };
 use crate::metrics::indexing as metrics;
-use crate::streams::StreamsClients;
 use crate::PostgresClient;
 use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
@@ -243,7 +242,6 @@ pub fn fetch_logs_stream(
                         reorg_coordinator,
                         config.postgres(),
                         config.clickhouse(),
-                        config.streams_clients(),
                         &registry,
                         trace_registry.as_deref(),
                     )
@@ -349,7 +347,6 @@ pub fn fetch_logs_stream(
                 reorg_coordinator,
                 config.postgres(),
                 config.clickhouse(),
-                config.streams_clients(),
                 &registry,
                 trace_registry.as_deref(),
             )
@@ -1114,7 +1111,6 @@ async fn live_indexing_stream(
     reorg_coordinator: Option<Arc<Mutex<ReorgCoordinator>>>,
     postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickhouseClient>>,
-    streams_clients: Arc<Option<StreamsClients>>,
     registry: &EventCallbackRegistry,
     trace_registry: Option<&TraceCallbackRegistry>,
 ) {
@@ -1185,7 +1181,6 @@ async fn live_indexing_stream(
                             clickhouse: clickhouse.as_ref(),
                             registry: Some(registry),
                             trace_registry,
-                            streams_clients: streams_clients.as_ref().as_ref(),
                         };
                         if let Err(e) = guard.handle_reorg(task, &reorg_ctx).await {
                             error!("{} - Failed to handle ExEx reorg: {:?}", info_log_name, e);
@@ -1259,7 +1254,6 @@ async fn live_indexing_stream(
                             clickhouse: clickhouse.as_ref(),
                             registry: Some(registry),
                             trace_registry,
-                            streams_clients: streams_clients.as_ref().as_ref(),
                         };
                         // Mutex held across reorg handling (DB rollback, stream publishes,
                         // user on_reorg callback firing). On a real reorg this blocks the
@@ -1469,9 +1463,6 @@ async fn live_indexing_stream(
                                                             clickhouse: clickhouse.as_ref(),
                                                             registry: Some(registry),
                                                             trace_registry,
-                                                            streams_clients: streams_clients
-                                                                .as_ref()
-                                                                .as_ref(),
                                                         };
                                                         if let Err(e) = guard
                                                             .handle_reorg(task, &reorg_ctx)

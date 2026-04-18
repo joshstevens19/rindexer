@@ -18,7 +18,6 @@ use crate::database::clickhouse::client::ClickhouseClient;
 use crate::indexer::reorg::{detect_and_handle_reorg, ReorgContext, ReorgCoordinator};
 use crate::is_running;
 use crate::provider::RECOMMENDED_RPC_CHUNK_SIZE;
-use crate::streams::StreamsClients;
 use crate::PostgresClient;
 use crate::{
     event::{
@@ -130,7 +129,6 @@ pub(crate) async fn native_transfer_detect_reorg_in_range(
     coordinator: Option<&Arc<Mutex<ReorgCoordinator>>>,
     postgres: Option<&PostgresClient>,
     clickhouse: Option<&Arc<ClickhouseClient>>,
-    streams_clients: Option<&StreamsClients>,
     trace_registry: Option<&TraceCallbackRegistry>,
     network: &str,
     from_block: u64,
@@ -182,7 +180,6 @@ pub(crate) async fn native_transfer_detect_reorg_in_range(
         clickhouse,
         registry: None,
         trace_registry,
-        streams_clients,
     };
 
     for block in blocks {
@@ -244,7 +241,6 @@ pub async fn native_transfer_block_fetch(
     _indexer_name: String,
     reorg_coordinator: Option<Arc<Mutex<ReorgCoordinator>>>,
     clickhouse: Option<Arc<ClickhouseClient>>,
-    streams_clients: Arc<Option<StreamsClients>>,
     trace_registry: Arc<TraceCallbackRegistry>,
 ) -> Result<(), ProcessEventError> {
     let mut last_seen_block = start_block;
@@ -279,7 +275,6 @@ pub async fn native_transfer_block_fetch(
                         clickhouse: clickhouse.as_ref(),
                         registry: None,
                         trace_registry: Some(trace_registry.as_ref()),
-                        streams_clients: streams_clients.as_ref().as_ref(),
                     };
                     match detect_and_handle_reorg(
                         &mut guard,
@@ -332,7 +327,6 @@ pub async fn native_transfer_block_fetch(
                         reorg_coordinator.as_ref(),
                         postgres.as_deref(),
                         clickhouse.as_ref(),
-                        streams_clients.as_ref().as_ref(),
                         Some(trace_registry.as_ref()),
                         &network,
                         from_block.to::<u64>(),
@@ -1000,6 +994,7 @@ mod tests {
             provider,
             vec![],
             vec![],
+            vec![],
         )
         .unwrap();
         Arc::new(Mutex::new(coord))
@@ -1021,7 +1016,6 @@ mod tests {
         let outcome = native_transfer_detect_reorg_in_range(
             provider.as_ref(),
             Some(&coordinator),
-            None,
             None,
             None,
             None,
@@ -1055,7 +1049,6 @@ mod tests {
         let outcome = native_transfer_detect_reorg_in_range(
             provider.as_ref(),
             Some(&coordinator),
-            None,
             None,
             None,
             None,
@@ -1116,7 +1109,6 @@ mod tests {
             None,
             None,
             None,
-            None,
             "ethereum",
             10,
             12,
@@ -1138,7 +1130,6 @@ mod tests {
 
         let outcome = native_transfer_detect_reorg_in_range(
             provider.as_ref(),
-            None,
             None,
             None,
             None,
