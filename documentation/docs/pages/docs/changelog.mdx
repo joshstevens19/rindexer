@@ -9,6 +9,7 @@
 - fix: Handle int/uint array types (e.g. `uint256[]`) in `parse_solidity_integer_type` to prevent ParseIntError during codegen
 
 - fix: ClickHouse hash serialization so String are stored as proper strings instead of corrupted scientific-notation values.
+- fix: native-transfer indexing no longer panics on trace batches containing only block entries (empty blocks).
 - fix: **Live-indexing heartbeat log replaced** — the previous `"No new blocks published in the last 5 minutes"` info log fired spuriously whenever the RPC provider returned a cached tip (every ~half block-time) and could not distinguish a healthy cache hit from a genuinely stuck RPC. It is replaced with a new tip-advance heartbeat that emits either `"Indexing alive - chain tip X"` (info) when the tip has advanced within the interval, or `"RPC tip has not advanced past block X in the last 5 minutes"` (warn) when the tip is genuinely stuck. Log-based alerts that grepped the old message must be updated to match the new warn text.
 
 ### Features
@@ -24,6 +25,11 @@
 - feat: **`latest_blocks` internal table** — new `rindexer_internal.latest_blocks` table (PostgreSQL + ClickHouse) persists the block hash window for offline reorg detection on restart.
 - feat: **SQL injection defenses** — all user-supplied identifiers from YAML specs are validated at startup before SQL interpolation: table/column names, network names, and filter conditions are checked against injection patterns.
 - feat: **Reorg metrics** — four new Prometheus metrics: `rindexer_reorg_handling_duration_seconds`, `rindexer_reorg_events_deleted_total`, `rindexer_reorg_detection_source_total`, `rindexer_reorg_cascade_total`.
+- feat: **Native-transfer-only reorg detection** — networks indexing only native transfers now get their own `ReorgCoordinator`. Mixed contract+NT configs share one coordinator so a reorg detected by either pipeline rolls back both.
+- feat: **`native_transfers.tables`** — new `tables` field mirroring `contracts[].tables`. Aggregation tables keyed on `NativeTransfer` events participate in reorg rollback.
+- feat: **`on_reorg` for native transfers** — register reorg callbacks on `TraceCallbackRegistry::register_on_reorg`, matching the `EventCallbackRegistry` API.
+- feat: **Enriched `__rindexer_reorg` payload** — adds `events_deleted` total and `affected_events` array (`{indexer, contract, event, schema, table, rows_deleted}` per source table). Additive JSON.
+- feat: **Reorg notifications fan out across all streams on a network** — `__rindexer_reorg` reaches every configured stream on the network regardless of which pipeline detected the reorg. Dispatched in parallel.
 
 ## Releases
 -------------------------------------------------
