@@ -1,4 +1,4 @@
-use crate::adaptive_concurrency::AdaptiveConcurrency;
+use crate::adaptive_concurrency::{AdaptiveConcurrency, ADAPTIVE_CONCURRENCY};
 use crate::blockclock::BlockClock;
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::event::callback_registry::EventCallbackRegistry;
@@ -117,11 +117,6 @@ pub fn fetch_logs_stream(
                 let (worker_tx, mut worker_rx) =
                     mpsc::channel::<SequencedFetchBatch>(effective_concurrency * 2);
 
-                let controller = Arc::new(AdaptiveConcurrency::new(
-                    effective_concurrency,
-                    1,
-                    effective_concurrency,
-                ));
                 let active_workers = Arc::new(AtomicUsize::new(0));
                 let worker_done_notify = Arc::new(tokio::sync::Notify::new());
                 let cancel_token = config.cancel_token().clone();
@@ -131,7 +126,9 @@ pub fn fetch_logs_stream(
                 let dispatcher_filter = current_filter.clone();
                 let dispatcher_config = Arc::clone(&config);
                 let dispatcher_cancel = cancel_token.clone();
-                let dispatcher_controller = Arc::clone(&controller);
+                // Shared: a 429 from any worker (any event) shrinks live
+                // concurrency for all of them.
+                let dispatcher_controller = Arc::clone(&ADAPTIVE_CONCURRENCY);
                 let dispatcher_active = Arc::clone(&active_workers);
                 let dispatcher_notify = Arc::clone(&worker_done_notify);
                 let dispatcher_handle = tokio::spawn(async move {
@@ -149,7 +146,8 @@ pub fn fetch_logs_stream(
                         loop {
                             let notified = dispatcher_notify.notified();
                             let active = dispatcher_active.load(Ordering::Acquire);
-                            let limit = dispatcher_controller.current();
+                            let limit =
+                                dispatcher_controller.current().clamp(1, effective_concurrency);
                             if active < limit {
                                 break;
                             }
