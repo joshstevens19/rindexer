@@ -206,10 +206,10 @@ async fn start_indexing_traces(
     let mut non_blocking_process_events = Vec::new();
 
     // Group events by network to create one pipeline per network
-    let mut network_events: std::collections::HashMap<
+    let mut network_events: HashMap<
         String,
         Vec<&crate::event::callback_registry::TraceCallbackRegistryInformation>,
-    > = std::collections::HashMap::new();
+    > = HashMap::new();
 
     for event in trace_registry.events.iter() {
         for network in event.trace_information.details.iter() {

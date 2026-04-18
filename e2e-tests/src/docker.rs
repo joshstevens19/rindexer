@@ -63,7 +63,7 @@ pub async fn start_postgres_container() -> Result<(String, u16)> {
 /// Wait for Postgres to accept connections via `tokio-postgres`.
 pub async fn wait_for_postgres_ready(port: u16, timeout_seconds: u64) -> Result<()> {
     let start = std::time::Instant::now();
-    let timeout = std::time::Duration::from_secs(timeout_seconds);
+    let timeout = Duration::from_secs(timeout_seconds);
     let conn_str =
         format!("host=localhost port={} user=postgres password=postgres dbname=postgres", port);
 
@@ -190,7 +190,7 @@ pub async fn start_clickhouse_container() -> Result<(String, u16)> {
 #[allow(dead_code)]
 pub async fn wait_for_clickhouse_ready(port: u16, timeout_seconds: u64) -> Result<()> {
     let start = std::time::Instant::now();
-    let timeout = std::time::Duration::from_secs(timeout_seconds);
+    let timeout = Duration::from_secs(timeout_seconds);
     let url = format!("http://localhost:{}/?query=SELECT%201", port);
     let client = reqwest::Client::new();
 

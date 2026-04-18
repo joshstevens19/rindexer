@@ -2495,13 +2495,13 @@ mod tests {
     #[test]
     #[should_panic(expected = "Unsupported")]
     fn test_ch_jsonb_panics() {
-        EthereumSqlTypeWrapper::JSONB(serde_json::json!({"k": "v"})).to_clickhouse_value();
+        EthereumSqlTypeWrapper::JSONB(json!({"k": "v"})).to_clickhouse_value();
     }
 
     #[test]
     #[should_panic(expected = "Unsupported")]
     fn test_ch_uuid_panics() {
-        EthereumSqlTypeWrapper::Uuid(uuid::Uuid::new_v4()).to_clickhouse_value();
+        EthereumSqlTypeWrapper::Uuid(Uuid::new_v4()).to_clickhouse_value();
     }
 
     // =========================================================================

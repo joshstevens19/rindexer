@@ -164,7 +164,7 @@ fn is_event_field_reference_for_cron(value: &str) -> Option<String> {
 }
 
 fn substitute_env_variables(contents: &str) -> Result<String, regex::Error> {
-    let re = Regex::new(r"\$\{([^}]+)\}")?;
+    let re = Regex::new(r"\$\{([^}]+)}")?;
     let result = re.replace_all(contents, |caps: &Captures| {
         let var_name = &caps[1];
         match env::var(var_name) {
@@ -420,7 +420,7 @@ fn validate_manifest(
                 }
 
                 // Collect table column names for validation
-                let table_column_names: std::collections::HashSet<&str> =
+                let table_column_names: HashSet<&str> =
                     table.columns.iter().map(|c| c.name.as_str()).collect();
 
                 for event_mapping in &table.events {
@@ -437,7 +437,7 @@ fn validate_manifest(
                     let abi_event = abi_event.unwrap();
 
                     // Collect event input names for validation
-                    let event_input_names: std::collections::HashSet<&str> =
+                    let event_input_names: HashSet<&str> =
                         abi_event.inputs.iter().map(|i| i.name.as_str()).collect();
 
                     // Built-in transaction metadata fields that are always available
@@ -453,8 +453,7 @@ fn validate_manifest(
                     ];
 
                     // Validate iterate bindings and collect aliases for later validation
-                    let mut iterate_aliases: std::collections::HashSet<String> =
-                        std::collections::HashSet::new();
+                    let mut iterate_aliases: HashSet<String> = HashSet::new();
                     for binding in &event_mapping.iterate {
                         // Check that the array field exists in the event
                         // Strip any nested path to get the root field
@@ -695,7 +694,7 @@ fn validate_manifest(
                     use crate::manifest::contract::parse_interval;
 
                     // Collect contract network names for validation
-                    let contract_networks: std::collections::HashSet<&str> =
+                    let contract_networks: HashSet<&str> =
                         contract.details.iter().map(|d| d.network.as_str()).collect();
 
                     for cron in cron_entries {

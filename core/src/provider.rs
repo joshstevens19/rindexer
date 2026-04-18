@@ -431,8 +431,8 @@ impl JsonRpcCachedProvider {
     #[tracing::instrument(skip_all)]
     pub async fn eth_call(
         &self,
-        to: alloy::primitives::Address,
-        data: alloy::primitives::Bytes,
+        to: Address,
+        data: Bytes,
         block_number: u64,
     ) -> Result<String, ProviderError> {
         let result: String = self
@@ -440,7 +440,7 @@ impl JsonRpcCachedProvider {
             .raw_request(
                 "eth_call".into(),
                 (
-                    serde_json::json!({
+                    json!({
                         "to": format!("{:?}", to),
                         "data": format!("0x{}", hex::encode(&data)),
                     }),
@@ -455,17 +455,13 @@ impl JsonRpcCachedProvider {
     /// Executes eth_call at the "latest" block.
     /// Use this for immutable data (symbol, decimals, name) that doesn't change.
     #[tracing::instrument(skip_all)]
-    pub async fn eth_call_latest(
-        &self,
-        to: alloy::primitives::Address,
-        data: alloy::primitives::Bytes,
-    ) -> Result<String, ProviderError> {
+    pub async fn eth_call_latest(&self, to: Address, data: Bytes) -> Result<String, ProviderError> {
         let result: String = self
             .provider
             .raw_request(
                 "eth_call".into(),
                 (
-                    serde_json::json!({
+                    json!({
                         "to": format!("{:?}", to),
                         "data": format!("0x{}", hex::encode(&data)),
                     }),

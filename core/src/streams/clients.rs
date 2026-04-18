@@ -869,7 +869,7 @@ impl StreamsClients {
     ///   configured `routing_key`. Fanout exchanges ignore the routing
     ///   key. Topic and direct exchanges require a non-`None` routing key
     ///   at manifest-validation time — this is enforced by
-    ///   [`crate::manifest::stream::RabbitMQStreamConfig::validate`].
+    ///   [`RabbitMQStreamConfig::validate`].
     /// - **Redis**: `XADD`s to every configured stream whose `networks`
     ///   matches, under the `payload` field.
     /// - **CloudflareQueues**: enqueues (via the Cloudflare REST API) to
