@@ -1,13 +1,11 @@
 /// E2E validation tests for ClickHouse type handling and features.
 ///
 /// Unit tests (no CH needed): validate type mapping, serialization, YAML parsing.
-/// Integration tests (#[ignore]): validate full round-trip against a real ClickHouse.
+/// Integration tests: spin up a ClickHouse container per test via testcontainers
+/// and validate full round-trip queries against it.
 ///
-/// Run unit tests:  cargo test -p rindexer --test clickhouse_type_e2e
-/// Run E2E tests:   cargo test -p rindexer --test clickhouse_type_e2e -- --ignored
-///
-/// E2E setup:
-///   docker run -d --name ch-test -p 8123:8123 clickhouse/clickhouse-server:24.8
+/// Requires Docker. Run via nextest so each test gets its own process:
+///   cargo nextest run -p rindexer --test clickhouse_type_e2e
 use rindexer::manifest::contract::ColumnType;
 
 // =========================================================================
@@ -131,111 +129,136 @@ fn test_table_database_field_independent_of_other_fields() {
 }
 
 // =========================================================================
-// E2E tests — require running ClickHouse (run with --ignored)
+// E2E tests — spin up ClickHouse via testcontainers
 // =========================================================================
 
 #[cfg(test)]
-fn ch_query(query: &str) -> Result<String, String> {
-    let url =
-        std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://localhost:8123".to_string());
-    let user = std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| "default".to_string());
-    let password = std::env::var("CLICKHOUSE_PASSWORD").unwrap_or_default();
+mod e2e {
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers::ContainerAsync;
+    use testcontainers_modules::clickhouse::ClickHouse as ClickHouseImage;
 
-    let full_url = format!("{}/?user={}&password={}", url, user, password);
-    let handle = std::process::Command::new("curl")
-        .args(["-sf", "--data-binary", query, &full_url])
-        .output()
-        .map_err(|e| format!("curl failed: {e}"))?;
-
-    if handle.status.success() {
-        Ok(String::from_utf8_lossy(&handle.stdout).trim().to_string())
-    } else {
-        Err(format!("CH error: {}", String::from_utf8_lossy(&handle.stderr).trim()))
+    pub(super) struct ChEnv {
+        pub url: String,
+        // Container handle kept alive for the duration of the test; the testcontainers
+        // crate stops + removes it on drop.
+        _container: ContainerAsync<ClickHouseImage>,
     }
-}
 
-#[cfg(test)]
-fn ch_setup_db(db: &str) {
-    ch_query(&format!("DROP DATABASE IF EXISTS {db}")).unwrap();
-    ch_query(&format!("CREATE DATABASE {db}")).unwrap();
-}
+    pub(super) async fn start() -> ChEnv {
+        let container =
+            ClickHouseImage::default().start().await.expect("failed to start clickhouse container");
+        let port = container.get_host_port_ipv4(8123).await.expect("failed to get clickhouse port");
+        ChEnv { url: format!("http://127.0.0.1:{}", port), _container: container }
+    }
 
-#[cfg(test)]
-fn ch_drop_db(db: &str) {
-    ch_query(&format!("DROP DATABASE IF EXISTS {db}")).unwrap();
+    pub(super) fn ch_query(url: &str, query: &str) -> Result<String, String> {
+        let full_url = format!("{}/?user=default&password=", url);
+        let handle = std::process::Command::new("curl")
+            .args(["-sf", "--data-binary", query, &full_url])
+            .output()
+            .map_err(|e| format!("curl failed: {e}"))?;
+
+        if handle.status.success() {
+            Ok(String::from_utf8_lossy(&handle.stdout).trim().to_string())
+        } else {
+            Err(format!("CH error: {}", String::from_utf8_lossy(&handle.stderr).trim()))
+        }
+    }
+
+    pub(super) fn create_db(url: &str, db: &str) {
+        ch_query(url, &format!("CREATE DATABASE {db}")).unwrap();
+    }
 }
 
 // ── Native types: CREATE + INSERT + Float64 division ──
 
-#[test]
-#[ignore]
-fn test_e2e_native_types_roundtrip() {
+#[tokio::test]
+async fn test_e2e_native_types_roundtrip() {
+    let env = e2e::start().await;
     let db = "rindexer_e2e_types";
-    ch_setup_db(db);
+    e2e::create_db(&env.url, db);
 
-    ch_query(&format!(
-        "CREATE TABLE {db}.events (
+    e2e::ch_query(
+        &env.url,
+        &format!(
+            "CREATE TABLE {db}.events (
             id UInt64, block_number UInt64,
             sender FixedString(42), recipient FixedString(42),
             amount UInt256, shares UInt256, fee UInt256,
             event_type String, side String, is_deleted UInt8
         ) ENGINE = MergeTree() ORDER BY id"
-    ))
+        ),
+    )
     .unwrap();
 
-    ch_query(&format!(
-        "INSERT INTO {db}.events VALUES \
+    e2e::ch_query(
+        &env.url,
+        &format!(
+            "INSERT INTO {db}.events VALUES \
         (1, 100, '0xaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaA', \
         '0xbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbB', \
         1500000, 2000000, 30000, 'SWAP', 'BUY', 0)"
-    ))
+        ),
+    )
     .unwrap();
 
     // UInt256 → Float64 division
-    let amount = ch_query(&format!("SELECT toFloat64(amount) / 1e6 FROM {db}.events")).unwrap();
+    let amount =
+        e2e::ch_query(&env.url, &format!("SELECT toFloat64(amount) / 1e6 FROM {db}.events"))
+            .unwrap();
     assert_eq!(amount, "1.5");
 
     // UInt256 / UInt256 → ratio
-    let ratio = ch_query(&format!("SELECT toFloat64(amount) / toFloat64(shares) FROM {db}.events"))
-        .unwrap();
+    let ratio = e2e::ch_query(
+        &env.url,
+        &format!("SELECT toFloat64(amount) / toFloat64(shares) FROM {db}.events"),
+    )
+    .unwrap();
     assert_eq!(ratio, "0.75");
 
     // lower() on FixedString(42)
-    let addr = ch_query(&format!("SELECT lower(sender) FROM {db}.events")).unwrap();
+    let addr = e2e::ch_query(&env.url, &format!("SELECT lower(sender) FROM {db}.events")).unwrap();
     assert_eq!(addr, "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-
-    ch_drop_db(db);
 }
 
 // ── Streaming MV: raw UInt256 → Float64 transform ──
 
-#[test]
-#[ignore]
-fn test_e2e_streaming_mv_transform() {
+#[tokio::test]
+async fn test_e2e_streaming_mv_transform() {
+    let env = e2e::start().await;
     let db = "rindexer_e2e_mv";
-    ch_setup_db(db);
+    e2e::create_db(&env.url, db);
 
     // Raw table (UInt256 amounts)
-    ch_query(&format!(
-        "CREATE TABLE {db}.raw_events (
+    e2e::ch_query(
+        &env.url,
+        &format!(
+            "CREATE TABLE {db}.raw_events (
             id UInt64, amount UInt256, shares UInt256,
             event_type String, source FixedString(42), fee UInt256, is_deleted UInt8
         ) ENGINE = MergeTree() ORDER BY id"
-    ))
+        ),
+    )
     .unwrap();
 
     // Transformed table (Float64)
-    ch_query(&format!(
-        "CREATE TABLE {db}.processed (
+    e2e::ch_query(
+        &env.url,
+        &format!(
+            "CREATE TABLE {db}.processed (
             id String, price Float64, amount Float64,
             shares Float64, fee Float64, is_deleted UInt8
         ) ENGINE = MergeTree() ORDER BY id"
-    ))
+        ),
+    )
     .unwrap();
 
     // Streaming MV with table alias to avoid CH alias shadowing
-    ch_query(&format!(
-        "CREATE MATERIALIZED VIEW {db}.mv_transform TO {db}.processed AS
+    e2e::ch_query(
+        &env.url,
+        &format!(
+            "CREATE MATERIALIZED VIEW {db}.mv_transform TO {db}.processed AS
         SELECT
             toString(r.id) AS id,
             if(r.shares = toUInt256(0), toFloat64(0),
@@ -249,174 +272,226 @@ fn test_e2e_streaming_mv_transform() {
             r.is_deleted
         FROM {db}.raw_events AS r
         WHERE r.event_type = 'SWAP'"
-    ))
+        ),
+    )
     .unwrap();
 
     // Insert raw data
-    ch_query(&format!(
-        "INSERT INTO {db}.raw_events VALUES \
+    e2e::ch_query(
+        &env.url,
+        &format!(
+            "INSERT INTO {db}.raw_events VALUES \
         (1, 1500000, 2000000, 'SWAP', '0xaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaA', 30000, 0), \
         (2, 500000, 1000000, 'SWAP', '0xcCcCcCcCcCcCcCcCcCcCcCcCcCcCcCcCcCcCcCcC', 10000, 0), \
         (3, 750000, 750000, 'DEPOSIT', '0xaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaA', 0, 0)"
-    ))
+        ),
+    )
     .unwrap();
 
     // MV captures only SWAP rows
-    let count = ch_query(&format!("SELECT count() FROM {db}.processed")).unwrap();
+    let count = e2e::ch_query(&env.url, &format!("SELECT count() FROM {db}.processed")).unwrap();
     assert_eq!(count, "2");
 
     // Row 1: matched source → fee applied
-    let r1 =
-        ch_query(&format!("SELECT amount, shares, price, fee FROM {db}.processed WHERE id = '1'"))
-            .unwrap();
+    let r1 = e2e::ch_query(
+        &env.url,
+        &format!("SELECT amount, shares, price, fee FROM {db}.processed WHERE id = '1'"),
+    )
+    .unwrap();
     assert_eq!(r1, "1.5\t2\t0.75\t0.03");
 
     // Row 2: unmatched source → fee = 0
-    let r2 =
-        ch_query(&format!("SELECT amount, shares, price, fee FROM {db}.processed WHERE id = '2'"))
-            .unwrap();
+    let r2 = e2e::ch_query(
+        &env.url,
+        &format!("SELECT amount, shares, price, fee FROM {db}.processed WHERE id = '2'"),
+    )
+    .unwrap();
     assert_eq!(r2, "0.5\t1\t0.5\t0");
-
-    ch_drop_db(db);
 }
 
 // ── UInt256 max value round-trip ──
 
-#[test]
-#[ignore]
-fn test_e2e_uint256_max_roundtrip() {
+#[tokio::test]
+async fn test_e2e_uint256_max_roundtrip() {
+    let env = e2e::start().await;
     let db = "rindexer_e2e_max";
     let max_str = "115792089237316195423570985008687907853269984665640564039457584007913129639935";
 
-    ch_setup_db(db);
-    ch_query(&format!("CREATE TABLE {db}.t (val UInt256) ENGINE = MergeTree() ORDER BY val"))
-        .unwrap();
+    e2e::create_db(&env.url, db);
+    e2e::ch_query(
+        &env.url,
+        &format!("CREATE TABLE {db}.t (val UInt256) ENGINE = MergeTree() ORDER BY val"),
+    )
+    .unwrap();
 
-    ch_query(&format!("INSERT INTO {db}.t VALUES ({max_str})")).unwrap();
-    let result = ch_query(&format!("SELECT val FROM {db}.t")).unwrap();
+    e2e::ch_query(&env.url, &format!("INSERT INTO {db}.t VALUES ({max_str})")).unwrap();
+    let result = e2e::ch_query(&env.url, &format!("SELECT val FROM {db}.t")).unwrap();
     assert_eq!(result, max_str, "U256::MAX must survive CH round-trip");
-
-    ch_drop_db(db);
 }
 
 // ── Database override: shared table across contracts ──
 
-#[test]
-#[ignore]
-fn test_e2e_database_override_shared_table() {
+#[tokio::test]
+async fn test_e2e_database_override_shared_table() {
+    let env = e2e::start().await;
     let shared = "rindexer_e2e_shared";
     let c1 = "rindexer_e2e_c1";
     let c2 = "rindexer_e2e_c2";
 
     for db in [shared, c1, c2] {
-        ch_setup_db(db);
+        e2e::create_db(&env.url, db);
     }
 
     // Per-contract raw tables (isolated — default rindexer behavior)
-    ch_query(&format!(
-        "CREATE TABLE {c1}.raw_events (sender String, amount UInt256) ENGINE = MergeTree() ORDER BY sender"
-    )).unwrap();
-    ch_query(&format!(
-        "CREATE TABLE {c2}.raw_events (sender String, amount UInt256) ENGINE = MergeTree() ORDER BY sender"
-    )).unwrap();
+    e2e::ch_query(
+        &env.url,
+        &format!(
+            "CREATE TABLE {c1}.raw_events (sender String, amount UInt256) ENGINE = MergeTree() ORDER BY sender"
+        ),
+    )
+    .unwrap();
+    e2e::ch_query(
+        &env.url,
+        &format!(
+            "CREATE TABLE {c2}.raw_events (sender String, amount UInt256) ENGINE = MergeTree() ORDER BY sender"
+        ),
+    )
+    .unwrap();
 
     // Shared custom table (what `database:` override produces)
-    ch_query(&format!(
-        "CREATE TABLE {shared}.events (
+    e2e::ch_query(
+        &env.url,
+        &format!(
+            "CREATE TABLE {shared}.events (
             id UInt64, source_contract String, user_id String, amount UInt256, event_type String
         ) ENGINE = MergeTree() ORDER BY id"
-    ))
+        ),
+    )
     .unwrap();
 
     // Contract 1 writes raw + shared
-    ch_query(&format!("INSERT INTO {c1}.raw_events VALUES ('alice', 1000000)")).unwrap();
-    ch_query(&format!(
-        "INSERT INTO {shared}.events VALUES \
+    e2e::ch_query(&env.url, &format!("INSERT INTO {c1}.raw_events VALUES ('alice', 1000000)"))
+        .unwrap();
+    e2e::ch_query(
+        &env.url,
+        &format!(
+            "INSERT INTO {shared}.events VALUES \
         (1, 'contract_a', 'alice', 1000000, 'SWAP'), \
         (2, 'contract_a', 'bob', 1000000, 'SWAP')"
-    ))
+        ),
+    )
     .unwrap();
 
     // Contract 2 writes raw + shared
-    ch_query(&format!("INSERT INTO {c2}.raw_events VALUES ('carol', 2000000)")).unwrap();
-    ch_query(&format!(
-        "INSERT INTO {shared}.events VALUES \
+    e2e::ch_query(&env.url, &format!("INSERT INTO {c2}.raw_events VALUES ('carol', 2000000)"))
+        .unwrap();
+    e2e::ch_query(
+        &env.url,
+        &format!(
+            "INSERT INTO {shared}.events VALUES \
         (3, 'contract_b', 'carol', 2000000, 'SWAP'), \
         (4, 'contract_b', 'dave', 2000000, 'SWAP')"
-    ))
+        ),
+    )
     .unwrap();
 
     // Raw tables isolated
-    assert_eq!(ch_query(&format!("SELECT count() FROM {c1}.raw_events")).unwrap(), "1");
-    assert_eq!(ch_query(&format!("SELECT count() FROM {c2}.raw_events")).unwrap(), "1");
+    assert_eq!(
+        e2e::ch_query(&env.url, &format!("SELECT count() FROM {c1}.raw_events")).unwrap(),
+        "1"
+    );
+    assert_eq!(
+        e2e::ch_query(&env.url, &format!("SELECT count() FROM {c2}.raw_events")).unwrap(),
+        "1"
+    );
 
     // Shared table has ALL rows from ALL contracts
-    assert_eq!(ch_query(&format!("SELECT count() FROM {shared}.events")).unwrap(), "4");
+    assert_eq!(
+        e2e::ch_query(&env.url, &format!("SELECT count() FROM {shared}.events")).unwrap(),
+        "4"
+    );
 
     // Can query across contracts from single table
-    let by_source = ch_query(&format!(
-        "SELECT source_contract, count() FROM {shared}.events GROUP BY source_contract ORDER BY source_contract"
-    )).unwrap();
+    let by_source = e2e::ch_query(
+        &env.url,
+        &format!(
+            "SELECT source_contract, count() FROM {shared}.events GROUP BY source_contract ORDER BY source_contract"
+        ),
+    )
+    .unwrap();
     assert_eq!(by_source, "contract_a\t2\ncontract_b\t2");
 
     // Streaming MV works on shared table
-    ch_query(&format!(
-        "CREATE TABLE {shared}.processed (id String, amount Float64) ENGINE = MergeTree() ORDER BY id"
-    )).unwrap();
-    ch_query(&format!(
-        "CREATE MATERIALIZED VIEW {shared}.mv TO {shared}.processed AS
+    e2e::ch_query(
+        &env.url,
+        &format!(
+            "CREATE TABLE {shared}.processed (id String, amount Float64) ENGINE = MergeTree() ORDER BY id"
+        ),
+    )
+    .unwrap();
+    e2e::ch_query(
+        &env.url,
+        &format!(
+            "CREATE MATERIALIZED VIEW {shared}.mv TO {shared}.processed AS
         SELECT toString(id) AS id, toFloat64(amount)/1e6 AS amount
         FROM {shared}.events WHERE event_type = 'SWAP'"
-    ))
+        ),
+    )
     .unwrap();
 
     // New insert triggers MV
-    ch_query(&format!(
-        "INSERT INTO {shared}.events VALUES (5, 'contract_a', 'eve', 3000000, 'SWAP')"
-    ))
+    e2e::ch_query(
+        &env.url,
+        &format!("INSERT INTO {shared}.events VALUES (5, 'contract_a', 'eve', 3000000, 'SWAP')"),
+    )
     .unwrap();
     assert_eq!(
-        ch_query(&format!("SELECT amount FROM {shared}.processed WHERE id = '5'")).unwrap(),
+        e2e::ch_query(&env.url, &format!("SELECT amount FROM {shared}.processed WHERE id = '5'"))
+            .unwrap(),
         "3"
     );
-
-    for db in [shared, c1, c2] {
-        ch_drop_db(db);
-    }
 }
 
 // ── Without database override: tables are per-contract ──
 
-#[test]
-#[ignore]
-fn test_e2e_default_per_contract_isolation() {
+#[tokio::test]
+async fn test_e2e_default_per_contract_isolation() {
+    let env = e2e::start().await;
     let db1 = "rindexer_e2e_iso1";
     let db2 = "rindexer_e2e_iso2";
 
     for db in [db1, db2] {
-        ch_setup_db(db);
+        e2e::create_db(&env.url, db);
     }
 
     // Each contract gets its own table (no override)
-    ch_query(&format!(
-        "CREATE TABLE {db1}.events (id UInt64, event_type String) ENGINE = MergeTree() ORDER BY id"
-    ))
+    e2e::ch_query(
+        &env.url,
+        &format!(
+            "CREATE TABLE {db1}.events (id UInt64, event_type String) ENGINE = MergeTree() ORDER BY id"
+        ),
+    )
     .unwrap();
-    ch_query(&format!(
-        "CREATE TABLE {db2}.events (id UInt64, event_type String) ENGINE = MergeTree() ORDER BY id"
-    ))
+    e2e::ch_query(
+        &env.url,
+        &format!(
+            "CREATE TABLE {db2}.events (id UInt64, event_type String) ENGINE = MergeTree() ORDER BY id"
+        ),
+    )
     .unwrap();
 
-    ch_query(&format!("INSERT INTO {db1}.events VALUES (1, 'SWAP')")).unwrap();
-    ch_query(&format!("INSERT INTO {db2}.events VALUES (2, 'DEPOSIT')")).unwrap();
+    e2e::ch_query(&env.url, &format!("INSERT INTO {db1}.events VALUES (1, 'SWAP')")).unwrap();
+    e2e::ch_query(&env.url, &format!("INSERT INTO {db2}.events VALUES (2, 'DEPOSIT')")).unwrap();
 
     // Tables are isolated
-    assert_eq!(ch_query(&format!("SELECT event_type FROM {db1}.events")).unwrap(), "SWAP");
-    assert_eq!(ch_query(&format!("SELECT event_type FROM {db2}.events")).unwrap(), "DEPOSIT");
-    assert_eq!(ch_query(&format!("SELECT count() FROM {db1}.events")).unwrap(), "1");
-    assert_eq!(ch_query(&format!("SELECT count() FROM {db2}.events")).unwrap(), "1");
-
-    for db in [db1, db2] {
-        ch_drop_db(db);
-    }
+    assert_eq!(
+        e2e::ch_query(&env.url, &format!("SELECT event_type FROM {db1}.events")).unwrap(),
+        "SWAP"
+    );
+    assert_eq!(
+        e2e::ch_query(&env.url, &format!("SELECT event_type FROM {db2}.events")).unwrap(),
+        "DEPOSIT"
+    );
+    assert_eq!(e2e::ch_query(&env.url, &format!("SELECT count() FROM {db1}.events")).unwrap(), "1");
+    assert_eq!(e2e::ch_query(&env.url, &format!("SELECT count() FROM {db2}.events")).unwrap(), "1");
 }

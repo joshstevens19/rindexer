@@ -4,8 +4,9 @@
 //! `fetch_concurrency` = 1 (sequential fallback), 4, and 8, asserting all
 //! three runs produce an identical, correctly-ordered set of events.
 //!
-//! Requires Docker. Must be run sequentially (tests share DATABASE_URL env):
-//!   cargo test -q -p rindexer --test e2e_parallel_fetch -- --ignored --test-threads=1
+//! Requires Docker. Run via nextest so each test gets its own process — the
+//! tests mutate `DATABASE_URL` env, which would race under `cargo test`:
+//!   cargo nextest run -q -p rindexer --test e2e_parallel_fetch
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -186,7 +187,7 @@ impl TestEnv {
         let accounts = get_accounts(&http, &rpc_url).await;
         let deployer = accounts[0];
 
-        // SAFETY: tests enforce --test-threads=1 via #[ignore], so no other
+        // SAFETY: nextest runs each test in its own process, so no other
         // thread reads these env vars concurrently.
         unsafe {
             std::env::set_var(
@@ -330,7 +331,6 @@ async fn run_rindexer_historical(manifest_path: PathBuf) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
 async fn parallel_fetch_parity_across_worker_counts() {
     let env = TestEnv::new().await;
 
@@ -463,7 +463,6 @@ async fn parallel_fetch_parity_across_worker_counts() {
 /// order when workers legitimately complete out of dispatch order.
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Docker"]
 async fn parallel_fetch_large_range_eight_workers() {
     let env = TestEnv::new().await;
 
