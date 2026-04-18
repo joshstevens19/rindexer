@@ -263,6 +263,25 @@ impl Manifest {
         self.all_contracts().iter().any(|c| c.details.iter().any(|p| p.end_block.is_none()))
     }
 
+    /// Returns true if any contract OR native-transfer network is configured
+    /// for live indexing (i.e., has `end_block` unset). Native-transfer-only
+    /// networks still need the live-indexing path — contracts alone don't
+    /// fully describe the run.
+    pub fn has_any_live_indexing(&self) -> bool {
+        if self.has_any_contracts_live_indexing() {
+            return true;
+        }
+        if !self.native_transfers.enabled {
+            return false;
+        }
+        match self.native_transfers.networks.as_ref() {
+            Some(networks) => networks.iter().any(|n| n.end_block.is_none()),
+            // `None` means "all supported networks" per the NT manifest
+            // semantics (see `set_native_transfer_networks`) — live by default.
+            None => true,
+        }
+    }
+
     /// Check if the manifest has opted-in to indexing native transfers. It is off by default.
     pub fn has_enabled_native_transfers(&self) -> bool {
         self.native_transfers.enabled
@@ -509,5 +528,137 @@ mod tests {
 
         let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(manifest.timestamps, Some(true));
+    }
+
+    // ======================================================================
+    // Manifest::has_any_live_indexing — contracts + native-transfer recognition
+    // ======================================================================
+
+    #[test]
+    fn has_any_live_indexing_empty_manifest() {
+        let yaml = r#"
+        name: test
+        project_type: no-code
+        networks: []
+        contracts: []
+        "#;
+        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
+        assert!(!manifest.has_any_live_indexing());
+    }
+
+    #[test]
+    fn has_any_live_indexing_contract_without_end_block() {
+        let yaml = r#"
+        name: test
+        project_type: no-code
+        networks:
+          - name: ethereum
+            chain_id: 1
+            rpc: http://localhost:8545
+        contracts:
+          - name: C
+            details:
+              - network: ethereum
+                address: "0x0000000000000000000000000000000000000000"
+                start_block: 1
+            abi: "[]"
+            include_events:
+              - Transfer
+        "#;
+        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
+        assert!(manifest.has_any_live_indexing());
+    }
+
+    #[test]
+    fn has_any_live_indexing_contract_with_end_block_nt_disabled() {
+        let yaml = r#"
+        name: test
+        project_type: no-code
+        networks:
+          - name: ethereum
+            chain_id: 1
+            rpc: http://localhost:8545
+        contracts:
+          - name: C
+            details:
+              - network: ethereum
+                address: "0x0000000000000000000000000000000000000000"
+                start_block: 1
+                end_block: 100
+            abi: "[]"
+            include_events:
+              - Transfer
+        "#;
+        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
+        assert!(!manifest.has_any_live_indexing());
+    }
+
+    #[test]
+    fn has_any_live_indexing_nt_enabled_with_live_network() {
+        let yaml = r#"
+        name: test
+        project_type: no-code
+        networks: []
+        contracts: []
+        native_transfers:
+          networks:
+            - network: ethereum
+              start_block: 1
+              end_block: 100
+            - network: base
+              start_block: 1
+        "#;
+        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
+        // `base` has no end_block → live.
+        assert!(manifest.has_any_live_indexing());
+    }
+
+    #[test]
+    fn has_any_live_indexing_nt_enabled_all_historical() {
+        let yaml = r#"
+        name: test
+        project_type: no-code
+        networks: []
+        contracts: []
+        native_transfers:
+          networks:
+            - network: ethereum
+              start_block: 1
+              end_block: 100
+        "#;
+        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
+        assert!(!manifest.has_any_live_indexing());
+    }
+
+    #[test]
+    fn has_any_live_indexing_nt_enabled_no_networks_means_all() {
+        // NT enabled with no explicit networks means "all supported networks"
+        // per the native_transfers semantics — always live.
+        let yaml = r#"
+        name: test
+        project_type: no-code
+        networks: []
+        contracts: []
+        native_transfers: true
+        "#;
+        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
+        assert!(manifest.has_any_live_indexing());
+    }
+
+    #[test]
+    fn has_any_live_indexing_nt_disabled_even_with_populated_networks() {
+        // Enabled is the gate — if NT is off, populated networks are ignored.
+        let yaml = r#"
+        name: test
+        project_type: no-code
+        networks: []
+        contracts: []
+        native_transfers:
+          enabled: false
+          networks:
+            - network: ethereum
+        "#;
+        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
+        assert!(!manifest.has_any_live_indexing());
     }
 }
