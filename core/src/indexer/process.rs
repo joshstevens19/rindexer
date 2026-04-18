@@ -540,11 +540,11 @@ async fn live_indexing_for_contract_event_dependencies(
                 registry: Some(&event_registry),
                 trace_registry: trace_registry.as_deref(),
             };
-            // Mutex held across reorg handling (DB rollback, stream publishes,
-            // user on_reorg callback firing). On a real reorg this blocks the
-            // other indexing path for the duration of handle_reorg, which is
-            // acceptable for isolation. If latency becomes a concern, move
-            // handle_reorg out of the hot path.
+            // Mutex held across reorg handling (DB rollback, stream publishes
+            // in parallel, user on_reorg callback firing). On a real reorg
+            // this blocks the other indexing path for the duration of
+            // handle_reorg, which is acceptable for isolation. If latency
+            // becomes a concern, move handle_reorg out of the hot path.
             let mut guard = coordinator.lock().await;
             match detect_and_handle_reorg(
                 &mut guard,
