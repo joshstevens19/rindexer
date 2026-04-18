@@ -156,8 +156,8 @@ pub fn validate_csv_headers(headers: &[String]) -> Result<()> {
 
 /// Validate format of all fields in parsed rows.
 pub fn validate_row_formats(rows: &[TransferRow]) -> Result<()> {
-    let addr_re = regex::Regex::new(r"^0x[0-9a-f]{40}$").unwrap();
-    let hash_re = regex::Regex::new(r"^0x[0-9a-f]{64}$").unwrap();
+    let addr_re = regex::Regex::new(r"^0x[0-9a-f]{40}$")?;
+    let hash_re = regex::Regex::new(r"^0x[0-9a-f]{64}$")?;
 
     for (i, row) in rows.iter().enumerate() {
         // Address fields

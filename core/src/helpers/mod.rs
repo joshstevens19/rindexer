@@ -116,14 +116,14 @@ pub fn to_pascal_case(input: &str) -> String {
 
 fn capitalize_word(word: &str, is_single_word: bool) -> String {
     if word.chars().all(|c| c.is_ascii_uppercase()) {
-        if is_single_word {
+        return if is_single_word {
             // Convert single all-uppercase word to Pascal case
             let mut chars = word.chars();
-            return chars.next().unwrap().to_string() + &chars.as_str().to_lowercase();
+            chars.next().unwrap().to_string() + &chars.as_str().to_lowercase()
         } else {
             // Preserve acronyms in compound words
-            return word.to_string();
-        }
+            word.to_string()
+        };
     }
 
     let mut result = String::with_capacity(word.len());

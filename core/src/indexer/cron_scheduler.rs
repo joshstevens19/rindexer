@@ -965,7 +965,7 @@ async fn execute_cron_operations_batch(
                 futures.push(async move {
                     let _permit = sem.acquire().await.unwrap();
 
-                    let timestamp = U256::from(chrono::Utc::now().timestamp() as u64);
+                    let timestamp = U256::from(Utc::now().timestamp() as u64);
                     let tx_metadata = TxMetadata {
                         block_number,
                         block_timestamp: Some(timestamp),
@@ -1042,7 +1042,7 @@ async fn execute_cron_operations_batch(
             if block_number < birth_block {
                 continue;
             }
-            let timestamp = U256::from(chrono::Utc::now().timestamp() as u64);
+            let timestamp = U256::from(Utc::now().timestamp() as u64);
             let tx_metadata = TxMetadata {
                 block_number,
                 block_timestamp: Some(timestamp),
@@ -1240,7 +1240,7 @@ async fn run_live_cron_loop(
             CronSchedule::Interval(duration) => *duration,
             CronSchedule::Cron(cron) => {
                 // Calculate next occurrence from now
-                let now = chrono::Utc::now();
+                let now = Utc::now();
                 match cron.find_next_occurrence(&now, false) {
                     Ok(next) => {
                         let duration = next - now;
@@ -1394,7 +1394,7 @@ async fn execute_cron_operations(
         0
     };
 
-    let now = chrono::Utc::now();
+    let now = Utc::now();
 
     let is_factory = task.factory_config.is_some();
     if is_factory {
@@ -1601,9 +1601,9 @@ async fn extract_cron_value(
 
     // Handle $rindexer_* built-ins
     if let Some(field_name) = value_ref.strip_prefix('$') {
-        match field_name {
+        return match field_name {
             "rindexer_block_number" => {
-                return Some(EthereumSqlTypeWrapper::U64BigInt(tx_metadata.block_number));
+                Some(EthereumSqlTypeWrapper::U64BigInt(tx_metadata.block_number))
             }
             "rindexer_block_timestamp" | "rindexer_timestamp" => {
                 if let Some(ts) = tx_metadata.block_timestamp {
@@ -1611,29 +1611,23 @@ async fn extract_cron_value(
                         return Some(EthereumSqlTypeWrapper::DateTime(dt.with_timezone(&Utc)));
                     }
                 }
-                return None;
+                None
             }
             "rindexer_tx_hash" => {
-                return Some(EthereumSqlTypeWrapper::StringChar(format!(
-                    "{:?}",
-                    tx_metadata.tx_hash
-                )));
+                Some(EthereumSqlTypeWrapper::StringChar(format!("{:?}", tx_metadata.tx_hash)))
             }
             "rindexer_block_hash" => {
-                return Some(EthereumSqlTypeWrapper::StringChar(format!(
-                    "{:?}",
-                    tx_metadata.block_hash
-                )));
+                Some(EthereumSqlTypeWrapper::StringChar(format!("{:?}", tx_metadata.block_hash)))
             }
             "rindexer_contract_address" => {
-                return Some(EthereumSqlTypeWrapper::Address(tx_metadata.contract_address));
+                Some(EthereumSqlTypeWrapper::Address(tx_metadata.contract_address))
             }
             _ => {
                 // Unknown $ reference - this shouldn't happen after validation
                 warn!("Unknown cron value reference: {}", value_ref);
-                return None;
+                None
             }
-        }
+        };
     }
 
     // Handle literal values
@@ -1664,9 +1658,9 @@ fn extract_cron_value_sync(
 
     // Handle $rindexer_* built-ins
     if let Some(field_name) = value_ref.strip_prefix('$') {
-        match field_name {
+        return match field_name {
             "rindexer_block_number" => {
-                return Some(EthereumSqlTypeWrapper::U64BigInt(tx_metadata.block_number));
+                Some(EthereumSqlTypeWrapper::U64BigInt(tx_metadata.block_number))
             }
             "rindexer_block_timestamp" | "rindexer_timestamp" => {
                 if let Some(ts) = tx_metadata.block_timestamp {
@@ -1674,28 +1668,22 @@ fn extract_cron_value_sync(
                         return Some(EthereumSqlTypeWrapper::DateTime(dt.with_timezone(&Utc)));
                     }
                 }
-                return None;
+                None
             }
             "rindexer_tx_hash" => {
-                return Some(EthereumSqlTypeWrapper::StringChar(format!(
-                    "{:?}",
-                    tx_metadata.tx_hash
-                )));
+                Some(EthereumSqlTypeWrapper::StringChar(format!("{:?}", tx_metadata.tx_hash)))
             }
             "rindexer_block_hash" => {
-                return Some(EthereumSqlTypeWrapper::StringChar(format!(
-                    "{:?}",
-                    tx_metadata.block_hash
-                )));
+                Some(EthereumSqlTypeWrapper::StringChar(format!("{:?}", tx_metadata.block_hash)))
             }
             "rindexer_contract_address" => {
-                return Some(EthereumSqlTypeWrapper::Address(tx_metadata.contract_address));
+                Some(EthereumSqlTypeWrapper::Address(tx_metadata.contract_address))
             }
             _ => {
                 // Unknown $ reference
-                return None;
+                None
             }
-        }
+        };
     }
 
     // Handle literal values

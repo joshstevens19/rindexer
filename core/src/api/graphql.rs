@@ -74,7 +74,7 @@ fn get_graphql_exe() -> Result<PathBuf, Box<dyn std::error::Error>> {
     // Fall back to embedded binary (for deployed/installed versions)
     const GRAPHQL_BINARY: &[u8] = include_bytes!(env!("RINDEXER_GRAPHQL_EMBED"));
 
-    let temp_dir = std::env::temp_dir();
+    let temp_dir = env::temp_dir();
     let exe_name = if cfg!(windows) {
         format!("rindexer-graphql-{}.exe", std::process::id())
     } else {

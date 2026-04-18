@@ -820,7 +820,7 @@ mod tests {
             postgres: None,
             csv_details: None,
             registry: Arc::new(TraceCallbackRegistry::new()),
-            method: crate::manifest::native_transfer::TraceProcessingMethod::TraceBlock,
+            method: TraceProcessingMethod::TraceBlock,
             stream_last_synced_block_file_path: None,
             cancel_token: CancellationToken::new(),
         })
@@ -849,7 +849,7 @@ mod tests {
             gas_limit: 21_000,
             to: TxKind::Call(to),
             value,
-            input: alloy::primitives::Bytes::new(),
+            input: Bytes::new(),
         };
 
         // Dummy sig and hash — we only need the fields, not cryptographic validity.

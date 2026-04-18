@@ -478,5 +478,5 @@ pub async fn get_factory_addresses_with_birth_blocks(
         return Ok(values);
     }
 
-    Ok(std::collections::HashMap::new())
+    Ok(HashMap::new())
 }

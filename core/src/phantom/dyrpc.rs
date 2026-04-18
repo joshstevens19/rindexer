@@ -77,7 +77,7 @@ pub async fn deploy_dyrpc_contract(
     )
     .await?;
 
-    let re = Regex::new(r"/eth/([a-fA-F0-9]{64})/").unwrap();
+    let re = Regex::new(r"/eth/([a-fA-F0-9]{64})/")?;
     let rpc_url = re
         .replace(&result.rpc_url, "/eth/{RINDEXER_PHANTOM_API_KEY}/")
         .to_string()
