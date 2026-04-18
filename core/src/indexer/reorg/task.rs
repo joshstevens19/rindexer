@@ -227,7 +227,7 @@ impl ReorgTask {
                     let agg_expr = if col.action.is_counter_action() {
                         format!("COUNT(*) AS {}_agg", col.event_column)
                     } else {
-                        format!("SUM({}::NUMERIC) AS {}_agg", col.event_column, col.event_column)
+                        format!("SUM({}) AS {}_agg", col.event_column, col.event_column)
                     };
                     agg_columns.push(agg_expr);
 
@@ -307,9 +307,18 @@ impl ReorgTask {
 
                 if let Some(ch) = ch {
                     let ch_temp = format!("rindexer_internal.{}_ch", temp_base);
+                    // Join engine (ANY/LEFT, keyed by the snapshot-side where
+                    // columns) so the reversal UPDATE can look up per-row
+                    // aggregates via joinGet(). ClickHouse mutations don't
+                    // support correlated subqueries the way Postgres does, so
+                    // we cannot use `(SELECT ... WHERE snap.k = dt.k LIMIT 1)`.
+                    let ch_snap_keys: Vec<&str> =
+                        op.where_columns.iter().map(|(_, ev_col)| ev_col.as_str()).collect();
                     let ch_create = format!(
-                        "CREATE TABLE IF NOT EXISTS {} ENGINE = Memory AS {}",
-                        ch_temp, select_sql,
+                        "CREATE TABLE IF NOT EXISTS {} ENGINE = Join(ANY, LEFT, {}) AS {}",
+                        ch_temp,
+                        ch_snap_keys.join(", "),
+                        select_sql,
                     );
                     ch.execute(&ch_create).await.with_context(|| {
                         format!(
@@ -381,17 +390,15 @@ impl ReorgTask {
                 SnapshotBackend::Clickhouse => {
                     let Some(ch) = ch else { continue };
 
-                    // ClickHouse ALTER TABLE ... UPDATE with scalar subqueries from snapshot.
-                    let ch_where_join: Vec<String> = snap
-                        .where_columns
-                        .iter()
-                        .map(|(dt_col, ev_col)| {
-                            format!("{}.{} = {}", snap.temp_table, ev_col, dt_col)
-                        })
-                        .collect();
-                    let ch_join_predicate = ch_where_join.join(" AND ");
+                    // ClickHouse ALTER TABLE ... UPDATE with per-row aggregate lookups
+                    // against a Join-engine snapshot table. joinGet() is the mutation-
+                    // safe equivalent of PG's correlated subquery.
+                    let dt_keys: Vec<&str> =
+                        snap.where_columns.iter().map(|(dt_col, _)| dt_col.as_str()).collect();
+                    let join_get_keys = dt_keys.join(", ");
 
-                    // Build CH set clauses by replacing known "snap.X_agg" tokens with scalar subqueries
+                    // Build CH set clauses by replacing known "snap.X_agg" tokens with
+                    // joinGet('snap_table', 'X_agg', dt_key1, dt_key2, ...) calls.
                     let ch_set_clauses: Vec<String> = snap
                         .set_clauses
                         .iter()
@@ -409,8 +416,8 @@ impl ReorgTask {
                                     .unwrap_or(rest.len());
                                 let col_name = &rest[..end];
                                 new_result.push_str(&format!(
-                                    "(SELECT {} FROM {} WHERE {} LIMIT 1)",
-                                    col_name, snap.temp_table, ch_join_predicate
+                                    "joinGet('{}', '{}', {})",
+                                    snap.temp_table, col_name, join_get_keys
                                 ));
                                 offset = abs_pos + snap_prefix.len() + end;
                             }
