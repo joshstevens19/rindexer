@@ -144,10 +144,8 @@ async fn stream_reorg_reaches_redis() {
     assert_eq!(len, 1, "expected exactly one XADD into the stream");
 
     // XRANGE to fetch the entry.
-    let entries: Vec<(String, Vec<(String, RedisValue)>)> = con
-        .xrange_all(stream_name)
-        .await
-        .expect("xrange");
+    let entries: Vec<(String, Vec<(String, RedisValue)>)> =
+        con.xrange_all(stream_name).await.expect("xrange");
     assert_eq!(entries.len(), 1);
     let (_id, fields) = &entries[0];
 
@@ -184,7 +182,9 @@ async fn stream_reorg_reaches_redis() {
 async fn stream_reorg_reaches_rabbitmq() {
     use futures::StreamExt;
     use lapin::{
-        options::{BasicConsumeOptions, ExchangeDeclareOptions, QueueBindOptions, QueueDeclareOptions},
+        options::{
+            BasicConsumeOptions, ExchangeDeclareOptions, QueueBindOptions, QueueDeclareOptions,
+        },
         types::FieldTable,
         Connection, ConnectionProperties, ExchangeKind,
     };
@@ -198,9 +198,8 @@ async fn stream_reorg_reaches_rabbitmq() {
 
     // Pre-declare the exchange and bind a queue BEFORE the rindexer client
     // publishes, so the message isn't dropped.
-    let consumer_conn = Connection::connect(&url, ConnectionProperties::default())
-        .await
-        .expect("consumer connect");
+    let consumer_conn =
+        Connection::connect(&url, ConnectionProperties::default()).await.expect("consumer connect");
     let channel = consumer_conn.create_channel().await.expect("channel");
 
     let exchange = "rindexer_reorg_exchange";
@@ -420,4 +419,3 @@ async fn stream_reorg_reaches_cloudflare_queues() {
     assert_eq!(streamed, 1);
     mock.assert_async().await;
 }
-

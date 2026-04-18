@@ -201,11 +201,8 @@ impl StreamsClients {
     pub fn set_cloudflare_base_url_for_test(&mut self, base_url: &str) {
         if let Some(cf) = self.cloudflare_queues.as_mut() {
             cf.client = Arc::new(
-                CloudflareQueues::new(
-                    cf.config.api_token.clone(),
-                    cf.config.account_id.clone(),
-                )
-                .with_base_url(base_url.to_string()),
+                CloudflareQueues::new(cf.config.api_token.clone(), cf.config.account_id.clone())
+                    .with_base_url(base_url.to_string()),
             );
         }
     }
@@ -1421,13 +1418,8 @@ mod tests {
             delivery: None,
         };
 
-        let tables = vec![affected_table(
-            "my_indexer_usdc",
-            "transfer",
-            "my_indexer",
-            "USDC",
-            "Transfer",
-        )];
+        let tables =
+            vec![affected_table("my_indexer_usdc", "transfer", "my_indexer", "USDC", "Transfer")];
         let result = webhook_clients(vec![config])
             .stream_reorg("ethereum", 100, 2, 42, &[B256::ZERO], &tables)
             .await;
@@ -1473,9 +1465,8 @@ mod tests {
             "EvmTraces",
             "NativeTransfer",
         )];
-        let result = webhook_clients(vec![config])
-            .stream_reorg("ethereum", 500, 1, 0, &[], &tables)
-            .await;
+        let result =
+            webhook_clients(vec![config]).stream_reorg("ethereum", 500, 1, 0, &[], &tables).await;
 
         assert!(result.is_ok());
         mock.assert_async().await;
@@ -1513,9 +1504,8 @@ mod tests {
             delivery: None,
         };
 
-        let result = webhook_clients(vec![config])
-            .stream_reorg("ethereum", 7, 1, 0, &[], &[])
-            .await;
+        let result =
+            webhook_clients(vec![config]).stream_reorg("ethereum", 7, 1, 0, &[], &[]).await;
 
         assert!(result.is_ok());
         mock.assert_async().await;

@@ -176,12 +176,7 @@ pub(crate) async fn native_transfer_detect_reorg_in_range(
     // acceptable for isolation. If latency becomes a concern, move
     // handle_reorg out of the hot path.
     let mut guard = coordinator.lock().await;
-    let ctx = ReorgContext {
-        postgres,
-        clickhouse,
-        registry: None,
-        trace_registry,
-    };
+    let ctx = ReorgContext { postgres, clickhouse, registry: None, trace_registry };
 
     for block in blocks {
         let number = block.header.number;
@@ -1007,9 +1002,8 @@ mod tests {
         // parent_hashes chain back to the window. Expect `Canonical`.
         let canonical_12 = make_block_with_parent(12, b256(12), b256(11));
         let canonical_13 = make_block_with_parent(13, b256(13), b256(12));
-        let provider: Arc<dyn ChainProvider> = Arc::new(
-            MockChainProvider::new(1).with_blocks(vec![canonical_12, canonical_13]),
-        );
+        let provider: Arc<dyn ChainProvider> =
+            Arc::new(MockChainProvider::new(1).with_blocks(vec![canonical_12, canonical_13]));
 
         let coordinator =
             make_test_coordinator("ethereum", &[(10, 10, 9), (11, 11, 10)], provider.clone());
@@ -1040,9 +1034,8 @@ mod tests {
         // the fork point; we expose canonical 11 so find_fork_point can succeed.
         let canonical_11 = make_block_with_parent(11, b256(0xFE), b256(10));
         let canonical_12 = make_block_with_parent(12, b256(12), b256(0xFE));
-        let provider: Arc<dyn ChainProvider> = Arc::new(
-            MockChainProvider::new(1).with_blocks(vec![canonical_11, canonical_12]),
-        );
+        let provider: Arc<dyn ChainProvider> =
+            Arc::new(MockChainProvider::new(1).with_blocks(vec![canonical_11, canonical_12]));
 
         let coordinator =
             make_test_coordinator("ethereum", &[(10, 10, 9), (11, 11, 10)], provider.clone());
@@ -1096,9 +1089,8 @@ mod tests {
         // `last_seen_block` past block 12.
         let canonical_10 = make_block_with_parent(10, b256(10), b256(9));
         let canonical_11 = make_block_with_parent(11, b256(11), b256(10));
-        let provider: Arc<dyn ChainProvider> = Arc::new(
-            MockChainProvider::new(1).with_blocks(vec![canonical_10, canonical_11]),
-        );
+        let provider: Arc<dyn ChainProvider> =
+            Arc::new(MockChainProvider::new(1).with_blocks(vec![canonical_10, canonical_11]));
 
         // Coordinator with an empty window so validation would otherwise succeed
         // — we want to isolate the short-read check.
