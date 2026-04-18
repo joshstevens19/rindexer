@@ -21,7 +21,7 @@ use crate::database::generate::generate_event_table_full_name;
 use crate::database::sql_type_wrapper::{
     map_ethereum_wrapper_to_json, map_log_params_to_ethereum_wrapper, EthereumSqlTypeWrapper,
 };
-use crate::manifest::contract::Contract;
+use crate::manifest::contract::{Contract, Table};
 use crate::manifest::core::Constants;
 use crate::provider::ChainProvider;
 use crate::{
@@ -100,33 +100,59 @@ pub fn resolve_table_column_types(
             Ok(items) => items,
             Err(e) => return Err(SetupNoCodeError::ProcessIndexersError(e.into())),
         };
-        let event_infos = match ABIItem::extract_event_names_and_signatures_from_abi(abi_items) {
-            Ok(infos) => infos,
-            Err(e) => return Err(SetupNoCodeError::ProcessIndexersError(e.into())),
-        };
-
-        // Build event ABI types map
-        let event_abi_types: HashMap<String, HashMap<String, String>> = event_infos
-            .iter()
-            .map(|event_info| {
-                let column_types: HashMap<String, String> = event_info
-                    .inputs
-                    .iter()
-                    .map(|input| (input.name.clone(), input.type_.clone()))
-                    .collect();
-                (event_info.name.clone(), column_types)
-            })
-            .collect();
+        let event_abi_types = build_event_abi_types(abi_items)?;
 
         // Resolve column types in custom tables
         if let Some(tables) = &mut contract.tables {
-            for table in tables.iter_mut() {
-                if let Err(e) = table.resolve_column_types(&event_abi_types) {
-                    return Err(SetupNoCodeError::ProcessIndexersError(
-                        ProcessIndexersError::TableColumnTypeResolutionError(e),
-                    ));
-                }
-            }
+            resolve_tables_against_abi(tables, &event_abi_types)?;
+        }
+    }
+
+    // Resolve column types for native-transfer custom tables against the synthetic
+    // NativeTransfer ABI so they reach `get_column_type()` fully resolved.
+    if manifest.has_enabled_native_transfers() {
+        if let Some(tables) = manifest.native_transfers.tables.as_mut() {
+            let abi_items: Vec<ABIItem> = serde_json::from_str(NATIVE_TRANSFER_ABI)
+                .map_err(|e| SetupNoCodeError::ProcessIndexersError(e.into()))?;
+            let event_abi_types = build_event_abi_types(abi_items)?;
+            resolve_tables_against_abi(tables, &event_abi_types)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Build an `event_name -> field_name -> solidity_type` map from a list of ABI items.
+#[allow(clippy::result_large_err)]
+fn build_event_abi_types(
+    abi_items: Vec<ABIItem>,
+) -> Result<HashMap<String, HashMap<String, String>>, SetupNoCodeError> {
+    let event_infos = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)
+        .map_err(|e| SetupNoCodeError::ProcessIndexersError(e.into()))?;
+
+    Ok(event_infos
+        .iter()
+        .map(|event_info| {
+            let column_types: HashMap<String, String> = event_info
+                .inputs
+                .iter()
+                .map(|input| (input.name.clone(), input.type_.clone()))
+                .collect();
+            (event_info.name.clone(), column_types)
+        })
+        .collect())
+}
+
+#[allow(clippy::result_large_err)]
+fn resolve_tables_against_abi(
+    tables: &mut [Table],
+    event_abi_types: &HashMap<String, HashMap<String, String>>,
+) -> Result<(), SetupNoCodeError> {
+    for table in tables.iter_mut() {
+        if let Err(e) = table.resolve_column_types(event_abi_types) {
+            return Err(SetupNoCodeError::ProcessIndexersError(
+                ProcessIndexersError::TableColumnTypeResolutionError(e),
+            ));
         }
     }
     Ok(())
@@ -1163,4 +1189,74 @@ pub async fn process_trace_events(
     }
 
     Ok(events)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::manifest::contract::ColumnType;
+    use std::path::PathBuf;
+
+    const NT_TABLES_YAML: &str = r#"
+name: test-indexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://eth.rpc.example.com
+native_transfers:
+  enabled: true
+  tables:
+    - name: balances
+      columns:
+        - name: account
+        - name: total_sent
+      events:
+        - event: NativeTransfer
+          operations:
+            - type: upsert
+              where:
+                account: "$from"
+              set:
+                - column: total_sent
+                  action: add
+                  value: "$value"
+contracts: []
+storage:
+  postgres:
+    enabled: true
+"#;
+
+    #[test]
+    fn resolve_table_column_types_resolves_native_transfer_tables() {
+        let mut manifest: Manifest =
+            serde_yaml::from_str(NT_TABLES_YAML).expect("parse manifest yaml");
+
+        // Any path is fine — contracts vector is empty, so no ABI file is read.
+        resolve_table_column_types(&PathBuf::from("/tmp"), &mut manifest)
+            .expect("native-transfer table columns resolve against synthetic ABI");
+
+        let tables = manifest
+            .native_transfers
+            .tables
+            .as_ref()
+            .expect("native_transfers.tables retained after resolution");
+        assert_eq!(tables.len(), 1);
+        let table = &tables[0];
+        assert_eq!(table.name, "balances");
+
+        let account = table
+            .columns
+            .iter()
+            .find(|c| c.name == "account")
+            .expect("account column present");
+        assert_eq!(account.resolved_type(), &ColumnType::Address);
+
+        let total_sent = table
+            .columns
+            .iter()
+            .find(|c| c.name == "total_sent")
+            .expect("total_sent column present");
+        assert_eq!(total_sent.resolved_type(), &ColumnType::Uint256);
+    }
 }
