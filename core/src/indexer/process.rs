@@ -9,9 +9,10 @@ use tokio::{
     task::{JoinError, JoinHandle},
     time::Instant,
 };
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::helpers::is_relevant_block;
+use crate::indexer::heartbeat::{HeartbeatAction, HeartbeatTracker};
 use crate::indexer::reorg::{
     detect_and_handle_reorg, reorg_safe_distance_for_chain, ReorgContext, ReorgCoordinator,
 };
@@ -182,7 +183,6 @@ pub enum ProcessContractEventsWithDependenciesError {
 pub struct OrderedLiveIndexingDetails {
     pub filter: RindexerEventFilter,
     pub last_seen_block_number: U64,
-    pub last_no_new_block_log_time: Instant,
 }
 
 async fn process_contract_events_with_dependencies(
@@ -336,16 +336,11 @@ async fn live_indexing_for_contract_event_dependencies(
 
         ordering_live_indexing_details_map.insert(
             config.processor_id(),
-            Arc::new(Mutex::new(OrderedLiveIndexingDetails {
-                filter,
-                last_seen_block_number,
-                last_no_new_block_log_time: Instant::now(),
-            })),
+            Arc::new(Mutex::new(OrderedLiveIndexingDetails { filter, last_seen_block_number })),
         );
     }
 
-    // this is used for less busy chains to make sure they know rindexer is still alive
-    let log_no_new_block_interval = Duration::from_secs(300);
+    let mut heartbeat = HeartbeatTracker::new(Duration::from_secs(300));
     let target_iteration_duration = Duration::from_millis(200);
     let callback_permits = Arc::new(Semaphore::new(1));
 
@@ -439,6 +434,26 @@ async fn live_indexing_for_contract_event_dependencies(
 
         let latest_block_number = U64::from(latest_block.header.number);
 
+        match heartbeat.tick(latest_block_number) {
+            HeartbeatAction::Silent => {}
+            HeartbeatAction::Alive => {
+                info!(
+                    "{} - {} - Indexing alive - chain tip {}",
+                    network,
+                    IndexingEventProgressStatus::live_log(),
+                    latest_block_number
+                );
+            }
+            HeartbeatAction::Stalled => {
+                warn!(
+                    "{} - {} - RPC tip has not advanced past block {} in the last 5 minutes",
+                    network,
+                    IndexingEventProgressStatus::live_log(),
+                    latest_block_number
+                );
+            }
+        }
+
         for (config, _) in events.iter() {
             let mut ordering_live_indexing_details = ordering_live_indexing_details_map
                 .get(&config.processor_id())
@@ -453,22 +468,6 @@ async fn live_indexing_for_contract_event_dependencies(
                     &config.info_log_name(),
                     IndexingEventProgressStatus::live_log()
                 );
-                if ordering_live_indexing_details.last_no_new_block_log_time.elapsed()
-                    >= log_no_new_block_interval
-                {
-                    info!(
-                        "{} - {} - No new blocks published in the last 5 minutes - latest block number {}",
-                        &config.info_log_name(),
-                        IndexingEventProgressStatus::live_log(),
-                        latest_block_number
-                    );
-                    ordering_live_indexing_details.last_no_new_block_log_time = Instant::now();
-                    *ordering_live_indexing_details_map
-                        .get(&config.processor_id())
-                        .expect("Failed to get ordering_live_indexing_details_map")
-                        .lock()
-                        .await = ordering_live_indexing_details;
-                }
                 continue;
             }
             debug!(

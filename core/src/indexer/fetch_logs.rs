@@ -2,6 +2,7 @@ use crate::blockclock::BlockClock;
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::event::callback_registry::EventCallbackRegistry;
 use crate::helpers::{halved_block_number, is_relevant_block};
+use crate::indexer::heartbeat::{HeartbeatAction, HeartbeatTracker};
 use crate::indexer::reorg::{
     detect_and_handle_reorg, reorg_safe_distance_for_chain, ReorgContext, ReorgCoordinator,
 };
@@ -444,8 +445,7 @@ async fn live_indexing_stream(
 ) {
     let mut last_seen_block_number = last_seen_block_number;
     let mut log_response_to_large_to_block: Option<U64> = None;
-    let mut last_no_new_block_log_time = Instant::now();
-    let log_no_new_block_interval = Duration::from_secs(300);
+    let mut heartbeat = HeartbeatTracker::new(Duration::from_secs(300));
     let target_iteration_duration = Duration::from_millis(200);
 
     // Channel for reth-provided reorg signals (feature-gated, None for HTTP RPC).
@@ -543,6 +543,28 @@ async fn live_indexing_stream(
                         },
                     );
 
+                    let latest_tip = U64::from(latest_block.header.number);
+                    match heartbeat.tick(latest_tip) {
+                        HeartbeatAction::Silent => {}
+                        HeartbeatAction::Alive => {
+                            info!(
+                                "{} - {} - Indexing alive - chain tip {}, last processed block {}",
+                                info_log_name,
+                                IndexingEventProgressStatus::live_log(),
+                                latest_tip,
+                                last_seen_block_number
+                            );
+                        }
+                        HeartbeatAction::Stalled => {
+                            warn!(
+                                "{} - {} - RPC tip has not advanced past block {} in the last 5 minutes",
+                                info_log_name,
+                                IndexingEventProgressStatus::live_log(),
+                                latest_tip
+                            );
+                        }
+                    }
+
                     // Reorg detection via coordinator (parent hash validation)
                     if let Some(ref mut coordinator) = reorg_coordinator {
                         let log_prefix = format!(
@@ -593,15 +615,6 @@ async fn live_indexing_stream(
                             info_log_name,
                             IndexingEventProgressStatus::live_log()
                         );
-                        if last_no_new_block_log_time.elapsed() >= log_no_new_block_interval {
-                            info!(
-                                    "{} - {} - No new blocks published in the last 5 minutes - latest block number {}",
-                                    info_log_name,
-                                    IndexingEventProgressStatus::live_log(),
-                                    last_seen_block_number,
-                                );
-                            last_no_new_block_log_time = Instant::now();
-                        }
                     } else {
                         debug!(
                             "{} - {} - New block seen {} - Last seen block {}",
