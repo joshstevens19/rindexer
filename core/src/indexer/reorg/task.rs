@@ -936,3 +936,270 @@ impl ReorgTask {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ======================================================================
+    // EventTableInfo::try_new
+    // ======================================================================
+
+    #[test]
+    fn test_event_table_info_try_new_happy_path() {
+        let info = EventTableInfo::try_new(
+            "my_schema".to_string(),
+            "transfer".to_string(),
+            "my_schema_transfer".to_string(),
+            "my_indexer".to_string(),
+            "USDC".to_string(),
+            "Transfer".to_string(),
+        )
+        .expect("valid identifiers should construct");
+        assert_eq!(info.schema, "my_schema");
+        assert_eq!(info.table_name, "transfer");
+        assert_eq!(info.full_name, "my_schema.transfer");
+        assert_eq!(info.checkpoint_table, "my_schema_transfer");
+        assert_eq!(info.indexer_name, "my_indexer");
+        assert_eq!(info.contract_name, "USDC");
+        assert_eq!(info.event_name, "Transfer");
+    }
+
+    #[test]
+    fn test_event_table_info_rejects_sql_injection_in_schema() {
+        let err = EventTableInfo::try_new(
+            "schema'; DROP".to_string(),
+            "transfer".to_string(),
+            "schema_transfer".to_string(),
+            "idx".to_string(),
+            "USDC".to_string(),
+            "Transfer".to_string(),
+        );
+        assert!(err.is_err(), "schema with SQL injection chars must be rejected");
+    }
+
+    #[test]
+    fn test_event_table_info_rejects_sql_injection_in_table_name() {
+        let err = EventTableInfo::try_new(
+            "schema".to_string(),
+            "transfer; DROP TABLE".to_string(),
+            "schema_transfer".to_string(),
+            "idx".to_string(),
+            "USDC".to_string(),
+            "Transfer".to_string(),
+        );
+        assert!(err.is_err(), "table name with SQL injection chars must be rejected");
+    }
+
+    #[test]
+    fn test_event_table_info_rejects_sql_injection_in_checkpoint_table() {
+        let err = EventTableInfo::try_new(
+            "schema".to_string(),
+            "transfer".to_string(),
+            "check'--".to_string(),
+            "idx".to_string(),
+            "USDC".to_string(),
+            "Transfer".to_string(),
+        );
+        assert!(err.is_err(), "checkpoint table with SQL injection chars must be rejected");
+    }
+
+    #[test]
+    fn test_event_table_info_does_not_validate_metadata_fields() {
+        // indexer/contract/event are metadata for stream payload — they must
+        // accept arbitrary strings (hyphens, spaces, etc.).
+        let info = EventTableInfo::try_new(
+            "schema".to_string(),
+            "transfer".to_string(),
+            "schema_transfer".to_string(),
+            "my-indexer-with-hyphens".to_string(),
+            "Contract With Spaces".to_string(),
+            "Event Name; DROP".to_string(),
+        )
+        .expect("metadata fields must not be SQL-validated");
+        assert_eq!(info.indexer_name, "my-indexer-with-hyphens");
+        assert_eq!(info.contract_name, "Contract With Spaces");
+        assert_eq!(info.event_name, "Event Name; DROP");
+    }
+
+    // ======================================================================
+    // AffectedTable construction + JSON shape
+    // ======================================================================
+
+    #[test]
+    fn test_affected_table_struct_and_json_shape() {
+        let at = AffectedTable {
+            schema: "s1".to_string(),
+            table_name: "t1".to_string(),
+            rows_deleted: 0,
+            indexer_name: "idx".to_string(),
+            contract_name: "USDC".to_string(),
+            event_name: "NativeTransfer".to_string(),
+        };
+        // The struct is used inside stream payloads; mirror the JSON shape
+        // that downstream consumers rely on (field-by-field).
+        let json = serde_json::json!({
+            "schema": at.schema,
+            "table_name": at.table_name,
+            "rows_deleted": at.rows_deleted,
+            "indexer_name": at.indexer_name,
+            "contract_name": at.contract_name,
+            "event_name": at.event_name,
+        });
+        assert_eq!(json["schema"], "s1");
+        assert_eq!(json["table_name"], "t1");
+        assert_eq!(json["rows_deleted"], 0);
+        assert_eq!(json["indexer_name"], "idx");
+        assert_eq!(json["contract_name"], "USDC");
+        assert_eq!(json["event_name"], "NativeTransfer");
+    }
+
+    // ======================================================================
+    // DerivedColumnRollback::try_new
+    // ======================================================================
+
+    #[test]
+    fn test_derived_column_rollback_happy_path() {
+        let rb = DerivedColumnRollback::try_new(
+            "balance".to_string(),
+            "value".to_string(),
+            SetAction::Add,
+        )
+        .expect("valid columns should construct");
+        assert_eq!(rb.derived_column, "balance");
+        assert_eq!(rb.event_column, "value");
+        assert!(matches!(rb.action, SetAction::Add));
+    }
+
+    #[test]
+    fn test_derived_column_rollback_rejects_sql_injection() {
+        let err = DerivedColumnRollback::try_new(
+            "balance'; DROP".to_string(),
+            "value".to_string(),
+            SetAction::Add,
+        );
+        assert!(err.is_err(), "derived_column with SQL injection must be rejected");
+
+        let err = DerivedColumnRollback::try_new(
+            "balance".to_string(),
+            "value--".to_string(),
+            SetAction::Add,
+        );
+        assert!(err.is_err(), "event_column with SQL injection must be rejected");
+    }
+
+    // ======================================================================
+    // DerivedColumnJournal::try_new
+    // ======================================================================
+
+    #[test]
+    fn test_derived_column_journal_happy_path_empty_where_columns() {
+        let jc = DerivedColumnJournal::try_new(
+            "max_trade".to_string(),
+            SetAction::Max,
+            vec![],
+        )
+        .expect("empty where_columns is allowed");
+        assert_eq!(jc.derived_column, "max_trade");
+        assert!(matches!(jc.action, SetAction::Max));
+        assert!(jc.where_columns.is_empty());
+    }
+
+    #[test]
+    fn test_derived_column_journal_multiple_where_columns() {
+        let jc = DerivedColumnJournal::try_new(
+            "latest".to_string(),
+            SetAction::Set,
+            vec!["user".to_string(), "token".to_string()],
+        )
+        .expect("multiple valid where_columns should be accepted");
+        assert_eq!(jc.where_columns, vec!["user".to_string(), "token".to_string()]);
+    }
+
+    #[test]
+    fn test_derived_column_journal_rejects_sql_injection() {
+        let err = DerivedColumnJournal::try_new(
+            "bad'--".to_string(),
+            SetAction::Set,
+            vec![],
+        );
+        assert!(err.is_err(), "derived_column with SQL injection must be rejected");
+
+        let err = DerivedColumnJournal::try_new(
+            "latest".to_string(),
+            SetAction::Set,
+            vec!["good".to_string(), "bad; DROP".to_string()],
+        );
+        assert!(err.is_err(), "where_columns entry with SQL injection must be rejected");
+    }
+
+    // ======================================================================
+    // DerivedTableRollbackOp::try_new
+    // ======================================================================
+
+    #[test]
+    fn test_derived_table_rollback_op_happy_path() {
+        let columns = vec![DerivedColumnRollback::try_new(
+            "balance".to_string(),
+            "value".to_string(),
+            SetAction::Add,
+        )
+        .unwrap()];
+        let op = DerivedTableRollbackOp::try_new(
+            "myschema.transfer".to_string(),
+            vec![("user".to_string(), "from_addr".to_string())],
+            columns,
+            None,
+        )
+        .expect("valid op should construct");
+        assert_eq!(op.event_table, "myschema.transfer");
+        assert_eq!(op.where_columns.len(), 1);
+        assert_eq!(op.columns.len(), 1);
+        assert!(op.condition.is_none());
+    }
+
+    // ======================================================================
+    // DerivedTableInfo::try_new
+    // ======================================================================
+
+    #[test]
+    fn test_derived_table_info_happy_path_empty_ops() {
+        let dt = DerivedTableInfo::try_new(
+            "myschema.balances".to_string(),
+            false,
+            vec![],
+            vec![],
+        )
+        .expect("valid name should construct");
+        assert_eq!(dt.full_table_name, "myschema.balances");
+        assert!(!dt.cross_chain);
+        assert!(dt.rollback_ops.is_empty());
+        assert!(dt.journal_columns.is_empty());
+    }
+
+    #[test]
+    fn test_derived_table_info_happy_path_with_one_op() {
+        let op = DerivedTableRollbackOp::try_new(
+            "myschema.transfer".to_string(),
+            vec![("user".to_string(), "from_addr".to_string())],
+            vec![DerivedColumnRollback::try_new(
+                "balance".to_string(),
+                "value".to_string(),
+                SetAction::Subtract,
+            )
+            .unwrap()],
+            None,
+        )
+        .unwrap();
+        let dt = DerivedTableInfo::try_new(
+            "myschema.balances".to_string(),
+            true,
+            vec![op],
+            vec![],
+        )
+        .expect("valid with one rollback op should construct");
+        assert_eq!(dt.full_table_name, "myschema.balances");
+        assert!(dt.cross_chain);
+        assert_eq!(dt.rollback_ops.len(), 1);
+    }
+}
