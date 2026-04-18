@@ -1,0 +1,25 @@
+core/src/indexer/reorg/task.rs
+  babcd1c453882c13 23-28,36-38,43-44,46-54,58-74,206-209,906-923,928,930-1198
+core/src/event/callback_registry.rs
+  babcd1c453882c13 416-419,524-739
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.0",
+  "base_commit_sha": "8957765698b6993ab727e40da378c95bc03bce07",
+  "prompts": {
+    "babcd1c453882c13": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "974b351c-cba9-4628-9473-e022654ecdb6",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 480,
+      "total_deletions": 0,
+      "accepted_lines": 480,
+      "overriden_lines": 0
+    }
+  }
+}
