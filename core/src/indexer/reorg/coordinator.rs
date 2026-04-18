@@ -8,6 +8,7 @@ use tracing::{info, warn};
 use crate::event::callback_registry::ReorgNotification;
 use crate::metrics::indexing as metrics;
 use crate::provider::ChainProvider;
+use crate::streams::StreamsClients;
 
 use super::persistence::ReorgBlockHashPersistence;
 use super::task::{DerivedTableInfo, EventTableInfo, ReorgTask};
@@ -25,6 +26,14 @@ pub struct ReorgCoordinator {
     provider: Option<Arc<dyn ChainProvider>>,
     event_tables: Vec<EventTableInfo>,
     derived_tables: Vec<DerivedTableInfo>,
+    /// All `StreamsClients` configured for this network across every indexing
+    /// pipeline (contract events + native transfers). When a reorg is handled
+    /// we fan the retraction notification across all of them so consumers
+    /// receive it regardless of which pipeline detected the reorg first.
+    /// The outer `Arc<Option<...>>` matches the registry-side ownership; only
+    /// entries whose inner `Option` is `Some` are iterated. The caller is
+    /// expected to pre-filter out `None`-valued entries at construction time.
+    streams_clients: Vec<Arc<Option<StreamsClients>>>,
     blocks_since_flush: u64,
 }
 
@@ -36,6 +45,7 @@ impl ReorgCoordinator {
         provider: Arc<dyn ChainProvider>,
         event_tables: Vec<EventTableInfo>,
         derived_tables: Vec<DerivedTableInfo>,
+        streams_clients: Vec<Arc<Option<StreamsClients>>>,
     ) -> anyhow::Result<Self> {
         super::validate_sql_value(&network, "network name")?;
         Ok(Self {
@@ -45,6 +55,7 @@ impl ReorgCoordinator {
             provider: Some(provider),
             event_tables,
             derived_tables,
+            streams_clients,
             blocks_since_flush: 0,
         })
     }
@@ -376,17 +387,17 @@ impl ReorgCoordinator {
             }
         }
 
-        // Publish reorg retraction through instant-mode streams (fire-and-forget)
-        if let Some(clients) = ctx.streams_clients {
+        // Publish reorg retraction through every configured stream on the network
+        // so notifications reach consumers regardless of which indexing pipeline
+        // (contract events vs native transfers) detected the reorg first.
+        for clients_arc in &self.streams_clients {
+            let Some(clients) = clients_arc.as_ref().as_ref() else {
+                continue;
+            };
             let network = reorg_task.network.clone();
             let fork_point = reorg_task.fork_point;
             let depth = reorg_task.detection_point.saturating_sub(reorg_task.fork_point) + 1;
             let tx_hashes = affected_tx_hashes.clone();
-
-            // stream_reorg requires &self so we need a pointer; StreamsClients is not
-            // Clone, but the callers always have it behind Arc<Option<StreamsClients>>.
-            // Since we only have a reference here, we cannot move it into a spawn.
-            // Keep the await inline (the method is fast — it just publishes to queues).
             if let Err(e) = clients
                 .stream_reorg(
                     &network,
@@ -476,6 +487,7 @@ mod tests {
             provider: None,
             event_tables: vec![],
             derived_tables: vec![],
+            streams_clients: vec![],
             blocks_since_flush: 0,
         }
     }
@@ -616,7 +628,6 @@ mod tests {
             clickhouse: None,
             registry: Some(&registry),
             trace_registry: None,
-            streams_clients: None,
         };
 
         coordinator.handle_reorg(task, &ctx).await.unwrap();
@@ -661,7 +672,6 @@ mod tests {
             clickhouse: None,
             registry: None,
             trace_registry: Some(&trace_registry),
-            streams_clients: None,
         };
 
         coordinator.handle_reorg(task, &ctx).await.unwrap();
@@ -727,6 +737,7 @@ mod tests {
                     journal_columns: vec![],
                 },
             ],
+            streams_clients: vec![],
             blocks_since_flush: 0,
         };
 
@@ -755,6 +766,7 @@ mod tests {
                 rollback_ops: vec![],
                 journal_columns: vec![],
             }],
+            streams_clients: vec![],
             blocks_since_flush: 0,
         };
 
@@ -782,6 +794,7 @@ mod tests {
             )
             .unwrap()],
             derived_tables: vec![],
+            streams_clients: vec![],
             blocks_since_flush: 0,
         };
 

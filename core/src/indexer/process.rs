@@ -371,11 +371,9 @@ async fn live_indexing_for_contract_event_dependencies(
 
     let reorg_coordinator = reorg_coordinator;
 
-    let (pg_client, ch_client, streams_clients, event_registry) = events
+    let (pg_client, ch_client, event_registry) = events
         .first()
-        .map(|(config, _)| {
-            (config.postgres(), config.clickhouse(), config.streams_clients(), config.registry())
-        })
+        .map(|(config, _)| (config.postgres(), config.clickhouse(), config.registry()))
         .expect("live_indexing_for_contract_event_dependencies called with no events");
 
     loop {
@@ -419,7 +417,6 @@ async fn live_indexing_for_contract_event_dependencies(
                 clickhouse: ch_client.as_ref(),
                 registry: Some(&event_registry),
                 trace_registry: trace_registry.as_deref(),
-                streams_clients: streams_clients.as_ref().as_ref(),
             };
             // Mutex held across reorg handling (DB rollback, stream publishes,
             // user on_reorg callback firing). On a real reorg this blocks the

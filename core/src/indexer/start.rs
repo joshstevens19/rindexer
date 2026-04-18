@@ -213,12 +213,6 @@ async fn start_indexing_traces(
 
     // Create one pipeline per network
     for (network_name, events) in network_events {
-        // Pick any first event's streams_clients - they all share the same stream
-        // config for the network.
-        let streams_clients = events
-            .first()
-            .map(|e| e.streams_clients.clone())
-            .unwrap_or_else(|| Arc::new(None));
         // Get the first event's network details (they should all be the same for a given network)
         let first_event = events.first().unwrap();
         let network_details = first_event
@@ -298,7 +292,6 @@ async fn start_indexing_traces(
             first_event.indexer_name.clone(),
             reorg_coordinator,
             clickhouse.clone(),
-            streams_clients,
             trace_registry.clone(),
         ));
 
@@ -332,27 +325,45 @@ fn find_provider_in_trace_registry(
         .map(|nd| nd.cached_provider.clone())
 }
 
-/// Find streams clients for a network in the trace registry. Used as a fallback
-/// when the primary lookup has no entry so native-transfer-only networks still
-/// publish startup-rollback notifications to their configured stream.
-fn find_streams_clients_in_trace_registry(
+/// Collect every distinct `Arc<Option<StreamsClients>>` configured on the given
+/// network across contract events and native-transfer trace events. Dedup is
+/// by `Arc::as_ptr` pointer identity so two pipelines sharing the same instance
+/// only publish once. Entries whose inner `Option` is `None` are skipped.
+fn collect_streams_clients_for_network(
+    registry: &EventCallbackRegistry,
     trace_registry: &TraceCallbackRegistry,
     network_name: &str,
-) -> Option<Arc<Option<crate::streams::StreamsClients>>> {
-    trace_registry
-        .events
-        .iter()
-        .find(|e| e.trace_information.details.iter().any(|d| d.network == network_name))
-        .map(|e| e.streams_clients.clone())
-}
+) -> Vec<Arc<Option<crate::streams::StreamsClients>>> {
+    let mut out: Vec<Arc<Option<crate::streams::StreamsClients>>> = Vec::new();
 
-/// Extract the concrete `StreamsClients` reference from the layered
-/// `Option<Arc<Option<StreamsClients>>>` wrapper that `ReorgContext.streams_clients`
-/// expects. Returns `None` if there is no outer `Arc` or if the `Arc` contains `None`.
-fn reorg_ctx_streams(
-    startup_streams_clients: &Option<Arc<Option<crate::streams::StreamsClients>>>,
-) -> Option<&crate::streams::StreamsClients> {
-    startup_streams_clients.as_ref().and_then(|a| a.as_ref().as_ref())
+    let mut push = |arc_outer: &Arc<Option<crate::streams::StreamsClients>>| {
+        if arc_outer.as_ref().is_none() {
+            return;
+        }
+        let ptr = Arc::as_ptr(arc_outer);
+        if out.iter().any(|existing| Arc::as_ptr(existing) == ptr) {
+            return;
+        }
+        out.push(Arc::clone(arc_outer));
+    };
+
+    for event in &registry.events {
+        if event.contract.details.iter().any(|d| d.network == network_name) {
+            push(&event.streams_clients);
+        }
+    }
+    for trace_event in &trace_registry.events {
+        if trace_event
+            .trace_information
+            .details
+            .iter()
+            .any(|d| d.network == network_name)
+        {
+            push(&trace_event.streams_clients);
+        }
+    }
+
+    out
 }
 
 /// Build derived-table rollback + journal entries for an event's tables and merge
@@ -698,6 +709,8 @@ async fn start_indexing_contract_events(
         if let Some(provider) = provider {
             let derived_tables =
                 network_derived_tables.get(network_name).cloned().unwrap_or_default();
+            let streams_clients =
+                collect_streams_clients_for_network(&registry, &trace_registry, network_name);
             let mut coordinator = ReorgCoordinator::new(
                 network_name.clone(),
                 window,
@@ -705,17 +718,8 @@ async fn start_indexing_contract_events(
                 provider,
                 event_tables,
                 derived_tables,
+                streams_clients,
             )?;
-
-            // Get streams_clients for this network (if any event has one). Fall back to
-            // the trace registry so native-transfer-only networks still publish
-            // startup-rollback notifications to their configured stream.
-            let startup_streams_clients = registry
-                .events
-                .iter()
-                .find(|e| e.contract.details.iter().any(|d| &d.network == network_name))
-                .map(|e| e.streams_clients.clone())
-                .or_else(|| find_streams_clients_in_trace_registry(&trace_registry, network_name));
 
             // Run startup validation
             match coordinator.validate_on_startup().await {
@@ -731,7 +735,6 @@ async fn start_indexing_contract_events(
                         clickhouse: clickhouse.as_ref(),
                         registry: Some(&registry),
                         trace_registry: Some(&trace_registry),
-                        streams_clients: reorg_ctx_streams(&startup_streams_clients),
                     };
                     if let Err(e) = coordinator.handle_reorg(startup_task, &reorg_ctx).await {
                         error!(
@@ -1002,6 +1005,11 @@ async fn start_indexing_contract_events(
                 if let Some(provider) = provider {
                     let derived_tables =
                         network_derived_tables.get(network_name).cloned().unwrap_or_default();
+                    let streams_clients = collect_streams_clients_for_network(
+                        &registry,
+                        &trace_registry,
+                        network_name,
+                    );
                     let mut coordinator = ReorgCoordinator::new(
                         network_name.clone(),
                         window,
@@ -1009,18 +1017,8 @@ async fn start_indexing_contract_events(
                         provider,
                         event_tables,
                         derived_tables,
+                        streams_clients,
                     )?;
-
-                    // Get streams_clients for this network from dependency events, with a
-                    // fall back to the trace registry for native-transfer-only networks.
-                    let dep_streams_clients = dependency_event_processing_configs
-                        .iter()
-                        .flat_map(|dep| dep.events_config.iter())
-                        .find(|e| e.network_contract().network == *network_name)
-                        .map(|e| e.streams_clients())
-                        .or_else(|| {
-                            find_streams_clients_in_trace_registry(&trace_registry, network_name)
-                        });
 
                     match coordinator.validate_on_startup().await {
                         Ok(Some(startup_task)) => {
@@ -1035,7 +1033,6 @@ async fn start_indexing_contract_events(
                                 clickhouse: clickhouse.as_ref(),
                                 registry: Some(&registry),
                                 trace_registry: Some(&trace_registry),
-                                streams_clients: reorg_ctx_streams(&dep_streams_clients),
                             };
                             if let Err(e) = coordinator.handle_reorg(startup_task, &reorg_ctx).await
                             {
@@ -1631,7 +1628,7 @@ mod tests {
     // native-transfer-only networks (Task 1, Step 2 verification).
 
     use crate::event::callback_registry::{
-        TraceCallbackRegistry, TraceCallbackRegistryInformation,
+        EventCallbackRegistry, TraceCallbackRegistry, TraceCallbackRegistryInformation,
     };
     use crate::event::contract_setup::{NetworkTrace, TraceInformation};
     use crate::manifest::native_transfer::TraceProcessingMethod;
@@ -1709,22 +1706,6 @@ mod tests {
     }
 
     #[test]
-    fn streams_clients_lookup_falls_back_to_trace_registry() {
-        // Native-transfer-only network: streams_clients must fall back to the trace
-        // registry so the coordinator still fires startup-rollback notifications.
-        let mock_provider: Arc<dyn ChainProvider> =
-            Arc::new(MockChainProvider::new(31337).with_block_number(100));
-        let trace_registry = trace_registry_with_network("anvil", mock_provider);
-
-        let found = find_streams_clients_in_trace_registry(&trace_registry, "anvil");
-
-        // The fixture uses `Arc::new(None)` — we just need to confirm the fallback
-        // path is exercised and returns Some(Arc<Option<...>>) instead of None.
-        assert!(found.is_some(), "expected streams_clients fallback to trace registry");
-        assert!(found.unwrap().is_none(), "fixture carries Arc::new(None) for streams_clients");
-    }
-
-    #[test]
     fn dep_events_provider_fallback_uses_same_helper() {
         // Regression test for code-review I1: both the primary and dep-events loops
         // must resolve native-transfer-only networks via `find_provider_in_trace_registry`.
@@ -1746,16 +1727,37 @@ mod tests {
     }
 
     #[test]
-    fn reorg_ctx_streams_unwraps_nested_option_arc() {
-        // `reorg_ctx_streams` peels the `Option<Arc<Option<StreamsClients>>>` wrapper.
-        // No StreamsClients fixture is needed — the `None` cases exercise both the
-        // outer-None and inner-None branches.
-        let none_outer: Option<Arc<Option<crate::streams::StreamsClients>>> = None;
-        assert!(reorg_ctx_streams(&none_outer).is_none());
+    fn collect_streams_clients_filters_none_entries() {
+        // The trace-registry fixture uses `Arc::new(None)` for `streams_clients`.
+        // `collect_streams_clients_for_network` must skip entries whose inner
+        // Option is None so the coordinator never iterates an absent client.
+        let mock_provider: Arc<dyn ChainProvider> =
+            Arc::new(MockChainProvider::new(31337).with_block_number(100));
+        let trace_registry = trace_registry_with_network("anvil", mock_provider);
+        let registry = EventCallbackRegistry::new();
 
-        let none_inner: Option<Arc<Option<crate::streams::StreamsClients>>> =
-            Some(Arc::new(None));
-        assert!(reorg_ctx_streams(&none_inner).is_none());
+        let collected =
+            collect_streams_clients_for_network(&registry, &trace_registry, "anvil");
+
+        assert!(
+            collected.is_empty(),
+            "entries with Arc::new(None) must be filtered out"
+        );
+    }
+
+    #[test]
+    fn collect_streams_clients_skips_other_networks() {
+        // An event on a different network must not appear in the collected
+        // vector — the network filter is strict.
+        let mock_provider: Arc<dyn ChainProvider> =
+            Arc::new(MockChainProvider::new(31337).with_block_number(100));
+        let trace_registry = trace_registry_with_network("anvil", mock_provider);
+        let registry = EventCallbackRegistry::new();
+
+        let collected =
+            collect_streams_clients_for_network(&registry, &trace_registry, "mainnet");
+
+        assert!(collected.is_empty(), "no entry matches network 'mainnet'");
     }
 
     // --- Derived-table rollback build tests ---
