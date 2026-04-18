@@ -13,6 +13,7 @@ use rust_decimal::Decimal;
 use serde_json::{json, Value};
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type as PgType};
 use tracing::error;
+use uuid::Uuid;
 
 /// Escape a string for safe use inside a ClickHouse single-quoted literal.
 /// Backslashes must be escaped first, then single quotes — ClickHouse uses
@@ -21,7 +22,6 @@ use tracing::error;
 fn ch_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('\'', "\\'")
 }
-use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub enum EthereumSqlTypeWrapper {
