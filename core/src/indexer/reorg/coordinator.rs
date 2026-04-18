@@ -390,25 +390,45 @@ impl ReorgCoordinator {
         // Publish reorg retraction through every configured stream on the network
         // so notifications reach consumers regardless of which indexing pipeline
         // (contract events vs native transfers) detected the reorg first.
-        for clients_arc in &self.streams_clients {
-            let Some(clients) = clients_arc.as_ref().as_ref() else {
-                continue;
-            };
-            let network = reorg_task.network.clone();
-            let fork_point = reorg_task.fork_point;
-            let depth = reorg_task.detection_point.saturating_sub(reorg_task.fork_point) + 1;
+        //
+        // Fan out in parallel: with N streams configured at ~RTT each, serial
+        // awaits stack to N*RTT of stall blocking both indexing pipelines. Cheap
+        // Arc clones snapshot the stream set so each future owns its inputs.
+        let streams_snapshot: Vec<Arc<Option<StreamsClients>>> =
+            self.streams_clients.iter().map(Arc::clone).collect();
+        let network = reorg_task.network.clone();
+        let fork_point = reorg_task.fork_point;
+        let depth = reorg_task.detection_point.saturating_sub(reorg_task.fork_point) + 1;
+        let events_deleted = result.events_deleted;
+        let affected_tables = result.affected_tables.clone();
+
+        let futures = streams_snapshot.into_iter().filter_map(|clients_arc| {
+            // Skip slots whose inner `Option` is `None`.
+            clients_arc.as_ref().as_ref()?;
+            let network = network.clone();
             let tx_hashes = affected_tx_hashes.clone();
-            if let Err(e) = clients
-                .stream_reorg(
-                    &network,
-                    fork_point,
-                    depth,
-                    result.events_deleted,
-                    &tx_hashes,
-                    &result.affected_tables,
-                )
-                .await
-            {
+            let affected_tables = affected_tables.clone();
+            Some(async move {
+                let clients = clients_arc
+                    .as_ref()
+                    .as_ref()
+                    .expect("filter_map above ensures Some");
+                clients
+                    .stream_reorg(
+                        &network,
+                        fork_point,
+                        depth,
+                        events_deleted,
+                        &tx_hashes,
+                        &affected_tables,
+                    )
+                    .await
+            })
+        });
+
+        let results = futures::future::join_all(futures).await;
+        for res in results {
+            if let Err(e) = res {
                 tracing::error!(
                     network = %network,
                     fork_point,
