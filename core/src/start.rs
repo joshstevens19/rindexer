@@ -341,7 +341,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                     info!("Hot-reload: watching rindexer.yaml for changes");
                 }
 
-                if manifest.has_any_contracts_live_indexing() {
+                if manifest.has_any_live_indexing() {
                     if dependencies.is_empty() {
                         dependencies =
                             ContractEventDependencies::map_from_relationships(&relationships)?;
@@ -365,7 +365,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                 }
             }
 
-            if graphql_server_handle.is_none() && !manifest.has_any_contracts_live_indexing() {
+            if graphql_server_handle.is_none() && !manifest.has_any_live_indexing() {
                 // Wait for cron scheduler to complete if it's running
                 if let Some(cron_handle) = details.cron_scheduler_handle {
                     info!("Waiting for cron scheduler to complete...");

@@ -753,10 +753,13 @@ async fn start_indexing_contract_events(
             }
 
             // Keep the coordinator in the map so non-blocking tasks (contract events
-            // and native-transfer fetchers) can share it. Historical-only runs still
-            // work — the map is scoped to this function and dropped when it returns.
-            network_coordinators
-                .insert(network_name.clone(), Arc::new(Mutex::new(coordinator)));
+            // and native-transfer fetchers) can share it during live indexing. In a
+            // pure historical pass the coordinator served its purpose (startup
+            // validation) and can be dropped.
+            if !no_live_indexing_forced {
+                network_coordinators
+                    .insert(network_name.clone(), Arc::new(Mutex::new(coordinator)));
+            }
         }
     }
 
