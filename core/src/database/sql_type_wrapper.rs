@@ -15,6 +15,14 @@ use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type as PgType};
 use tracing::error;
 use uuid::Uuid;
 
+/// Escape a string for safe use inside a ClickHouse single-quoted literal.
+/// Backslashes must be escaped first, then single quotes — ClickHouse uses
+/// C-style backslash escaping, so an unescaped trailing `\` would consume
+/// the closing `'` delimiter and break out of the string.
+fn ch_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
 #[derive(Debug, Clone)]
 pub enum EthereumSqlTypeWrapper {
     // Boolean
@@ -449,14 +457,10 @@ impl EthereumSqlTypeWrapper {
             ),
 
             // Strings and Bytes
-            EthereumSqlTypeWrapper::String(value) => format!("'{}'", value.replace("'", "\\'")),
+            EthereumSqlTypeWrapper::String(value) => format!("'{}'", ch_escape(value)),
             EthereumSqlTypeWrapper::VecString(values) => format!(
                 "[{}]",
-                values
-                    .iter()
-                    .map(|v| format!("'{}'", v.replace("'", "\\'")))
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                values.iter().map(|v| format!("'{}'", ch_escape(v))).collect::<Vec<_>>().join(", ")
             ),
             EthereumSqlTypeWrapper::Bytes(value) => format!("'0x{}'", hex::encode(value)),
             EthereumSqlTypeWrapper::VecBytes(values) => format!(
@@ -491,14 +495,14 @@ impl EthereumSqlTypeWrapper {
             EthereumSqlTypeWrapper::U64Nullable(v) => v.to_string(),
             EthereumSqlTypeWrapper::U256Nullable(v) => v.to_string(),
             EthereumSqlTypeWrapper::U64BigInt(v) => v.to_string(),
-            EthereumSqlTypeWrapper::StringVarchar(v) => format!("'{}'", v.replace("'", "\\'")),
-            EthereumSqlTypeWrapper::StringChar(v) => format!("'{}'", v.replace("'", "\\'")),
-            EthereumSqlTypeWrapper::StringNullable(v) => format!("'{}'", v.replace("'", "\\'")),
+            EthereumSqlTypeWrapper::StringVarchar(v) => format!("'{}'", ch_escape(v)),
+            EthereumSqlTypeWrapper::StringChar(v) => format!("'{}'", ch_escape(v)),
+            EthereumSqlTypeWrapper::StringNullable(v) => format!("'{}'", ch_escape(v)),
             EthereumSqlTypeWrapper::StringVarcharNullable(v) => {
-                format!("'{}'", v.replace("'", "\\'"))
+                format!("'{}'", ch_escape(v))
             }
             EthereumSqlTypeWrapper::StringCharNullable(v) => {
-                format!("'{}'", v.replace("'", "\\'"))
+                format!("'{}'", ch_escape(v))
             }
             EthereumSqlTypeWrapper::AddressNullable(v) => format!("'{v}'"),
             EthereumSqlTypeWrapper::BytesNullable(v) => format!("'0x{}'", hex::encode(v)),
@@ -518,7 +522,7 @@ impl EthereumSqlTypeWrapper {
                     "[{}]",
                     values
                         .iter()
-                        .map(|v| format!("'{}'", v.replace("'", "\\'")))
+                        .map(|v| format!("'{}'", ch_escape(v)))
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
@@ -528,7 +532,7 @@ impl EthereumSqlTypeWrapper {
                     "[{}]",
                     values
                         .iter()
-                        .map(|v| format!("'{}'", v.replace("'", "\\'")))
+                        .map(|v| format!("'{}'", ch_escape(v)))
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
@@ -2457,6 +2461,28 @@ mod tests {
     fn test_ch_string_varchar_escapes_quotes() {
         let wrapper = EthereumSqlTypeWrapper::StringVarchar("abc'def".to_string());
         assert_eq!(wrapper.to_clickhouse_value(), "'abc\\'def'");
+    }
+
+    #[test]
+    fn test_ch_string_escapes_backslash_before_quotes() {
+        // A trailing backslash without escaping would consume the closing quote:
+        // 'hello\' → ClickHouse sees the \' as an escaped quote, string never closes.
+        let wrapper = EthereumSqlTypeWrapper::String("hello\\".to_string());
+        assert_eq!(wrapper.to_clickhouse_value(), "'hello\\\\'");
+
+        // Backslash followed by quote: both must be escaped independently.
+        let wrapper = EthereumSqlTypeWrapper::StringVarchar("a\\'b".to_string());
+        assert_eq!(wrapper.to_clickhouse_value(), "'a\\\\\\'b'");
+    }
+
+    #[test]
+    fn test_ch_string_escapes_backslash_in_vec() {
+        let wrapper = EthereumSqlTypeWrapper::VecStringVarchar(vec![
+            "normal".to_string(),
+            "back\\slash".to_string(),
+            "quo'te".to_string(),
+        ]);
+        assert_eq!(wrapper.to_clickhouse_value(), "['normal', 'back\\\\slash', 'quo\\'te']");
     }
 
     #[test]

@@ -10,6 +10,7 @@ pub mod tables;
 pub use dependency::ContractEventDependenciesMapFromRelationshipsError;
 mod fetch_logs;
 pub use fetch_logs::FetchLogsResult;
+mod heartbeat;
 mod last_synced;
 pub mod native_transfer;
 pub mod no_code;
