@@ -1,0 +1,47 @@
+core/src/start.rs
+  6e03a6223cd0bf53 8-9,46-50,172-181,189,195,197,200-203
+.github/workflows/ci.yml
+  6e03a6223cd0bf53 38-54
+core/src/indexer/no_code.rs
+  6e03a6223cd0bf53 138
+documentation/docs/pages/docs/deploying/aws.mdx
+  6e03a6223cd0bf53 118
+documentation/docs/pages/docs/changelog.mdx
+  6e03a6223cd0bf53 25
+xtask/Cargo.toml
+  6e03a6223cd0bf53 15
+documentation/docs/pages/docs/accessing-data/graphql.mdx
+  6e03a6223cd0bf53 7-17
+core/src/lib.rs
+  6e03a6223cd0bf53 78-79
+.github/workflows/docker.yml
+  6e03a6223cd0bf53 22-25,47-48
+core/src/generator/build.rs
+  6e03a6223cd0bf53 521,537
+cli/src/commands/start.rs
+  6e03a6223cd0bf53 12-13,596,602
+documentation/docs/pages/docs/deploying/gcp.mdx
+  6e03a6223cd0bf53 60
+core/src/api/mod.rs
+  6e03a6223cd0bf53 8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.0",
+  "base_commit_sha": "5a4dbf10592cc89f4d2691a8f053f0e159ef6ca8",
+  "prompts": {
+    "6e03a6223cd0bf53": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9ee764e0-a1b6-4d62-b126-ca43ee173db5",
+        "model": "<synthetic>"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 110,
+      "total_deletions": 77,
+      "accepted_lines": 107,
+      "overriden_lines": 0
+    }
+  }
+}
