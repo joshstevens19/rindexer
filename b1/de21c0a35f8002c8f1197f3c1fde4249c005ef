@@ -1,0 +1,27 @@
+core/src/manifest/stream.rs
+  a04a6a73b4be9012 248-299
+core/src/indexer/start.rs
+  a04a6a73b4be9012 338-378,755-766,1069-1082,1261-1265
+core/src/indexer/reorg/coordinator.rs
+  a04a6a73b4be9012 75,82,158,167-202,429-446
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.0",
+  "base_commit_sha": "b1de21c0a35f8002c8f1197f3c1fde4249c005ef",
+  "prompts": {
+    "a04a6a73b4be9012": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7a75fa5a-3eb1-4785-aaa9-b184960ab8e8",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 181,
+      "total_deletions": 0,
+      "accepted_lines": 181,
+      "overriden_lines": 0
+    }
+  }
+}
