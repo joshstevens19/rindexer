@@ -1,0 +1,25 @@
+e2e-tests/src/tests/live_indexing.rs
+  605098e308c7ef64 304-308,314
+core/src/indexer/process.rs
+  605098e308c7ef64 792
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.0",
+  "base_commit_sha": "e863eb027d2089d8977194e55eb2fc3e6126d628",
+  "prompts": {
+    "605098e308c7ef64": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "37fb5de4-740d-407b-a05c-467260f26150",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 7,
+      "total_deletions": 13,
+      "accepted_lines": 7,
+      "overriden_lines": 0
+    }
+  }
+}
