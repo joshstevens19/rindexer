@@ -554,6 +554,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy::network::AnyRpcBlock;
     use std::sync::Mutex as StdMutex;
 
     fn sample_notification() -> ReorgNotification {
@@ -762,12 +763,6 @@ mod tests {
         assert_eq!(*event_counter.lock().unwrap(), 1);
         assert_eq!(*trace_counter.lock().unwrap(), 1);
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use alloy::network::AnyRpcBlock;
 
     fn test_tx_information(network: &str) -> TxInformation {
         TxInformation {

@@ -365,7 +365,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
             }
 
             //guarantees non empty batch
-            let (from_block, to_block, network) =
+            let (_from_block, _to_block, _network) =
                 results.first_metadata().expect("event_length > 0 guarantees at least one entry");
 
             // Determine block range and network.
