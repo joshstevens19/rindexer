@@ -1,0 +1,25 @@
+core/src/indexer/fetch_logs.rs
+  3748d9f6e616c3cc 684-695
+core/src/indexer/process.rs
+  3748d9f6e616c3cc 550-559
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "b6188fa68d7ca68849bbb139a2318b747194d3ea",
+  "prompts": {
+    "3748d9f6e616c3cc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "37a44a6e-c740-4535-a675-881baebca513",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 166,
+      "total_deletions": 167,
+      "accepted_lines": 61,
+      "overriden_lines": 0
+    }
+  }
+}
