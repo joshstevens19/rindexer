@@ -10,6 +10,7 @@ pub mod health_assertions;
 pub mod historic_indexing;
 pub mod live_indexing;
 pub mod multi_network;
+pub mod native_transfer;
 pub mod postgres_e2e;
 pub mod reorg_e2e;
 pub mod restart_checkpoint;

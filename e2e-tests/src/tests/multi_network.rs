@@ -268,7 +268,11 @@ fn build_multi_network_config(
             csv: CsvConfig { enabled: true },
             clickhouse: None,
         },
-        native_transfers: NativeTransfersConfig { enabled: false },
+        native_transfers: NativeTransfersConfig {
+            enabled: false,
+            networks: None,
+            generate_csv: None,
+        },
         contracts: vec![
             ContractConfig {
                 name: "RocketPoolETH".to_string(),

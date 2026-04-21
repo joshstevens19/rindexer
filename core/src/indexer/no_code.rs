@@ -338,48 +338,9 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                 return Ok(());
             }
 
-            // TODO
-            // Remove unwrap
-            let (from_block, to_block) = match &results {
-                CallbackResult::Event(event) => (
-                    event.first().unwrap().found_in_request.from_block,
-                    event.first().unwrap().found_in_request.to_block,
-                ),
-                CallbackResult::Trace(event) => {
-                    // Filter to only NativeTransfer events and get the first one
-                    let native_transfer = event
-                        .iter()
-                        .filter_map(|result| match result {
-                            TraceResult::NativeTransfer { found_in_request, .. } => {
-                                Some(found_in_request)
-                            }
-                            TraceResult::Block { .. } => None,
-                        })
-                        .next()
-                        .unwrap();
-                    (native_transfer.from_block, native_transfer.to_block)
-                }
-            };
-
-            let network = match &results {
-                CallbackResult::Event(event) => {
-                    event.first().unwrap().tx_information.network.clone()
-                }
-                CallbackResult::Trace(event) => {
-                    // Filter to only NativeTransfer events and get the first one
-                    event
-                        .iter()
-                        .filter_map(|result| match result {
-                            TraceResult::NativeTransfer { tx_information, .. } => {
-                                Some(&tx_information.network)
-                            }
-                            TraceResult::Block { .. } => None,
-                        })
-                        .next()
-                        .unwrap()
-                        .clone()
-                }
-            };
+            //guarantees non empty batch
+            let (from_block, to_block, network) =
+                results.first_metadata().expect("event_length > 0 guarantees at least one entry");
 
             let mut indexed_count = 0;
             let mut sql_bulk_data: Vec<Vec<EthereumSqlTypeWrapper>> = Vec::new();

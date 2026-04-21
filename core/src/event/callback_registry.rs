@@ -46,6 +46,32 @@ pub enum CallbackResult {
     Trace(Vec<TraceResult>),
 }
 
+impl CallbackResult {
+    /// return the (from_block, to_block, network) entry regardless of variant
+    pub fn first_metadata(&self) -> Option<(U64, U64, String)> {
+        match self {
+            Self::Event(events) => events.first().map(|e| {
+                (
+                    e.found_in_request.from_block,
+                    e.found_in_request.to_block,
+                    e.tx_information.network.clone(),
+                )
+            }),
+            Self::Trace(traces) => traces.first().map(|t| {
+                let (fir, tx) = match t {
+                    TraceResult::NativeTransfer { found_in_request, tx_information, .. } => {
+                        (found_in_request, tx_information)
+                    }
+                    TraceResult::Block { found_in_request, tx_information, .. } => {
+                        (found_in_request, tx_information)
+                    }
+                };
+                (fir.from_block, fir.to_block, tx.network.clone())
+            }),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TxInformation {
     pub chain_id: u64,
@@ -505,5 +531,130 @@ where
                 sleep(delay).await;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::network::AnyRpcBlock;
+
+    fn test_tx_information(network: &str) -> TxInformation {
+        TxInformation {
+            chain_id: 31337,
+            network: network.to_string(),
+            address: Address::ZERO,
+            block_hash: BlockHash::ZERO,
+            block_number: 0,
+            block_timestamp: None,
+            transaction_hash: TxHash::ZERO,
+            transaction_index: 0,
+            log_index: U256::ZERO,
+        }
+    }
+
+    fn test_found_in_request(from_block: u64, to_block: u64) -> LogFoundInRequest {
+        LogFoundInRequest { from_block: U64::from(from_block), to_block: U64::from(to_block) }
+    }
+
+    //Minimal valid json for alloy::network::AnyRpcBlock deserialization
+    const TEST_BLOCK_JSON: &str = r#"{
+        "number": "0x0",
+        "hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "sha3Uncles": "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347",
+        "logsBloom": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "transactionsRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "stateRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "receiptsRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "miner": "0x0000000000000000000000000000000000000000",
+        "difficulty": "0x0",
+        "extraData": "0x",
+        "size": "0x0",
+        "gasLimit": "0x0",
+        "gasUsed": "0x0",
+        "timestamp": "0x0",
+        "transactions": [],
+        "uncles": []
+    }"#;
+
+    const TEST_LOG_JSON: &str = r#"{
+        "address": "0x0000000000000000000000000000000000000000",
+        "topics": [],
+        "data": "0x",
+        "blockHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "blockNumber": "0x0",
+        "transactionHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "transactionIndex": "0x0",
+        "logIndex": "0x0",
+        "removed": false
+    }"#;
+
+    fn test_block() -> AnyRpcBlock {
+        serde_json::from_str(TEST_BLOCK_JSON).expect("test block JSON should deserialize")
+    }
+
+    fn test_log() -> Log {
+        serde_json::from_str(TEST_LOG_JSON).expect("test log JSON should deserialize")
+    }
+
+    #[test]
+    fn first_metadata_event_returns_fields_from_first_entry() {
+        let event = EventResult {
+            log: test_log(),
+            decoded_data: Arc::new(()),
+            tx_information: test_tx_information("mainnet"),
+            found_in_request: test_found_in_request(10, 20),
+        };
+        let result = CallbackResult::Event(vec![event]);
+        let (from_block, to_block, network) = result.first_metadata().expect("non-empty batch");
+        assert_eq!(from_block, U64::from(10));
+        assert_eq!(to_block, U64::from(20));
+        assert_eq!(network, "mainnet");
+    }
+
+    #[test]
+    fn first_metadata_trace_native_transfer_returns_fields() {
+        let nt = TraceResult::NativeTransfer {
+            from: Address::ZERO,
+            to: Address::ZERO,
+            value: U256::ZERO,
+            tx_information: test_tx_information("anvil"),
+            found_in_request: test_found_in_request(5, 15),
+        };
+        let result = CallbackResult::Trace(vec![nt]);
+        let (from_block, to_block, network) = result.first_metadata().expect("non-empty batch");
+        assert_eq!(from_block, U64::from(5));
+        assert_eq!(to_block, U64::from(15));
+        assert_eq!(network, "anvil");
+    }
+
+    //native_transfer_block_consumer always fires trigger_event with a Block-only batch before firing the
+    // NativeTransfer batch, so first_metadata must
+    // extract cleanly from a TraceResult::Block without panicking
+    #[test]
+    fn first_metadata_trace_block_returns_fields() {
+        let b = TraceResult::Block {
+            block: Box::new(test_block()),
+            tx_information: test_tx_information("polygon"),
+            found_in_request: test_found_in_request(100, 200),
+        };
+        let result = CallbackResult::Trace(vec![b]);
+        let (from_block, to_block, network) = result.first_metadata().expect("non-empty batch");
+        assert_eq!(from_block, U64::from(100));
+        assert_eq!(to_block, U64::from(200));
+        assert_eq!(network, "polygon");
+    }
+
+    #[test]
+    fn first_metadata_empty_event_returns_none() {
+        let result = CallbackResult::Event(vec![]);
+        assert!(result.first_metadata().is_none());
+    }
+
+    #[test]
+    fn first_metadata_empty_trace_returns_none() {
+        let result = CallbackResult::Trace(vec![]);
+        assert!(result.first_metadata().is_none());
     }
 }

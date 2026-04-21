@@ -77,6 +77,9 @@ impl TestRegistry {
         // Direct RPC
         tests.extend(crate::tests::direct_rpc::DirectRpcTests::get_tests());
 
+        // Native transfers
+        tests.extend(crate::tests::native_transfer::NativeTransferTests::get_tests());
+
         // Reorg handling
         tests.extend(crate::tests::reorg_e2e::ReorgTests::get_tests());
 
