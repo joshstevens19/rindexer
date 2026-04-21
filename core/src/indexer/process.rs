@@ -657,7 +657,7 @@ async fn live_indexing_for_contract_event_dependencies(
 
                     continue;
                 } else {
-                    info!(
+                    debug!(
                         "{} - {} - not in safe reorg block range yet block: {} > range: {}",
                         &config.info_log_name(),
                         IndexingEventProgressStatus::live_log(),

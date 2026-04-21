@@ -1339,7 +1339,7 @@ async fn live_indexing_stream(
                                     );
                                 }
                             } else {
-                                info!(
+                                debug!(
                                     "{} - {} - LIVE INDEXING STREAM - not in safe reorg block range yet block: {} > range: {}",
                                     info_log_name,
                                     IndexingEventProgressStatus::live_log(),
