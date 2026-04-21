@@ -72,12 +72,14 @@ impl ReorgCoordinator {
             ParentValidation::Valid => {
                 self.window.insert(block_number, block_hash, parent_hash);
                 self.persist_and_maybe_prune(block_number, block_hash, parent_hash).await?;
+                self.flush_finalized_buffers(block_number).await;
                 Ok(None)
             }
             ParentValidation::NoPreviousBlock => {
                 if self.window.is_empty() || block_number == 0 {
                     self.window.insert(block_number, block_hash, parent_hash);
                     self.persist_and_maybe_prune(block_number, block_hash, parent_hash).await?;
+                    self.flush_finalized_buffers(block_number).await;
                     return Ok(None);
                 }
 
@@ -153,10 +155,47 @@ impl ReorgCoordinator {
             ParentValidation::Valid | ParentValidation::NoPreviousBlock => {
                 self.window.insert(block_number, block_hash, parent_hash);
                 self.persist_and_maybe_prune(block_number, block_hash, parent_hash).await?;
+                self.flush_finalized_buffers(block_number).await;
                 Ok(None)
             }
             ParentValidation::Mismatch { expected, got } => {
                 self.handle_mismatch(block_number, expected, got).await
+            }
+        }
+    }
+
+    /// Fan `StreamsClients::flush_finalized` out in parallel across every
+    /// `StreamsClients` on this network, awaiting all results. Errors are
+    /// logged but not propagated — a flush failure must not stop live
+    /// indexing; the next block will retry any still-buffered events.
+    ///
+    /// Fanning out in parallel matches the shape of the `stream_reorg` fanout
+    /// in `handle_reorg`: with N streams configured at ~RTT each, serial
+    /// awaits stack to N*RTT and block the indexing pipeline.
+    async fn flush_finalized_buffers(&self, block_number: u64) {
+        if self.streams_clients.is_empty() {
+            return;
+        }
+        let snapshot: Vec<Arc<Option<StreamsClients>>> =
+            self.streams_clients.iter().map(Arc::clone).collect();
+        let network = self.network.clone();
+        let futures = snapshot.into_iter().filter_map(|clients_arc| {
+            clients_arc.as_ref().as_ref()?;
+            let network = network.clone();
+            Some(async move {
+                let clients = clients_arc.as_ref().as_ref().expect("filter_map above ensures Some");
+                (network.clone(), clients.flush_finalized(&network, block_number).await)
+            })
+        });
+        let results = futures::future::join_all(futures).await;
+        for (network, res) in results {
+            if let Err(e) = res {
+                warn!(
+                    network = %network,
+                    block_number,
+                    error = ?e,
+                    "Finalized buffer flush failed"
+                );
             }
         }
     }
@@ -384,6 +423,24 @@ impl ReorgCoordinator {
             }
             if let Some(trace_registry) = ctx.trace_registry {
                 trace_registry.fire_on_reorg(notification).await;
+            }
+        }
+
+        // Discard any finalized-delivery events buffered for the invalidated
+        // range BEFORE publishing the reorg notification. If we reversed the
+        // order, a concurrent `flush_finalized` from a subsequent
+        // `on_new_block` could drain invalidated events between the notify and
+        // the discard. `handle_reorg` runs serially inside the coordinator, so
+        // this block also fences any later flush until we return.
+        for clients_arc in &self.streams_clients {
+            if let Some(clients) = clients_arc.as_ref().as_ref() {
+                clients
+                    .discard_finalized(
+                        &reorg_task.network,
+                        reorg_task.fork_point,
+                        reorg_task.detection_point,
+                    )
+                    .await;
             }
         }
 

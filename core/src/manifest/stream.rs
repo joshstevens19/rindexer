@@ -245,6 +245,58 @@ impl StreamsConfig {
         Ok(())
     }
 
+    /// For every per-stream-type config whose `delivery == Finalized`, return
+    /// `(stream_type_label, endpoint_label, networks_slice)`. Used by
+    /// `start.rs` to reject finalized delivery targeting historic-only
+    /// networks before any indexing task is spawned.
+    pub fn finalized_delivery_targets(&self) -> Vec<(&'static str, String, Vec<String>)> {
+        let mut out: Vec<(&'static str, String, Vec<String>)> = Vec::new();
+        if let Some(sns) = &self.sns {
+            for t in &sns.topics {
+                if matches!(t.delivery, Some(StreamDeliveryMode::Finalized)) {
+                    out.push(("sns", t.topic_arn.clone(), t.networks.clone()));
+                }
+            }
+        }
+        if let Some(webhooks) = &self.webhooks {
+            for w in webhooks {
+                if matches!(w.delivery, Some(StreamDeliveryMode::Finalized)) {
+                    out.push(("webhook", w.endpoint.clone(), w.networks.clone()));
+                }
+            }
+        }
+        if let Some(rabbitmq) = &self.rabbitmq {
+            for e in &rabbitmq.exchanges {
+                if matches!(e.delivery, Some(StreamDeliveryMode::Finalized)) {
+                    out.push(("rabbitmq", e.exchange.clone(), e.networks.clone()));
+                }
+            }
+        }
+        #[cfg(feature = "kafka")]
+        if let Some(kafka) = &self.kafka {
+            for t in &kafka.topics {
+                if matches!(t.delivery, Some(StreamDeliveryMode::Finalized)) {
+                    out.push(("kafka", t.topic.clone(), t.networks.clone()));
+                }
+            }
+        }
+        if let Some(redis) = &self.redis {
+            for s in &redis.streams {
+                if matches!(s.delivery, Some(StreamDeliveryMode::Finalized)) {
+                    out.push(("redis", s.stream_name.clone(), s.networks.clone()));
+                }
+            }
+        }
+        if let Some(cf) = &self.cloudflare_queues {
+            for q in &cf.queues {
+                if matches!(q.delivery, Some(StreamDeliveryMode::Finalized)) {
+                    out.push(("cloudflare_queues", q.queue_id.clone(), q.networks.clone()));
+                }
+            }
+        }
+        out
+    }
+
     pub fn get_streams_last_synced_block_path(&self) -> String {
         let mut path = ".rindexer/".to_string();
         #[allow(clippy::blocks_in_conditions)]

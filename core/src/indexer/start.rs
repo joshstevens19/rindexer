@@ -339,6 +339,47 @@ fn find_provider_in_trace_registry(
 /// network across contract events and native-transfer trace events. Dedup is
 /// by `Arc::as_ptr` pointer identity so two pipelines sharing the same instance
 /// only publish once. Entries whose inner `Option` is `None` are skipped.
+/// Reject `delivery: finalized` on any network that isn't in
+/// `network_coordinators`. Such a network has no live coordinator to drive
+/// flush/discard, so buffered events would accumulate forever (or until a
+/// reorg clears them). Returns a `ConfigError` listing every offending
+/// `(stream_type, endpoint, network)` triple.
+fn validate_finalized_delivery_targets(
+    manifest: &Manifest,
+    network_coordinators: &HashMap<String, Arc<Mutex<ReorgCoordinator>>>,
+) -> Result<(), StartIndexingError> {
+    let mut errors: Vec<String> = Vec::new();
+
+    let mut check = |source: String,
+                     streams: &Option<crate::manifest::stream::StreamsConfig>| {
+        let Some(streams) = streams else { return };
+        for (stream_type, endpoint, networks) in streams.finalized_delivery_targets() {
+            for n in &networks {
+                if !network_coordinators.contains_key(n) {
+                    errors.push(format!(
+                        "stream config '{endpoint}' (stream_type: {stream_type}, {source}) \
+                         requests delivery: finalized on network '{n}', but that network has \
+                         no live indexing (reorg coordinator). Either enable live indexing or \
+                         change delivery to 'instant'."
+                    ));
+                }
+            }
+        }
+    };
+
+    for contract in manifest.all_contracts() {
+        check(format!("contract '{}'", contract.name), &contract.streams);
+    }
+    if manifest.native_transfers.enabled {
+        check("native_transfers".to_string(), &manifest.native_transfers.streams);
+    }
+
+    if !errors.is_empty() {
+        return Err(StartIndexingError::ConfigError(anyhow::anyhow!(errors.join("\n"))));
+    }
+    Ok(())
+}
+
 fn collect_streams_clients_for_network(
     registry: &EventCallbackRegistry,
     trace_registry: &TraceCallbackRegistry,
@@ -715,6 +756,18 @@ async fn start_indexing_contract_events(
                 network_derived_tables.get(network_name).cloned().unwrap_or_default();
             let streams_clients =
                 collect_streams_clients_for_network(&registry, &trace_registry, network_name);
+
+            // Register the network's reorg_safe_distance on every StreamsClients
+            // serving this network so finalized-delivery buffers know how far
+            // behind head to keep events before flushing.
+            let safe_distance = reorg_safe_distance_for_chain(*chain_id);
+            for clients_arc in &streams_clients {
+                if let Some(clients) = clients_arc.as_ref().as_ref() {
+                    clients
+                        .register_network_reorg_distance(network_name.clone(), safe_distance);
+                }
+            }
+
             let mut coordinator = ReorgCoordinator::new(
                 network_name.clone(),
                 window,
@@ -1017,6 +1070,20 @@ async fn start_indexing_contract_events(
                         &trace_registry,
                         network_name,
                     );
+
+                    // Register the network's reorg_safe_distance on every
+                    // StreamsClients serving this network (see the matching
+                    // registration in the main coordinator-construction path).
+                    let safe_distance = reorg_safe_distance_for_chain(*chain_id);
+                    for clients_arc in &streams_clients {
+                        if let Some(clients) = clients_arc.as_ref().as_ref() {
+                            clients.register_network_reorg_distance(
+                                network_name.clone(),
+                                safe_distance,
+                            );
+                        }
+                    }
+
                     let mut coordinator = ReorgCoordinator::new(
                         network_name.clone(),
                         window,
@@ -1194,6 +1261,11 @@ async fn start_indexing(
         mut dependency_event_processing_configs,
         network_coordinators,
     ) = contract_events_indexer?;
+
+    // Reject `delivery: finalized` on any network without a live-indexing
+    // reorg coordinator: without one, buffered events would never flush and
+    // would silently pile up until the process restarts.
+    validate_finalized_delivery_targets(manifest, &network_coordinators)?;
 
     let trace_indexer_handles = start_indexing_traces(
         manifest,
