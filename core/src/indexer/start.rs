@@ -757,10 +757,14 @@ async fn start_indexing_contract_events(
             let streams_clients =
                 collect_streams_clients_for_network(&registry, &trace_registry, network_name);
 
-            // Register the network's reorg_safe_distance on every StreamsClients
-            // serving this network so finalized-delivery buffers know how far
-            // behind head to keep events before flushing.
-            let safe_distance = reorg_safe_distance_for_chain(*chain_id);
+            // Register the network's effective reorg_safe_distance on every
+            // StreamsClients serving this network so finalized-delivery buffers
+            // know how far behind head to keep events before flushing.
+            let safe_distance = crate::indexer::reorg::finalized_buffer_distance_for_network(
+                manifest,
+                network_name,
+                *chain_id,
+            );
             for clients_arc in &streams_clients {
                 if let Some(clients) = clients_arc.as_ref().as_ref() {
                     clients
@@ -1071,10 +1075,16 @@ async fn start_indexing_contract_events(
                         network_name,
                     );
 
-                    // Register the network's reorg_safe_distance on every
-                    // StreamsClients serving this network (see the matching
-                    // registration in the main coordinator-construction path).
-                    let safe_distance = reorg_safe_distance_for_chain(*chain_id);
+                    // Register the network's effective reorg_safe_distance on
+                    // every StreamsClients serving this network (see the
+                    // matching registration in the main coordinator-construction
+                    // path).
+                    let safe_distance =
+                        crate::indexer::reorg::finalized_buffer_distance_for_network(
+                            manifest,
+                            network_name,
+                            *chain_id,
+                        );
                     for clients_arc in &streams_clients {
                         if let Some(clients) = clients_arc.as_ref().as_ref() {
                             clients.register_network_reorg_distance(

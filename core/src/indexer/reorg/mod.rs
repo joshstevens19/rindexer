@@ -188,6 +188,53 @@ pub fn handle_chain_notification(
     }
 }
 
+/// Effective `reorg_safe_distance` (in blocks) for the finalized-delivery
+/// buffer on `network`. Equal to the maximum distance demanded by any contract
+/// or native-transfer config that touches the network: a contract that sets
+/// `reorg_safe_distance: custom(2)` wants a tighter finality window, so we
+/// honor it by not holding events longer. Any source that leaves
+/// `reorg_safe_distance` unset (or sets `false`, meaning disabled) contributes
+/// the chain default to the max, so unset configs never shrink the buffer
+/// below the safe chain-level value.
+///
+/// Returns the chain default when no contract or NT config touches the
+/// network (unusual — would mean the network has no indexing targets).
+pub fn finalized_buffer_distance_for_network(
+    manifest: &crate::manifest::core::Manifest,
+    network: &str,
+    chain_id: u64,
+) -> u64 {
+    let chain_default = reorg_safe_distance_for_chain(chain_id);
+    let mut observed: Vec<u64> = Vec::new();
+
+    for contract in manifest.all_contracts() {
+        if contract.details.iter().any(|d| d.network == network) {
+            let d = contract
+                .reorg_safe_distance
+                .and_then(|rsd| rsd.resolve(chain_id))
+                .unwrap_or(chain_default);
+            observed.push(d);
+        }
+    }
+
+    if manifest.native_transfers.enabled {
+        let touches = match &manifest.native_transfers.networks {
+            Some(nets) => nets.iter().any(|n| n.network == network),
+            None => manifest.networks.iter().any(|n| n.name == network),
+        };
+        if touches {
+            let d = manifest
+                .native_transfers
+                .reorg_safe_distance
+                .and_then(|rsd| rsd.resolve(chain_id))
+                .unwrap_or(chain_default);
+            observed.push(d);
+        }
+    }
+
+    observed.into_iter().max().unwrap_or(chain_default)
+}
+
 /// Returns the default safe reorg distance (in blocks) for a given chain.
 /// Used when `reorg_safe_distance: true` in YAML (no custom override).
 pub fn reorg_safe_distance_for_chain(chain_id: u64) -> u64 {
