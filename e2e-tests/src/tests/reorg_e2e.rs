@@ -1687,7 +1687,7 @@ fn create_native_transfer_reorg_config(
     config.contracts = vec![];
     config.native_transfers = crate::test_suite::NativeTransfersConfig {
         enabled: true,
-        networks: Some(vec![crate::test_suite::NativeTransferDetail {
+        networks: Some(vec![crate::test_suite::NativeTransferNetworkDetail {
             network: "polygon".to_string(),
             start_block: Some("0".to_string()),
             end_block: None,
@@ -1703,6 +1703,7 @@ fn create_native_transfer_reorg_config(
                 ]
             }]
         })),
+        generate_csv: None,
         reorg_safe_distance: Some(serde_json::json!(false)),
         tables: None,
     };
@@ -1738,7 +1739,7 @@ fn create_mixed_reorg_config(
 
     config.native_transfers = crate::test_suite::NativeTransfersConfig {
         enabled: true,
-        networks: Some(vec![crate::test_suite::NativeTransferDetail {
+        networks: Some(vec![crate::test_suite::NativeTransferNetworkDetail {
             network: "polygon".to_string(),
             start_block: Some("0".to_string()),
             end_block: None,
@@ -1749,6 +1750,7 @@ fn create_mixed_reorg_config(
         // contract webhook receives the payload regardless of which pipeline
         // detected the reorg first.
         streams: None,
+        generate_csv: None,
         reorg_safe_distance: Some(serde_json::json!(false)),
         tables: None,
     };

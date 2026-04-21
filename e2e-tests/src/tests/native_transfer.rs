@@ -93,8 +93,12 @@ fn native_transfer_csv_no_panic_test(
                     network: "anvil".to_string(),
                     start_block: Some("0".to_string()),
                     end_block: Some(end_block.to_string()),
+                    method: None,
                 }]),
+                streams: None,
                 generate_csv: Some(true),
+                reorg_safe_distance: None,
+                tables: None,
             },
             contracts: vec![ContractConfig {
                 name: "SimpleERC20".to_string(),
