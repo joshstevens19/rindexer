@@ -410,8 +410,9 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
             let mut sql_bulk_column_types: Vec<PgType> = Vec::new();
             let mut csv_bulk_data: Vec<Vec<String>> = Vec::new();
 
-            // stream and chat info
-            let mut event_message_data: Vec<Value> = Vec::new();
+            // stream and chat info, paired with source block_number so the
+            // streams dispatch can split per-block for finalized delivery.
+            let mut event_message_data: Vec<(u64, Value)> = Vec::new();
 
             // table operations data: (log_params, network, tx_metadata)
             let mut table_events_data: Vec<(Vec<LogParam>, String, TxMetadata)> = Vec::new();
@@ -569,7 +570,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                         },
                         false,
                     );
-                    event_message_data.push(event_result);
+                    event_message_data.push((block_number, event_result));
                 }
 
                 let mut all_params: Vec<EthereumSqlTypeWrapper> = vec![contract_address];
@@ -707,49 +708,85 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                 }
             }
 
-            let event_message = EventMessage {
-                event_name: params.event_info.name.clone(),
-                event_data: Value::Array(event_message_data),
-                event_signature_hash: params.event.selector(),
-                network: network.clone(),
-            };
+            // Group events by source block number so the streams dispatch can
+            // emit one `EventMessage` per block. Finalized delivery keys its
+            // buffer by `EventMessage.block_number`, so cross-block batching
+                // would make a single message impossible to bucket correctly.
+            let mut events_by_block: std::collections::BTreeMap<u64, Vec<Value>> =
+                std::collections::BTreeMap::new();
+            for (blk, ev) in &event_message_data {
+                events_by_block.entry(*blk).or_default().push(ev.clone());
+            }
 
             if let Some(streams_clients) = params.streams_clients.as_ref() {
-                let stream_id = format!(
-                    "{}-{}-{}-{}-{}",
-                    params.contract_name, params.event_info.name, network, from_block, to_block
-                );
-
                 let is_trace_event = match results {
                     CallbackResult::Event(_) => false,
                     CallbackResult::Trace(_) => true,
                 };
 
-                match streams_clients
-                    .stream(stream_id, &event_message, params.index_event_in_order, is_trace_event)
-                    .await
-                {
-                    Ok(streamed) => {
-                        if streamed > 0 {
-                            info!(
-                                "{}::{} - {} - {} events {}",
-                                params.contract_name,
-                                params.event_info.name,
-                                "STREAMED",
-                                streamed,
-                                format!(
-                                    "- blocks: {} - {} - network: {}",
-                                    from_block, to_block, network
-                                )
-                            );
+                for (block_number, block_events) in &events_by_block {
+                    let event_message = EventMessage {
+                        event_name: params.event_info.name.clone(),
+                        event_data: Value::Array(block_events.clone()),
+                        event_signature_hash: params.event.selector(),
+                        network: network.clone(),
+                        block_number: *block_number,
+                    };
+
+                    let stream_id = format!(
+                        "{}-{}-{}-{}-{}-blk{}",
+                        params.contract_name,
+                        params.event_info.name,
+                        network,
+                        from_block,
+                        to_block,
+                        block_number
+                    );
+
+                    match streams_clients
+                        .stream(
+                            stream_id,
+                            &event_message,
+                            params.index_event_in_order,
+                            is_trace_event,
+                        )
+                        .await
+                    {
+                        Ok(streamed) => {
+                            if streamed > 0 {
+                                info!(
+                                    "{}::{} - {} - {} events {}",
+                                    params.contract_name,
+                                    params.event_info.name,
+                                    "STREAMED",
+                                    streamed,
+                                    format!(
+                                        "- block: {} - network: {}",
+                                        block_number, network
+                                    )
+                                );
+                            }
                         }
-                    }
-                    Err(e) => {
-                        error!("Error streaming event: {}", e);
-                        return Err(e.to_string());
+                        Err(e) => {
+                            error!("Error streaming event: {}", e);
+                            return Err(e.to_string());
+                        }
                     }
                 }
             }
+
+            // Chat path keeps the cross-block aggregation (a single message per
+            // poll). `block_number` here is purely cosmetic on the payload —
+            // chat dispatch does not consult the finalized-delivery buffer.
+            let event_message = EventMessage {
+                event_name: params.event_info.name.clone(),
+                event_data: Value::Array(
+                    event_message_data.iter().map(|(_, v)| v.clone()).collect(),
+                ),
+                event_signature_hash: params.event.selector(),
+                network: network.clone(),
+                block_number: from_block.to::<u64>(),
+            };
 
             if let Some(chat_clients) = params.chat_clients.as_ref() {
                 if !chat_clients.is_in_block_range_to_send(&from_block, &to_block) {

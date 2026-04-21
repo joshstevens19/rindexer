@@ -273,6 +273,7 @@ impl StreamsClients {
             event_data: Value::Array(chunk.to_vec()),
             event_signature_hash: event_message.event_signature_hash,
             network: event_message.network.clone(),
+            block_number: event_message.block_number,
         };
 
         serde_json::to_string(&chunk_message)
@@ -290,6 +291,7 @@ impl StreamsClients {
             event_data: Value::Array(chunk.to_vec()),
             event_signature_hash: event_message.event_signature_hash,
             network: event_message.network.clone(),
+            block_number: event_message.block_number,
         };
 
         serde_json::to_value(&chunk_message)
@@ -913,6 +915,10 @@ impl StreamsClients {
             event_data: Value::Array(vec![reorg_payload]),
             event_signature_hash: B256::ZERO,
             network: network.to_string(),
+            // Synthetic reorg notifications are never buffered for finalized
+            // delivery — `should_buffer` treats `block_number == 0` as a
+            // sentinel for "always dispatch immediately".
+            block_number: 0,
         };
 
         self.stream_with_mode(
@@ -1051,6 +1057,7 @@ mod tests {
             event_data: json!([{"from": "0x1", "to": "0x2", "value": "100"}]),
             event_signature_hash: B256::ZERO,
             network: "ethereum".to_string(),
+            block_number: 100,
         }
     }
 
@@ -1255,6 +1262,7 @@ mod tests {
             event_data: json!([]),
             event_signature_hash: B256::ZERO,
             network: "ethereum".to_string(),
+            block_number: 100,
         };
         let chunk = vec![json!({"v": 1})];
         let result =
@@ -1366,6 +1374,7 @@ mod tests {
             event_data: json!([{"from": "0x1", "to": "0x2", "value": "1000"}]),
             event_signature_hash: B256::ZERO,
             network: "ethereum".to_string(),
+            block_number: 100,
         };
 
         let result = webhook_clients(vec![config])
