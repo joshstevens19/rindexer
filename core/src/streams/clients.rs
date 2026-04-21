@@ -14,6 +14,7 @@ use tokio::{
     task,
     task::{JoinError, JoinHandle},
 };
+use tracing::warn;
 
 use crate::{
     event::{filter_event_data_by_conditions, EventMessage},
@@ -40,6 +41,12 @@ use crate::{
 // we should limit the max chunk size we send over when streaming to 70KB - 100KB is most limits
 // we can add this to yaml if people need it
 const MAX_CHUNK_SIZE: usize = 75 * 1024; // 75 KB
+
+/// Soft cap on how many events a single `(stream_type, config, network, event)`
+/// finalized buffer can hold before we warn + record a metric. Steady-state
+/// memory is bounded by the flush rate (one block every ~`reorg_safe_distance`
+/// blocks); sustained growth past this cap means something is stuck.
+const FINALIZED_BUFFER_SOFT_CAP: usize = 10_000;
 
 type StreamPublishes = Vec<JoinHandle<Result<usize, StreamError>>>;
 
@@ -392,6 +399,62 @@ impl StreamsClients {
         filtered_chunk
     }
 
+    /// Returns `true` when the dispatch should be routed into the
+    /// `FinalizedBuffer` instead of publishing immediately. Reorg notifications
+    /// (`force_send_network_wide`) and trace events always bypass the buffer;
+    /// `block_number == 0` is a sentinel for synthetic messages that likewise
+    /// never buffer.
+    fn should_buffer(
+        delivery: Option<&crate::manifest::stream::StreamDeliveryMode>,
+        event_message: &EventMessage,
+        is_trace_event: bool,
+        force_send_network_wide: bool,
+    ) -> bool {
+        if force_send_network_wide || is_trace_event {
+            return false;
+        }
+        if event_message.block_number == 0 {
+            return false;
+        }
+        matches!(delivery, Some(crate::manifest::stream::StreamDeliveryMode::Finalized))
+    }
+
+    /// Append a per-config event to the finalized-delivery buffer. Idempotently
+    /// creates the buffer on first use using the network's registered
+    /// `reorg_safe_distance`. Emits a warning + metric if the buffer crosses
+    /// the soft cap — events are never dropped; the cap is a health signal.
+    async fn buffer_event(
+        &self,
+        stream_type: &'static str,
+        config_index: usize,
+        event_message: &EventMessage,
+    ) {
+        let distance = self.reorg_safe_distance_for(&event_message.network);
+        let key = BufferKey {
+            stream_type,
+            config_index,
+            network: event_message.network.clone(),
+            event_name: event_message.event_name.clone(),
+            event_signature_hash: event_message.event_signature_hash,
+        };
+        let mut map = self.finalized_buffers.lock().await;
+        let buffer = map.entry(key).or_insert_with(|| FinalizedBuffer::new(distance));
+        if let Value::Array(data) = &event_message.event_data {
+            buffer.add(event_message.block_number, data.clone());
+        }
+        let len = buffer.len();
+        if len > FINALIZED_BUFFER_SOFT_CAP {
+            warn!(
+                network = %event_message.network,
+                stream_type,
+                config_index,
+                buffered = len,
+                "Finalized stream buffer exceeding soft cap"
+            );
+            stream_metrics::record_finalized_buffer_overflow(stream_type, &event_message.network);
+        }
+    }
+
     fn should_send_for_config(
         config_events: &[StreamEvent],
         event_name: &str,
@@ -733,7 +796,7 @@ impl StreamsClients {
             let mut streams: Vec<StreamPublishes> = Vec::new();
 
             if let Some(sns) = &self.sns {
-                for config in &sns.config {
+                for (idx, config) in sns.config.iter().enumerate() {
                     if Self::should_send_for_config(
                         &config.events,
                         &event_message.event_name,
@@ -741,6 +804,15 @@ impl StreamsClients {
                         force_send_network_wide,
                     ) && config.networks.contains(&event_message.network)
                     {
+                        if Self::should_buffer(
+                            config.delivery.as_ref(),
+                            event_message,
+                            is_trace_event,
+                            force_send_network_wide,
+                        ) {
+                            self.buffer_event(stream_type::SNS, idx, event_message).await;
+                            continue;
+                        }
                         streams.push(self.sns_stream_tasks(
                             config,
                             Arc::clone(&sns.client),
@@ -754,7 +826,7 @@ impl StreamsClients {
             };
 
             if let Some(webhook) = &self.webhook {
-                for config in &webhook.config {
+                for (idx, config) in webhook.config.iter().enumerate() {
                     if Self::should_send_for_config(
                         &config.events,
                         &event_message.event_name,
@@ -762,6 +834,15 @@ impl StreamsClients {
                         force_send_network_wide,
                     ) && config.networks.contains(&event_message.network)
                     {
+                        if Self::should_buffer(
+                            config.delivery.as_ref(),
+                            event_message,
+                            is_trace_event,
+                            force_send_network_wide,
+                        ) {
+                            self.buffer_event(stream_type::WEBHOOK, idx, event_message).await;
+                            continue;
+                        }
                         streams.push(self.webhook_stream_tasks(
                             config,
                             Arc::clone(&webhook.client),
@@ -775,7 +856,7 @@ impl StreamsClients {
             }
 
             if let Some(rabbitmq) = &self.rabbitmq {
-                for config in &rabbitmq.config.exchanges {
+                for (idx, config) in rabbitmq.config.exchanges.iter().enumerate() {
                     if Self::should_send_for_config(
                         &config.events,
                         &event_message.event_name,
@@ -783,6 +864,15 @@ impl StreamsClients {
                         force_send_network_wide,
                     ) && config.networks.contains(&event_message.network)
                     {
+                        if Self::should_buffer(
+                            config.delivery.as_ref(),
+                            event_message,
+                            is_trace_event,
+                            force_send_network_wide,
+                        ) {
+                            self.buffer_event(stream_type::RABBITMQ, idx, event_message).await;
+                            continue;
+                        }
                         streams.push(self.rabbitmq_stream_tasks(
                             config,
                             Arc::clone(&rabbitmq.client),
@@ -797,7 +887,7 @@ impl StreamsClients {
 
             #[cfg(feature = "kafka")]
             if let Some(kafka) = &self.kafka {
-                for config in &kafka.config.topics {
+                for (idx, config) in kafka.config.topics.iter().enumerate() {
                     if Self::should_send_for_config(
                         &config.events,
                         &event_message.event_name,
@@ -805,6 +895,15 @@ impl StreamsClients {
                         force_send_network_wide,
                     ) && config.networks.contains(&event_message.network)
                     {
+                        if Self::should_buffer(
+                            config.delivery.as_ref(),
+                            event_message,
+                            is_trace_event,
+                            force_send_network_wide,
+                        ) {
+                            self.buffer_event(stream_type::KAFKA, idx, event_message).await;
+                            continue;
+                        }
                         streams.push(self.kafka_stream_tasks(
                             config,
                             Arc::clone(&kafka.client),
@@ -818,7 +917,7 @@ impl StreamsClients {
             }
 
             if let Some(redis) = &self.redis {
-                for config in &redis.config.streams {
+                for (idx, config) in redis.config.streams.iter().enumerate() {
                     if Self::should_send_for_config(
                         &config.events,
                         &event_message.event_name,
@@ -826,6 +925,15 @@ impl StreamsClients {
                         force_send_network_wide,
                     ) && config.networks.contains(&event_message.network)
                     {
+                        if Self::should_buffer(
+                            config.delivery.as_ref(),
+                            event_message,
+                            is_trace_event,
+                            force_send_network_wide,
+                        ) {
+                            self.buffer_event(stream_type::REDIS, idx, event_message).await;
+                            continue;
+                        }
                         streams.push(self.redis_stream_tasks(
                             config,
                             Arc::clone(&redis.client),
@@ -839,7 +947,7 @@ impl StreamsClients {
             }
 
             if let Some(cloudflare_queues) = &self.cloudflare_queues {
-                for config in &cloudflare_queues.config.queues {
+                for (idx, config) in cloudflare_queues.config.queues.iter().enumerate() {
                     if Self::should_send_for_config(
                         &config.events,
                         &event_message.event_name,
@@ -847,6 +955,20 @@ impl StreamsClients {
                         force_send_network_wide,
                     ) && config.networks.contains(&event_message.network)
                     {
+                        if Self::should_buffer(
+                            config.delivery.as_ref(),
+                            event_message,
+                            is_trace_event,
+                            force_send_network_wide,
+                        ) {
+                            self.buffer_event(
+                                stream_type::CLOUDFLARE_QUEUES,
+                                idx,
+                                event_message,
+                            )
+                            .await;
+                            continue;
+                        }
                         streams.push(self.cloudflare_queues_stream_tasks(
                             config,
                             Arc::clone(&cloudflare_queues.client),
