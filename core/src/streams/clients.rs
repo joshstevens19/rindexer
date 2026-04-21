@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Instant};
+use std::{collections::BTreeMap, sync::Arc, time::Instant};
 
 use alloy::primitives::B256;
 use aws_sdk_sns::{config::http::HttpResponse, error::SdkError, operation::publish::PublishError};
@@ -926,6 +926,51 @@ impl StreamsClients {
     }
 }
 
+/// Per-(stream-type, config-index, network) buffer of JSON events keyed by
+/// source block number. Used by `StreamDeliveryMode::Finalized` to delay
+/// dispatch until a block is deeper than the chain's `reorg_safe_distance`.
+///
+/// `flush(current_head)` drains every bucket whose block is `<= current_head -
+/// reorg_safe_distance`; `discard_range(fork_point, detection_point)` removes
+/// buckets in an invalidated range when a reorg is detected.
+pub(crate) struct FinalizedBuffer {
+    buffer: BTreeMap<u64, Vec<Value>>,
+    reorg_safe_distance: u64,
+}
+
+impl FinalizedBuffer {
+    pub fn new(reorg_safe_distance: u64) -> Self {
+        Self { buffer: BTreeMap::new(), reorg_safe_distance }
+    }
+
+    pub fn add(&mut self, block_number: u64, events: Vec<Value>) {
+        self.buffer.entry(block_number).or_default().extend(events);
+    }
+
+    pub fn flush(&mut self, current_head: u64) -> Vec<(u64, Vec<Value>)> {
+        let finality_threshold = current_head.saturating_sub(self.reorg_safe_distance);
+        let ready_keys: Vec<u64> =
+            self.buffer.keys().copied().filter(|&k| k <= finality_threshold).collect();
+        ready_keys.into_iter().filter_map(|k| self.buffer.remove(&k).map(|v| (k, v))).collect()
+    }
+
+    pub fn discard_range(&mut self, fork_point: u64, detection_point: u64) {
+        let keys_to_remove: Vec<u64> = self
+            .buffer
+            .keys()
+            .copied()
+            .filter(|&k| k >= fork_point && k <= detection_point)
+            .collect();
+        for k in keys_to_remove {
+            self.buffer.remove(&k);
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.buffer.values().map(|v| v.len()).sum()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1553,5 +1598,51 @@ mod tests {
             .await;
 
         assert_eq!(result.unwrap(), 0);
+    }
+
+    // ---- FinalizedBuffer ----
+
+    #[test]
+    fn finalized_buffer_flushes_only_below_threshold() {
+        let mut buf = FinalizedBuffer::new(10);
+        buf.add(100, vec![json!({"event": "a"})]);
+        buf.add(105, vec![json!({"event": "b"})]);
+
+        let flushed = buf.flush(112); // threshold = 102
+        assert_eq!(flushed.len(), 1);
+        assert_eq!(flushed[0].0, 100);
+
+        let flushed2 = buf.flush(120);
+        assert_eq!(flushed2.len(), 1);
+        assert_eq!(flushed2[0].0, 105);
+    }
+
+    #[test]
+    fn finalized_buffer_discards_range_inclusive() {
+        let mut buf = FinalizedBuffer::new(10);
+        buf.add(98, vec![json!({"event": "a"})]);
+        buf.add(99, vec![json!({"event": "b"})]);
+        buf.add(100, vec![json!({"event": "c"})]);
+
+        buf.discard_range(99, 100);
+
+        let flushed = buf.flush(200);
+        assert_eq!(flushed.len(), 1);
+        assert_eq!(flushed[0].0, 98);
+    }
+
+    #[test]
+    fn finalized_buffer_discard_on_empty_is_noop() {
+        let mut buf = FinalizedBuffer::new(10);
+        buf.discard_range(5, 10);
+        assert_eq!(buf.len(), 0);
+    }
+
+    #[test]
+    fn finalized_buffer_add_merges_same_block() {
+        let mut buf = FinalizedBuffer::new(10);
+        buf.add(50, vec![json!({"a": 1})]);
+        buf.add(50, vec![json!({"a": 2})]);
+        assert_eq!(buf.len(), 2);
     }
 }
