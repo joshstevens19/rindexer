@@ -789,10 +789,7 @@ mod tests {
     use std::task::Poll;
 
     #[tokio::test]
-    async fn inline_drain_keeps_queue_bounded_under_live_indexing_pattern() {
-        // Live indexing never terminates the log stream, so any unbounded
-        // accumulation in the in-flight queue is a memory leak. The inline
-        // `poll!` drain must keep the queue at a small constant size.
+    async fn inline_drain_keeps_queue_bounded_under_live_indexing() {
         let mut in_flight: FuturesUnordered<JoinHandle<()>> = FuturesUnordered::new();
         let mut peak = 0usize;
 
@@ -817,9 +814,6 @@ mod tests {
 
     #[tokio::test]
     async fn final_drain_awaits_pending_tasks_after_stream_ends() {
-        // Historical-only runs (`force_no_live_indexing=true` or live indexing
-        // disabled via config) terminate the stream while tasks may still be
-        // in flight — the final await-drain must wait for those to complete.
         let (tx, rx) = tokio::sync::oneshot::channel();
         let mut in_flight: FuturesUnordered<JoinHandle<()>> = FuturesUnordered::new();
         in_flight.push(tokio::spawn(async move {
@@ -840,8 +834,6 @@ mod tests {
 
     #[tokio::test]
     async fn panic_in_spawned_task_surfaces_as_join_error() {
-        // `try_join_all(tasks)` in the old code surfaced panics as `JoinError`
-        // at the end of the stream; the new drain loops must preserve that.
         let mut in_flight: FuturesUnordered<JoinHandle<()>> = FuturesUnordered::new();
         in_flight.push(tokio::spawn(async { panic!("boom") }));
 

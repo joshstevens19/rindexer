@@ -2,6 +2,7 @@ use anyhow::Result;
 use ethers::types::U256;
 use std::future::Future;
 use std::pin::Pin;
+use std::time::{Duration, Instant};
 use tracing::info;
 
 use crate::test_suite::TestContext;
@@ -230,20 +231,7 @@ fn live_indexing_sustained_load_test(
         let transfer_csv = helpers::produced_csv_path_for(context, "SimpleERC20", "transfer");
         let approval_csv = helpers::produced_csv_path_for(context, "SimpleERC20", "approval");
 
-        // Wait for the initial mint Transfer event so we know live indexing is running.
-        {
-            let start = std::time::Instant::now();
-            let timeout = std::time::Duration::from_secs(15);
-            loop {
-                if start.elapsed() > timeout {
-                    return Err(anyhow::anyhow!("Timeout waiting for initial mint event"));
-                }
-                match parse_transfer_csv(&transfer_csv) {
-                    Ok((_, rows)) if !rows.is_empty() => break,
-                    _ => tokio::time::sleep(std::time::Duration::from_millis(500)).await,
-                }
-            }
-        }
+        wait_for_live_streams_ready(&transfer_csv, &approval_csv, Duration::from_secs(15)).await?;
 
         // Alternate Transfer and Approval over LIVE_BLOCKS blocks.
         for i in 0..LIVE_BLOCKS {
@@ -313,15 +301,17 @@ fn live_indexing_sustained_load_test(
         }
 
         // Spot-check a sample of Transfer recipients to catch silently-dropped events.
-        for i in (0..LIVE_BLOCKS).step_by(2).take(TRANSFER_COUNT).step_by(TRANSFER_COUNT.max(1) / 4)
-        {
-            let expected_to = format_address(&generate_test_address((i + 1) as u64));
+        // Transfers happen on even block indices (i*2) for i in 0..TRANSFER_COUNT.
+        let sample_indices = [0, TRANSFER_COUNT / 4, TRANSFER_COUNT / 2, TRANSFER_COUNT - 1];
+        for sample in sample_indices {
+            let block_index = sample * 2;
+            let expected_to = format_address(&generate_test_address((block_index + 1) as u64));
             let matching = transfer_rows.iter().any(|r| r.to == expected_to && r.value == "1");
             if !matching {
                 return Err(anyhow::anyhow!(
                     "Transfer to {} (block index {}) not found in CSV",
                     expected_to,
-                    i
+                    block_index
                 ));
             }
         }
@@ -405,4 +395,45 @@ fn count_csv_rows(path: &str) -> Result<usize> {
         .from_path(path)
         .map_err(|e| anyhow::anyhow!("Cannot open CSV at {}: {}", path, e))?;
     Ok(rdr.records().filter_map(|r| r.ok()).count())
+}
+
+async fn wait_for_live_streams_ready(
+    transfer_csv: &str,
+    approval_csv: &str,
+    timeout: Duration,
+) -> Result<()> {
+    let start = Instant::now();
+    loop {
+        if start.elapsed() > timeout {
+            let transfer_rows =
+                parse_transfer_csv(transfer_csv).map(|(_, rows)| rows.len()).unwrap_or(0);
+            let approval_ready = approval_csv_ready(approval_csv);
+            return Err(anyhow::anyhow!(
+                "Timeout waiting for live streams to be ready: transfer_rows={}, approval_ready={}",
+                transfer_rows,
+                approval_ready
+            ));
+        }
+
+        let transfer_ready =
+            matches!(parse_transfer_csv(transfer_csv), Ok((_, rows)) if !rows.is_empty());
+        let approval_ready = approval_csv_ready(approval_csv);
+
+        if transfer_ready && approval_ready {
+            return Ok(());
+        }
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+fn approval_csv_ready(path: &str) -> bool {
+    csv::ReaderBuilder::new()
+        .has_headers(true)
+        .flexible(true)
+        .from_path(path)
+        .ok()
+        .and_then(|mut rdr| rdr.headers().ok().cloned())
+        .map(|headers| headers.iter().any(|header| header == "tx_hash"))
+        .unwrap_or(false)
 }
