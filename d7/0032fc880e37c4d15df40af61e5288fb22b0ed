@@ -1,0 +1,23 @@
+core/tests/e2e_finalized_delivery.rs
+  a04a6a73b4be9012 1-189
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.0",
+  "base_commit_sha": "d70032fc880e37c4d15df40af61e5288fb22b0ed",
+  "prompts": {
+    "a04a6a73b4be9012": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7a75fa5a-3eb1-4785-aaa9-b184960ab8e8",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 189,
+      "total_deletions": 0,
+      "accepted_lines": 189,
+      "overriden_lines": 0
+    }
+  }
+}
