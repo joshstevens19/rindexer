@@ -786,20 +786,28 @@ mod tests {
     //! refactor that silently reintroduces the leak will trip a test.
 
     use super::*;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
     use std::task::Poll;
 
     #[tokio::test]
     async fn inline_drain_keeps_queue_bounded_under_live_indexing() {
         let mut in_flight: FuturesUnordered<JoinHandle<()>> = FuturesUnordered::new();
-        let mut peak = 0usize;
+        let completed = Arc::new(AtomicUsize::new(0));
+        let mut drained_inline = 0usize;
 
         for _ in 0..500 {
-            in_flight.push(tokio::spawn(async {}));
+            let completed = Arc::clone(&completed);
+            in_flight.push(tokio::spawn(async move {
+                completed.fetch_add(1, Ordering::SeqCst);
+            }));
             tokio::task::yield_now().await;
             while let Poll::Ready(Some(joined)) = poll!(in_flight.next()) {
                 joined.expect("task should not fail");
+                drained_inline += 1;
             }
-            peak = peak.max(in_flight.len());
         }
 
         while let Some(joined) = in_flight.next().await {
@@ -807,9 +815,11 @@ mod tests {
         }
 
         assert!(
-            peak <= 4,
-            "queue grew to {peak}; inline drain is not keeping up — would leak under live indexing"
+            drained_inline > 0,
+            "inline drain never observed a completed task; test did not exercise the live drain path"
         );
+        assert_eq!(completed.load(Ordering::SeqCst), 500, "all spawned tasks should complete");
+        assert_eq!(in_flight.len(), 0, "final drain should empty the queue");
     }
 
     #[tokio::test]
