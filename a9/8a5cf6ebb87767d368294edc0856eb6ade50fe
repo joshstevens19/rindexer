@@ -1,0 +1,27 @@
+core/src/indexer/process.rs
+  605098e308c7ef64 780-852
+e2e-tests/src/tests/live_indexing.rs
+  605098e308c7ef64 18-31,193-408
+e2e-tests/src/anvil_setup.rs
+  605098e308c7ef64 313-353,586-598
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.0",
+  "base_commit_sha": "a98a5cf6ebb87767d368294edc0856eb6ade50fe",
+  "prompts": {
+    "605098e308c7ef64": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "37fb5de4-740d-407b-a05c-467260f26150",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 417,
+      "total_deletions": 66,
+      "accepted_lines": 357,
+      "overriden_lines": 0
+    }
+  }
+}
