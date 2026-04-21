@@ -198,8 +198,12 @@ async fn start_indexing_traces(
         return Ok(vec![]);
     }
 
-    if no_live_indexing_forced {
-        info!("Native transfer indexing skipped in historical-only pass (no end_block semantic)");
+    // Historical pass defers to the live pass to avoid double-spawning the NT
+    // pipeline. But when no live pass will follow (e.g. every contract and NT
+    // network has an end_block), this IS NT's only chance to run — so fall
+    // through and spawn it here.
+    if no_live_indexing_forced && manifest.has_any_live_indexing() {
+        info!("Native transfer indexing deferred to live pass to prevent double-spawn");
         return Ok(vec![]);
     }
 
