@@ -1,7 +1,7 @@
 use alloy::primitives::{B256, U64};
 
 use futures::future::join_all;
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
 use tokio::{
@@ -100,17 +100,149 @@ async fn process_event_logs(
     let mut logs_stream =
         fetch_logs_stream(Arc::clone(&config), force_no_live_indexing, reorg_coordinator);
     let mut tasks = Vec::new();
+    let mut pending_error: Option<Box<dyn std::error::Error + Send>> = None;
 
-    while let Some(result) = logs_stream.next().await {
-        let task = handle_logs_result(Arc::clone(&config), callback_permits.clone(), result)
+    // Spawn the callback task and either await it (dependency mode) or push
+    // it onto `tasks` for end-of-stream joining. Extracted because we do this
+    // 4× (normal coalesced flush, reaper-triggered flush, mid-coalesce reorg
+    // flush, standalone reorg forward) with byte-identical bodies.
+    async fn dispatch_batch(
+        config: &Arc<EventProcessingConfig>,
+        permits: &Arc<Semaphore>,
+        result: FetchLogsResult,
+        block_until_indexed: bool,
+        tasks: &mut Vec<JoinHandle<()>>,
+    ) -> Result<(), Box<ProviderError>> {
+        let task = handle_logs_result(Arc::clone(config), permits.clone(), Ok(result))
             .await
             .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
-
         if block_until_indexed {
             task.await.map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
         } else {
             tasks.push(task);
         }
+        Ok(())
+    }
+
+    'outer: while let Some(result) = logs_stream.next().await {
+        if let Some(e) = pending_error.take() {
+            return Err(Box::new(ProviderError::CustomError(e.to_string())));
+        }
+
+        // Reorg-bearing batches bypass coalescing — the coordinator's rollback
+        // semantics require standalone delivery in order.
+        let (mut coalesced_logs, mut final_from_block, mut final_to_block) = match result {
+            Ok(fetch_result) => {
+                if fetch_result.reorg.is_some() {
+                    dispatch_batch(
+                        &config,
+                        &callback_permits,
+                        fetch_result,
+                        block_until_indexed,
+                        &mut tasks,
+                    )
+                    .await?;
+                    continue;
+                }
+                (fetch_result.logs, fetch_result.from_block, fetch_result.to_block)
+            }
+            Err(e) => {
+                return Err(Box::new(ProviderError::CustomError(e.to_string())));
+            }
+        };
+
+        // Drain any additional READY results (non-blocking via now_or_never).
+        // SAFETY: tokio mpsc Receiver::recv/poll_recv is cancel-safe — dropping
+        // the future without completion does not consume any item from the channel.
+        const MAX_COALESCE_LOGS: usize = 5000;
+        let mut coalesced_count = 1usize;
+        while coalesced_logs.len() < MAX_COALESCE_LOGS {
+            match logs_stream.next().now_or_never() {
+                Some(Some(Ok(fetch_result))) => {
+                    if fetch_result.reorg.is_some() {
+                        // Flush coalesced + reorg, then `continue 'outer` to
+                        // rebuild coalescing state with fresh block-range vars
+                        // (otherwise the stale min/max would poison the next
+                        // batch's reported range).
+                        dispatch_batch(
+                            &config,
+                            &callback_permits,
+                            FetchLogsResult {
+                                logs: std::mem::take(&mut coalesced_logs),
+                                from_block: final_from_block,
+                                to_block: final_to_block,
+                                reorg: None,
+                            },
+                            block_until_indexed,
+                            &mut tasks,
+                        )
+                        .await?;
+                        dispatch_batch(
+                            &config,
+                            &callback_permits,
+                            fetch_result,
+                            block_until_indexed,
+                            &mut tasks,
+                        )
+                        .await?;
+                        continue 'outer;
+                    }
+                    final_from_block = final_from_block.min(fetch_result.from_block);
+                    final_to_block = final_to_block.max(fetch_result.to_block);
+                    coalesced_logs.extend(fetch_result.logs);
+                    coalesced_count += 1;
+                }
+                Some(Some(Err(e))) => {
+                    pending_error = Some(e);
+                    break;
+                }
+                _ => break,
+            }
+        }
+
+        if coalesced_count > 1 {
+            debug!(
+                "{} - Coalesced {} batches into {} logs (blocks {} - {})",
+                config.info_log_name(),
+                coalesced_count,
+                coalesced_logs.len(),
+                final_from_block,
+                final_to_block
+            );
+        }
+
+        dispatch_batch(
+            &config,
+            &callback_permits,
+            FetchLogsResult {
+                logs: coalesced_logs,
+                from_block: final_from_block,
+                to_block: final_to_block,
+                reorg: None,
+            },
+            block_until_indexed,
+            &mut tasks,
+        )
+        .await?;
+
+        // Periodically reap completed tasks to surface errors early and avoid
+        // unbounded JoinHandle accumulation during long syncs.
+        if !block_until_indexed && tasks.len() >= 64 {
+            let mut pending = Vec::with_capacity(tasks.len());
+            for t in tasks.drain(..) {
+                if t.is_finished() {
+                    t.await.map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
+                } else {
+                    pending.push(t);
+                }
+            }
+            tasks = pending;
+        }
+    }
+
+    // Check for any remaining pending error after stream ends
+    if let Some(e) = pending_error.take() {
+        return Err(Box::new(ProviderError::CustomError(e.to_string())));
     }
 
     // Wait for all remaining tasks to complete

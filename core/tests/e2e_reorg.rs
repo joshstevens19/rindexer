@@ -1,7 +1,9 @@
 //! End-to-end integration test for rindexer's reorg handling system.
 //!
-//! Requires Docker. Run sequentially (tests share DATABASE_URL env var):
-//!   cargo test -q -p rindexer --test e2e_reorg -- --ignored --test-threads=1
+//! Requires Docker. Run via nextest so each test gets its own process — the
+//! tests mutate `DATABASE_URL`/`CLICKHOUSE_*` env, which would race under
+//! `cargo test`:
+//!   cargo nextest run -q -p rindexer --test e2e_reorg
 
 use std::sync::{Arc, Mutex};
 
@@ -19,6 +21,7 @@ use rindexer::indexer::reorg::{
 use rindexer::manifest::contract::SetAction;
 use rindexer::ClickhouseClient;
 use rindexer::PostgresClient;
+use rust_decimal::Decimal;
 use serde_json::{json, Value};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{GenericImage, ImageExt};
@@ -218,8 +221,8 @@ impl TestEnv {
         let accounts = get_accounts(&http, &rpc_url).await;
         let deployer = accounts[0];
 
-        // SAFETY: These tests are run with --test-threads=1 (enforced by #[ignore]).
-        // No other threads are reading these env vars concurrently at this point.
+        // SAFETY: nextest runs each test in its own process, so no other
+        // thread reads these env vars concurrently at this point.
         unsafe {
             // Set DATABASE_URL for PostgresClient::new()
             std::env::set_var(
@@ -395,7 +398,7 @@ impl TestEnv {
              );
              CREATE TABLE IF NOT EXISTS rindexer_internal.test_schema_ping (
                  network VARCHAR(50) NOT NULL PRIMARY KEY,
-                 last_synced_block BIGINT NOT NULL
+                 last_synced_block NUMERIC NOT NULL
              );
              CREATE TABLE IF NOT EXISTS rindexer_internal.derived_op_log (
                  id BIGSERIAL PRIMARY KEY,
@@ -520,7 +523,6 @@ impl TestEnv {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_detection_and_rollback() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -664,7 +666,6 @@ async fn test_reorg_detection_and_rollback() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_single_block() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -721,7 +722,6 @@ async fn test_reorg_single_block() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_deep() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -779,7 +779,6 @@ async fn test_reorg_deep() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_no_events_in_range() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -836,7 +835,6 @@ async fn test_reorg_no_events_in_range() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_multiple_event_tables() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -857,7 +855,7 @@ async fn test_reorg_multiple_event_tables() {
          );
          CREATE TABLE IF NOT EXISTS rindexer_internal.test_schema_pong (
              network VARCHAR(50) NOT NULL PRIMARY KEY,
-             last_synced_block BIGINT NOT NULL
+             last_synced_block NUMERIC NOT NULL
          );",
     )
     .await
@@ -954,7 +952,6 @@ async fn test_reorg_multiple_event_tables() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_checkpoint_rewind() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -976,7 +973,7 @@ async fn test_reorg_checkpoint_rewind() {
     pg.execute(
         "INSERT INTO rindexer_internal.test_schema_ping (network, last_synced_block) \
          VALUES ($1, $2)",
-        &[&network, &(block3 as i64)],
+        &[&network, &Decimal::from(block3)],
     )
     .await
     .unwrap();
@@ -1006,7 +1003,7 @@ async fn test_reorg_checkpoint_rewind() {
         .expect("checkpoint reorg task failed");
 
     // Verify checkpoint was rewound to fork_point - 1
-    let checkpoint: i64 = pg
+    let checkpoint: rust_decimal::Decimal = pg
         .query_one(
             "SELECT last_synced_block FROM rindexer_internal.test_schema_ping WHERE network = $1",
             &[&network],
@@ -1016,7 +1013,7 @@ async fn test_reorg_checkpoint_rewind() {
         .get(0);
     assert_eq!(
         checkpoint,
-        (fork_point - 1) as i64,
+        rust_decimal::Decimal::from(fork_point - 1),
         "checkpoint should be rewound to fork_point - 1"
     );
 }
@@ -1026,7 +1023,6 @@ async fn test_reorg_checkpoint_rewind() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_derived_table_cleanup() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -1124,7 +1120,6 @@ async fn test_reorg_derived_table_cleanup() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_derived_table_cross_chain() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -1220,7 +1215,6 @@ async fn test_reorg_derived_table_cross_chain() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_consecutive() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -1306,7 +1300,6 @@ async fn test_reorg_consecutive() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_persistence_round_trip() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -1364,7 +1357,6 @@ async fn test_reorg_persistence_round_trip() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_multicall_tx_deduplication() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -1479,7 +1471,6 @@ async fn test_reorg_multicall_tx_deduplication() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_reindex_continuation() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -1504,7 +1495,7 @@ async fn test_reorg_reindex_continuation() {
         "INSERT INTO rindexer_internal.test_schema_ping (network, last_synced_block) \
          VALUES ($1, $2)
          ON CONFLICT (network) DO UPDATE SET last_synced_block = $2",
-        &[&network, &(block3 as i64)],
+        &[&network, &Decimal::from(block3)],
     )
     .await
     .unwrap();
@@ -1541,7 +1532,7 @@ async fn test_reorg_reindex_continuation() {
     assert_eq!(env.event_count(&pg).await, 1, "only Ping(1) remains after rollback");
 
     // Checkpoint should be rewound to fork_point - 1 = block1
-    let checkpoint: i64 = pg
+    let checkpoint: rust_decimal::Decimal = pg
         .query_one(
             "SELECT last_synced_block FROM rindexer_internal.test_schema_ping WHERE network = $1",
             &[&network],
@@ -1549,7 +1540,11 @@ async fn test_reorg_reindex_continuation() {
         .await
         .unwrap()
         .get(0);
-    assert_eq!(checkpoint, (fork_point - 1) as i64, "checkpoint rewound to fork_point - 1");
+    assert_eq!(
+        checkpoint,
+        rust_decimal::Decimal::from(fork_point - 1),
+        "checkpoint rewound to fork_point - 1"
+    );
 
     // --- Phase 3: new canonical events arrive post-reorg ---
     // These go into new blocks on the canonical chain (Anvil keeps running)
@@ -1558,7 +1553,8 @@ async fn test_reorg_reindex_continuation() {
 
     // Simulate the indexer resuming from the rewound checkpoint:
     // it would fetch logs from (checkpoint + 1) onward and insert them.
-    let resume_from = checkpoint as u64 + 1;
+    use rust_decimal::prelude::ToPrimitive;
+    let resume_from = checkpoint.to_u64().expect("checkpoint fits in u64") + 1;
     assert!(new_block_a >= resume_from, "new events should be at or after the resume point");
 
     let new_tx_a = "0x00000000000000000000000000000000000000000000000000000000000000ca";
@@ -1569,7 +1565,7 @@ async fn test_reorg_reindex_continuation() {
     // Update checkpoint to the latest synced block
     pg.execute(
         "UPDATE rindexer_internal.test_schema_ping SET last_synced_block = $1 WHERE network = $2",
-        &[&(new_block_b as i64), &network],
+        &[&rust_decimal::Decimal::from(new_block_b), &network],
     )
     .await
     .unwrap();
@@ -1625,7 +1621,7 @@ async fn test_reorg_reindex_continuation() {
     );
 
     // Checkpoint reflects the latest block
-    let final_checkpoint: i64 = pg
+    let final_checkpoint: rust_decimal::Decimal = pg
         .query_one(
             "SELECT last_synced_block FROM rindexer_internal.test_schema_ping WHERE network = $1",
             &[&network],
@@ -1634,7 +1630,8 @@ async fn test_reorg_reindex_continuation() {
         .unwrap()
         .get(0);
     assert_eq!(
-        final_checkpoint, new_block_b as i64,
+        final_checkpoint,
+        rust_decimal::Decimal::from(new_block_b),
         "checkpoint should be at the latest re-indexed block"
     );
 
@@ -1655,7 +1652,6 @@ async fn test_reorg_reindex_continuation() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_on_reorg_callback_fired() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -1742,7 +1738,6 @@ async fn test_reorg_on_reorg_callback_fired() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_unregistered_derived_table_survives() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -1812,7 +1807,6 @@ async fn test_reorg_unregistered_derived_table_survives() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_multiple_derived_tables() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -1931,7 +1925,6 @@ async fn test_reorg_multiple_derived_tables() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_derived_table_deep_range() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -2016,7 +2009,6 @@ async fn test_reorg_derived_table_deep_range() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_reversal_add() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -2113,7 +2105,6 @@ async fn test_reorg_reversal_add() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_reversal_subtract() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -2202,7 +2193,6 @@ async fn test_reorg_reversal_subtract() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_reversal_increment() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -2295,7 +2285,6 @@ async fn test_reorg_reversal_increment() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_reversal_with_condition() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -2395,7 +2384,6 @@ async fn test_reorg_reversal_with_condition() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_journal_max_recalculation() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -2503,7 +2491,6 @@ async fn test_reorg_journal_max_recalculation() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_journal_set_recalculation() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -2610,7 +2597,6 @@ async fn test_reorg_journal_set_recalculation() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_reversal_decrement() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -2701,7 +2687,6 @@ async fn test_reorg_reversal_decrement() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_journal_min_recalculation() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -2808,7 +2793,6 @@ async fn test_reorg_journal_min_recalculation() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_mixed_reversible_and_journal() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -2939,7 +2923,6 @@ async fn test_reorg_mixed_reversible_and_journal() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_reversal_uninvolved_row_unchanged() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -3058,7 +3041,6 @@ async fn test_reorg_reversal_uninvolved_row_unchanged() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_clickhouse_add_reversal() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -3067,7 +3049,9 @@ async fn test_reorg_clickhouse_add_reversal() {
     let ch = env.rindexer_ch().await;
     env.setup_ch_tables(&ch).await;
 
-    // Derived table: user balances accumulated via Add
+    // Derived table: user balances accumulated via Add — created in both
+    // PG and CH since the reorg task applies the reversal to whichever backends
+    // it's given a client for.
     pg.batch_execute(
         "CREATE TABLE IF NOT EXISTS test_schema.user_balances (
              network VARCHAR(50) NOT NULL,
@@ -3076,6 +3060,17 @@ async fn test_reorg_clickhouse_add_reversal() {
              rindexer_block_number BIGINT NOT NULL,
              PRIMARY KEY (network, user_address)
          );",
+    )
+    .await
+    .unwrap();
+    ch.execute(
+        "CREATE TABLE IF NOT EXISTS test_schema.user_balances (
+             network String,
+             user_address FixedString(42),
+             balance UInt256,
+             rindexer_block_number UInt64
+         ) ENGINE = ReplacingMergeTree
+         ORDER BY (network, user_address)",
     )
     .await
     .unwrap();
@@ -3101,12 +3096,18 @@ async fn test_reorg_clickhouse_add_reversal() {
     env.insert_ch_event(&ch, network, 30, block3, zero_tx).await;
     env.insert_ch_block_hashes(&ch, network, block1, block3).await;
 
-    // Derived table state in PG: balance = 100 + 50 + 30 = 180
+    // Derived table state (balance = 100 + 50 + 30 = 180) seeded in both backends.
     pg.execute(
         "INSERT INTO test_schema.user_balances (network, user_address, balance, rindexer_block_number) \
          VALUES ($1, $2, $3, $4)",
         &[&network, &user.as_str(), &rust_decimal::Decimal::from(180u64), &(block3 as i64)],
     )
+    .await
+    .unwrap();
+    ch.execute(&format!(
+        "INSERT INTO test_schema.user_balances (network, user_address, balance, rindexer_block_number) \
+         VALUES ('{network}', '{user}', 180, {block3})"
+    ))
     .await
     .unwrap();
 
@@ -3168,7 +3169,6 @@ async fn test_reorg_clickhouse_add_reversal() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_two_events_same_table_reversible() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;
@@ -3322,7 +3322,7 @@ async fn test_reorg_two_events_same_table_reversible() {
     pg.batch_execute(
         "CREATE TABLE IF NOT EXISTS rindexer_internal.test_schema_pong (
              network VARCHAR(50) NOT NULL PRIMARY KEY,
-             last_synced_block BIGINT NOT NULL
+             last_synced_block NUMERIC NOT NULL
          );",
     )
     .await
@@ -3356,7 +3356,6 @@ async fn test_reorg_two_events_same_table_reversible() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn test_reorg_two_events_same_table_journal() {
     let env = TestEnv::new().await;
     let pg = env.pg_client().await;

@@ -5,6 +5,7 @@
 
 use once_cell::sync::Lazy;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 /// Adaptive concurrency controller that scales based on success/failure rates.
@@ -221,12 +222,15 @@ impl AdaptiveConcurrency {
     }
 }
 
-/// Global adaptive concurrency controller for RPC batches.
-/// Used by both the RPC layer and indexer code.
-pub static ADAPTIVE_CONCURRENCY: Lazy<AdaptiveConcurrency> = Lazy::new(|| {
-    AdaptiveConcurrency::new(
+/// Global adaptive concurrency controller for RPC batches. Used by the RPC
+/// layer, indexer, and parallel fetch workers.
+///
+/// `Arc`-wrapped so parallel workers can hold cheap clones and signal the same
+/// shared state the RPC layer signals from.
+pub static ADAPTIVE_CONCURRENCY: Lazy<Arc<AdaptiveConcurrency>> = Lazy::new(|| {
+    Arc::new(AdaptiveConcurrency::new(
         20,  // Start with 20 concurrent batches
         2,   // Minimum 2
         200, // Maximum 200
-    )
+    ))
 });

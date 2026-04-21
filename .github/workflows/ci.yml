@@ -53,10 +53,14 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y libssl-dev pkg-config
+      - name: Install cargo-nextest
+        run: cargo install -q cargo-nextest --locked
+      # nextest runs each test in its own process — required because docker-backed
+      # tests under core/tests/e2e_*.rs mutate process env (DATABASE_URL etc.).
       - name: Run tests (default features)
-        run: cargo test --exclude rindexer_rust_playground --workspace
+        run: cargo nextest run --exclude rindexer_rust_playground --workspace
       - name: Run tests (all features including reth)
-        run: cargo test --exclude rindexer_rust_playground --workspace --all-features
+        run: cargo nextest run --exclude rindexer_rust_playground --workspace --all-features
 
   coverage:
     name: Coverage
