@@ -1,7 +1,8 @@
 use alloy::primitives::{B256, U64};
 
 use futures::future::join_all;
-use futures::StreamExt;
+use futures::stream::FuturesUnordered;
+use futures::{poll, StreamExt};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
 use tokio::{
@@ -99,7 +100,8 @@ async fn process_event_logs(
 
     let mut logs_stream =
         fetch_logs_stream(Arc::clone(&config), force_no_live_indexing, reorg_coordinator);
-    let mut tasks = Vec::new();
+    // Drain inline so handles don't accumulate during infinite live indexing.
+    let mut in_flight: FuturesUnordered<JoinHandle<()>> = FuturesUnordered::new();
 
     while let Some(result) = logs_stream.next().await {
         let task = handle_logs_result(Arc::clone(&config), callback_permits.clone(), result)
@@ -107,17 +109,17 @@ async fn process_event_logs(
             .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
 
         if block_until_indexed {
-            task.await.map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
+            task.await.map_err(|e| Box::new(ProviderError::BatchRequestFailed(e)))?;
         } else {
-            tasks.push(task);
+            in_flight.push(task);
+            while let std::task::Poll::Ready(Some(joined)) = poll!(in_flight.next()) {
+                joined.map_err(|e| Box::new(ProviderError::BatchRequestFailed(e)))?;
+            }
         }
     }
 
-    // Wait for all remaining tasks to complete
-    if !tasks.is_empty() {
-        futures::future::try_join_all(tasks)
-            .await
-            .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
+    while let Some(joined) = in_flight.next().await {
+        joined.map_err(|e| Box::new(ProviderError::BatchRequestFailed(e)))?;
     }
 
     Ok(())
