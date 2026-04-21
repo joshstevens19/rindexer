@@ -1,0 +1,25 @@
+core/src/streams/clients.rs
+  babcd1c453882c13 16,843-844,855-864,891,904-911,1357-1375,1377-1378,1384-1465,1468-1476,1478-1512,1515-1521,1563
+  44b351e982b77fbd 204-205,1466-1467,1513-1514,1552-1553
+  a04a6a73b4be9012 347-348,926,929-973,1602-1647
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "06328404b1ae8a57df756da0ab2e0af198462db0",
+  "prompts": {
+    "a04a6a73b4be9012": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7a75fa5a-3eb1-4785-aaa9-b184960ab8e8",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 92,
+      "total_deletions": 1,
+      "accepted_lines": 91,
+      "overriden_lines": 0
+    }
+  }
+}

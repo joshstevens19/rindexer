@@ -1,0 +1,24 @@
+documentation/docs/pages/docs/changelog.mdx
+  babcd1c453882c13 12,28-32
+  a04a6a73b4be9012 23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "7455eadc8c3ba973257402010beeb9e29a2a010b",
+  "prompts": {
+    "a04a6a73b4be9012": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7a75fa5a-3eb1-4785-aaa9-b184960ab8e8",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    }
+  }
+}
