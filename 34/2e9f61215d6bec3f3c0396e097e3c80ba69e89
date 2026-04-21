@@ -1,0 +1,27 @@
+core/src/event/message.rs
+  a04a6a73b4be9012 11-15
+core/src/indexer/no_code.rs
+  a04a6a73b4be9012 409-411,569,707-715,723-768,774-785
+core/src/streams/clients.rs
+  a04a6a73b4be9012 276,294,918-921,1060,1265,1377
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.0",
+  "base_commit_sha": "342e9f61215d6bec3f3c0396e097e3c80ba69e89",
+  "prompts": {
+    "a04a6a73b4be9012": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7a75fa5a-3eb1-4785-aaa9-b184960ab8e8",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 87,
+      "total_deletions": 36,
+      "accepted_lines": 86,
+      "overriden_lines": 0
+    }
+  }
+}
