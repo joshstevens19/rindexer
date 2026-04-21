@@ -1275,7 +1275,15 @@ async fn start_indexing(
     // Reject `delivery: finalized` on any network without a live-indexing
     // reorg coordinator: without one, buffered events would never flush and
     // would silently pile up until the process restarts.
-    validate_finalized_delivery_targets(manifest, &network_coordinators)?;
+    //
+    // During the historical leg of a historical+live run the coordinator map
+    // is intentionally empty (it's rebuilt for the live leg), so validating
+    // here would reject every finalized config. Defer to the live leg in that
+    // case; historical-only runs (no live leg to follow) validate now because
+    // no future pass will.
+    if !no_live_indexing_forced || !manifest.has_any_live_indexing() {
+        validate_finalized_delivery_targets(manifest, &network_coordinators)?;
+    }
 
     let trace_indexer_handles = start_indexing_traces(
         manifest,
