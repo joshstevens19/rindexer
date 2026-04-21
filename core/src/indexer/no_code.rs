@@ -708,14 +708,19 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                 }
             }
 
-            // Group events by source block number so the streams dispatch can
-            // emit one `EventMessage` per block. Finalized delivery keys its
-            // buffer by `EventMessage.block_number`, so cross-block batching
-                // would make a single message impossible to bucket correctly.
+            // Build the cross-block chat payload first (one clone per event)
+            // so the streams path can consume `event_message_data` into
+            // per-block buckets without a second clone pass. Finalized
+            // delivery keys its buffer by `EventMessage.block_number`, so
+            // streams must split per-block; chat dispatch does not consult
+            // the finalized buffer so it keeps the aggregated shape.
+            let chat_event_data: Vec<Value> =
+                event_message_data.iter().map(|(_, v)| v.clone()).collect();
+
             let mut events_by_block: std::collections::BTreeMap<u64, Vec<Value>> =
                 std::collections::BTreeMap::new();
-            for (blk, ev) in &event_message_data {
-                events_by_block.entry(*blk).or_default().push(ev.clone());
+            for (blk, ev) in event_message_data {
+                events_by_block.entry(blk).or_default().push(ev);
             }
 
             if let Some(streams_clients) = params.streams_clients.as_ref() {
@@ -724,13 +729,13 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                     CallbackResult::Trace(_) => true,
                 };
 
-                for (block_number, block_events) in &events_by_block {
+                for (block_number, block_events) in events_by_block {
                     let event_message = EventMessage {
                         event_name: params.event_info.name.clone(),
-                        event_data: Value::Array(block_events.clone()),
+                        event_data: Value::Array(block_events),
                         event_signature_hash: params.event.selector(),
                         network: network.clone(),
-                        block_number: *block_number,
+                        block_number,
                     };
 
                     let stream_id = format!(
@@ -775,14 +780,9 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                 }
             }
 
-            // Chat path keeps the cross-block aggregation (a single message per
-            // poll). `block_number` here is purely cosmetic on the payload —
-            // chat dispatch does not consult the finalized-delivery buffer.
             let event_message = EventMessage {
                 event_name: params.event_info.name.clone(),
-                event_data: Value::Array(
-                    event_message_data.iter().map(|(_, v)| v.clone()).collect(),
-                ),
+                event_data: Value::Array(chat_event_data),
                 event_signature_hash: params.event.selector(),
                 network: network.clone(),
                 block_number: from_block.to::<u64>(),

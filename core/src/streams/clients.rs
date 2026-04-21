@@ -1149,12 +1149,17 @@ impl StreamsClients {
     /// Re-publish a block's worth of previously-buffered events through the
     /// stream-type-specific `*_stream_tasks` helper. Does NOT re-enter
     /// `stream_with_mode` — that would re-buffer indefinitely.
+    ///
+    /// Per-block `*_stream_tasks` calls are built sequentially (they only
+    /// allocate; they don't await network I/O), and every resulting JoinHandle
+    /// from every block is then awaited through a single `join_all`, so a
+    /// flush of N buffered blocks runs at ~1 RTT instead of N.
     async fn dispatch_flushed(
         &self,
         key: &BufferKey,
         ready: Vec<(u64, Vec<Value>)>,
     ) -> Result<usize, StreamError> {
-        let mut total_sent = 0;
+        let mut all_tasks: StreamPublishes = Vec::new();
         for (block_number, events) in ready {
             let event_message = EventMessage {
                 event_name: key.event_name.clone(),
@@ -1170,11 +1175,10 @@ impl StreamsClients {
             );
 
             let tasks: StreamPublishes = match key.stream_type {
-                "sns" => {
+                stream_type::SNS => {
                     let sns = self.sns.as_ref().expect("sns buffer without sns config");
-                    let config = &sns.config[key.config_index];
                     self.sns_stream_tasks(
-                        config,
+                        &sns.config[key.config_index],
                         Arc::clone(&sns.client),
                         &id,
                         &event_message,
@@ -1182,12 +1186,11 @@ impl StreamsClients {
                         false,
                     )
                 }
-                "webhook" => {
+                stream_type::WEBHOOK => {
                     let webhook =
                         self.webhook.as_ref().expect("webhook buffer without webhook config");
-                    let config = &webhook.config[key.config_index];
                     self.webhook_stream_tasks(
-                        config,
+                        &webhook.config[key.config_index],
                         Arc::clone(&webhook.client),
                         &id,
                         &event_message,
@@ -1195,12 +1198,11 @@ impl StreamsClients {
                         false,
                     )
                 }
-                "rabbitmq" => {
+                stream_type::RABBITMQ => {
                     let rabbitmq =
                         self.rabbitmq.as_ref().expect("rabbitmq buffer without rabbitmq config");
-                    let config = &rabbitmq.config.exchanges[key.config_index];
                     self.rabbitmq_stream_tasks(
-                        config,
+                        &rabbitmq.config.exchanges[key.config_index],
                         Arc::clone(&rabbitmq.client),
                         &id,
                         &event_message,
@@ -1209,11 +1211,10 @@ impl StreamsClients {
                     )
                 }
                 #[cfg(feature = "kafka")]
-                "kafka" => {
+                stream_type::KAFKA => {
                     let kafka = self.kafka.as_ref().expect("kafka buffer without kafka config");
-                    let config = &kafka.config.topics[key.config_index];
                     self.kafka_stream_tasks(
-                        config,
+                        &kafka.config.topics[key.config_index],
                         Arc::clone(&kafka.client),
                         &id,
                         &event_message,
@@ -1221,11 +1222,10 @@ impl StreamsClients {
                         false,
                     )
                 }
-                "redis" => {
+                stream_type::REDIS => {
                     let redis = self.redis.as_ref().expect("redis buffer without redis config");
-                    let config = &redis.config.streams[key.config_index];
                     self.redis_stream_tasks(
-                        config,
+                        &redis.config.streams[key.config_index],
                         Arc::clone(&redis.client),
                         &id,
                         &event_message,
@@ -1233,14 +1233,13 @@ impl StreamsClients {
                         false,
                     )
                 }
-                "cloudflare_queues" => {
+                stream_type::CLOUDFLARE_QUEUES => {
                     let cf = self
                         .cloudflare_queues
                         .as_ref()
                         .expect("cloudflare_queues buffer without cloudflare_queues config");
-                    let config = &cf.config.queues[key.config_index];
                     self.cloudflare_queues_stream_tasks(
-                        config,
+                        &cf.config.queues[key.config_index],
                         Arc::clone(&cf.client),
                         &id,
                         &event_message,
@@ -1250,13 +1249,15 @@ impl StreamsClients {
                 }
                 other => unreachable!("unknown stream_type in BufferKey: {other}"),
             };
+            all_tasks.extend(tasks);
+        }
 
-            for task in tasks {
-                match task.await {
-                    Ok(Ok(n)) => total_sent += n,
-                    Ok(Err(e)) => return Err(e),
-                    Err(e) => return Err(StreamError::JoinError(e)),
-                }
+        let mut total_sent = 0;
+        for result in join_all(all_tasks).await {
+            match result {
+                Ok(Ok(n)) => total_sent += n,
+                Ok(Err(e)) => return Err(e),
+                Err(e) => return Err(StreamError::JoinError(e)),
             }
         }
         Ok(total_sent)

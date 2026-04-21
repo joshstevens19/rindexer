@@ -339,6 +339,29 @@ fn find_provider_in_trace_registry(
 /// network across contract events and native-transfer trace events. Dedup is
 /// by `Arc::as_ptr` pointer identity so two pipelines sharing the same instance
 /// only publish once. Entries whose inner `Option` is `None` are skipped.
+/// Compute the effective `reorg_safe_distance` for `network_name` and register
+/// it on every `StreamsClients` instance that serves the network, so any
+/// finalized-delivery buffer knows how far behind head to wait before
+/// flushing. Called from both coordinator-construction sites in
+/// `start_indexing_contract_events`.
+fn register_network_reorg_distance_on_streams(
+    manifest: &Manifest,
+    network_name: &str,
+    chain_id: u64,
+    streams_clients: &[Arc<Option<crate::streams::StreamsClients>>],
+) {
+    let safe_distance = crate::indexer::reorg::finalized_buffer_distance_for_network(
+        manifest,
+        network_name,
+        chain_id,
+    );
+    for clients_arc in streams_clients {
+        if let Some(clients) = clients_arc.as_ref().as_ref() {
+            clients.register_network_reorg_distance(network_name.to_string(), safe_distance);
+        }
+    }
+}
+
 /// Reject `delivery: finalized` on any network that isn't in
 /// `network_coordinators`. Such a network has no live coordinator to drive
 /// flush/discard, so buffered events would accumulate forever (or until a
@@ -756,21 +779,12 @@ async fn start_indexing_contract_events(
                 network_derived_tables.get(network_name).cloned().unwrap_or_default();
             let streams_clients =
                 collect_streams_clients_for_network(&registry, &trace_registry, network_name);
-
-            // Register the network's effective reorg_safe_distance on every
-            // StreamsClients serving this network so finalized-delivery buffers
-            // know how far behind head to keep events before flushing.
-            let safe_distance = crate::indexer::reorg::finalized_buffer_distance_for_network(
+            register_network_reorg_distance_on_streams(
                 manifest,
                 network_name,
                 *chain_id,
+                &streams_clients,
             );
-            for clients_arc in &streams_clients {
-                if let Some(clients) = clients_arc.as_ref().as_ref() {
-                    clients
-                        .register_network_reorg_distance(network_name.clone(), safe_distance);
-                }
-            }
 
             let mut coordinator = ReorgCoordinator::new(
                 network_name.clone(),
@@ -1074,25 +1088,12 @@ async fn start_indexing_contract_events(
                         &trace_registry,
                         network_name,
                     );
-
-                    // Register the network's effective reorg_safe_distance on
-                    // every StreamsClients serving this network (see the
-                    // matching registration in the main coordinator-construction
-                    // path).
-                    let safe_distance =
-                        crate::indexer::reorg::finalized_buffer_distance_for_network(
-                            manifest,
-                            network_name,
-                            *chain_id,
-                        );
-                    for clients_arc in &streams_clients {
-                        if let Some(clients) = clients_arc.as_ref().as_ref() {
-                            clients.register_network_reorg_distance(
-                                network_name.clone(),
-                                safe_distance,
-                            );
-                        }
-                    }
+                    register_network_reorg_distance_on_streams(
+                        manifest,
+                        network_name,
+                        *chain_id,
+                        &streams_clients,
+                    );
 
                     let mut coordinator = ReorgCoordinator::new(
                         network_name.clone(),
