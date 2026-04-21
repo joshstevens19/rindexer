@@ -373,8 +373,7 @@ fn validate_finalized_delivery_targets(
 ) -> Result<(), StartIndexingError> {
     let mut errors: Vec<String> = Vec::new();
 
-    let mut check = |source: String,
-                     streams: &Option<crate::manifest::stream::StreamsConfig>| {
+    let mut check = |source: String, streams: &Option<crate::manifest::stream::StreamsConfig>| {
         let Some(streams) = streams else { return };
         for (stream_type, endpoint, networks) in streams.finalized_delivery_targets() {
             for n in &networks {

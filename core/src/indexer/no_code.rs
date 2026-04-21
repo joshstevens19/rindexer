@@ -765,10 +765,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                                     params.event_info.name,
                                     "STREAMED",
                                     streamed,
-                                    format!(
-                                        "- block: {} - network: {}",
-                                        block_number, network
-                                    )
+                                    format!("- block: {} - network: {}", block_number, network)
                                 );
                             }
                         }

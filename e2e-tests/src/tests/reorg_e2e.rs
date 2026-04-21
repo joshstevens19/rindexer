@@ -2175,16 +2175,11 @@ fn reorg_with_finalized_delivery(
                 lock.iter()
                     .filter_map(|b| serde_json::from_str::<serde_json::Value>(b).ok())
                     .filter(|v| v.get("event_name").and_then(|e| e.as_str()) == Some("Transfer"))
-                    .filter_map(|v| {
-                        v.get("event_data").and_then(|d| d.as_array()).map(|a| a.len())
-                    })
+                    .filter_map(|v| v.get("event_data").and_then(|d| d.as_array()).map(|a| a.len()))
                     .sum()
             };
             if events_seen >= 6 {
-                info!(
-                    "Finalized webhook received {} Transfer events after burial",
-                    events_seen
-                );
+                info!("Finalized webhook received {} Transfer events after burial", events_seen);
                 break;
             }
             if std::time::Instant::now() >= deadline {

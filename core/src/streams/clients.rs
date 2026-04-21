@@ -146,6 +146,8 @@ pub struct StreamsClients {
     reorg_safe_distances: StdMutex<HashMap<String, u64>>,
 }
 
+type FinalizedDeliveryBuffer = (BufferKey, Vec<(u64, Vec<Value>)>);
+
 impl StreamsClients {
     pub async fn new(stream_config: StreamsConfig) -> Self {
         #[allow(clippy::manual_map)]
@@ -961,12 +963,8 @@ impl StreamsClients {
                             is_trace_event,
                             force_send_network_wide,
                         ) {
-                            self.buffer_event(
-                                stream_type::CLOUDFLARE_QUEUES,
-                                idx,
-                                event_message,
-                            )
-                            .await;
+                            self.buffer_event(stream_type::CLOUDFLARE_QUEUES, idx, event_message)
+                                .await;
                             continue;
                         }
                         streams.push(self.cloudflare_queues_stream_tasks(
@@ -1106,7 +1104,7 @@ impl StreamsClients {
         network: &str,
         head_block: u64,
     ) -> Result<usize, StreamError> {
-        let mut ready_by_key: Vec<(BufferKey, Vec<(u64, Vec<Value>)>)> = Vec::new();
+        let mut ready_by_key: Vec<FinalizedDeliveryBuffer> = Vec::new();
         {
             let mut map = self.finalized_buffers.lock().await;
             for (key, buffer) in map.iter_mut() {
@@ -1131,12 +1129,7 @@ impl StreamsClients {
     /// inclusive range `[fork_point, detection_point]`. Called by
     /// `ReorgCoordinator::handle_reorg` *before* the next `flush_finalized` so
     /// invalidated events never escape the buffer.
-    pub async fn discard_finalized(
-        &self,
-        network: &str,
-        fork_point: u64,
-        detection_point: u64,
-    ) {
+    pub async fn discard_finalized(&self, network: &str, fork_point: u64, detection_point: u64) {
         let mut map = self.finalized_buffers.lock().await;
         for (key, buffer) in map.iter_mut() {
             if key.network != network {

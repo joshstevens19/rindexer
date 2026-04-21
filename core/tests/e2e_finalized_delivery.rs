@@ -121,18 +121,10 @@ async fn mixed_instant_and_finalized_on_same_clients() {
     let mut instant_server = mockito::Server::new_async().await;
     let mut finalized_server = mockito::Server::new_async().await;
 
-    let instant_mock = instant_server
-        .mock("POST", "/instant")
-        .with_status(200)
-        .expect(1)
-        .create_async()
-        .await;
-    let finalized_mock = finalized_server
-        .mock("POST", "/finalized")
-        .with_status(200)
-        .expect(1)
-        .create_async()
-        .await;
+    let instant_mock =
+        instant_server.mock("POST", "/instant").with_status(200).expect(1).create_async().await;
+    let finalized_mock =
+        finalized_server.mock("POST", "/finalized").with_status(200).expect(1).create_async().await;
 
     let clients = streams_clients_for(vec![
         WebhookStreamConfig {
@@ -153,7 +145,8 @@ async fn mixed_instant_and_finalized_on_same_clients() {
     .await;
 
     // A single stream() call — instant webhook receives it immediately, finalized doesn't.
-    let sent = clients.stream("id".to_string(), &event_message_at(100), false, false).await.unwrap();
+    let sent =
+        clients.stream("id".to_string(), &event_message_at(100), false, false).await.unwrap();
     assert_eq!(sent, 1, "Exactly the instant endpoint publishes immediately");
 
     instant_mock.assert_async().await;
@@ -179,10 +172,8 @@ async fn reorg_notifications_bypass_finalized_buffer() {
     .await;
 
     // Fire a reorg notification — expect immediate dispatch despite Finalized.
-    let sent = clients
-        .stream_reorg(NETWORK, 100, 2, 0, &[B256::ZERO], &[])
-        .await
-        .expect("stream_reorg");
+    let sent =
+        clients.stream_reorg(NETWORK, 100, 2, 0, &[B256::ZERO], &[]).await.expect("stream_reorg");
     assert_eq!(sent, 1, "Reorg notification should publish immediately, not buffer");
 
     mock.assert_async().await;
