@@ -1,0 +1,23 @@
+core/src/indexer/process.rs
+  605098e308c7ef64 4-5,103-104,112,114-117,121-122
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.0",
+  "base_commit_sha": "dab4049ed54ce3bfa77e93f6a7dea32da6c76a3b",
+  "prompts": {
+    "605098e308c7ef64": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "37fb5de4-740d-407b-a05c-467260f26150",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 15,
+      "total_deletions": 13,
+      "accepted_lines": 11,
+      "overriden_lines": 0
+    }
+  }
+}
