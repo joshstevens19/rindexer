@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, sync::Arc, time::Instant};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::{Arc, Mutex as StdMutex},
+    time::Instant,
+};
 
 use alloy::primitives::B256;
 use aws_sdk_sns::{config::http::HttpResponse, error::SdkError, operation::publish::PublishError};
@@ -6,6 +10,7 @@ use futures::future::join_all;
 use serde_json::{json, Value};
 use thiserror::Error;
 use tokio::{
+    sync::Mutex as AsyncMutex,
     task,
     task::{JoinError, JoinHandle},
 };
@@ -101,6 +106,19 @@ pub struct CloudflareQueuesStream {
     client: Arc<CloudflareQueues>,
 }
 
+/// Key into the finalized-delivery buffer map. One `FinalizedBuffer` exists per
+/// `(stream_type, config_index, network, event_name)` tuple. The event
+/// signature hash rides alongside so we can rebuild faithful `EventMessage`s at
+/// flush time without re-deriving it from the ABI.
+#[derive(Hash, Eq, PartialEq, Clone, Debug)]
+pub(crate) struct BufferKey {
+    stream_type: &'static str,
+    config_index: usize,
+    network: String,
+    event_name: String,
+    event_signature_hash: B256,
+}
+
 #[derive(Debug)]
 pub struct StreamsClients {
     sns: Option<SNSStream>,
@@ -110,6 +128,15 @@ pub struct StreamsClients {
     kafka: Option<KafkaStream>,
     redis: Option<RedisStream>,
     cloudflare_queues: Option<CloudflareQueuesStream>,
+    /// Per-(stream-type, config-index, network, event) buffers for
+    /// `StreamDeliveryMode::Finalized`. `stream_with_mode` appends here when
+    /// `delivery: finalized` is set; the `ReorgCoordinator` drives draining via
+    /// `flush_finalized` and invalidation via `discard_finalized`.
+    finalized_buffers: AsyncMutex<HashMap<BufferKey, FinalizedBuffer>>,
+    /// Per-network `reorg_safe_distance`. Populated at startup by
+    /// `register_network_reorg_distance`. `FinalizedBuffer::new` needs this to
+    /// know how far behind the chain head a block must be before flushing.
+    reorg_safe_distances: StdMutex<HashMap<String, u64>>,
 }
 
 impl StreamsClients {
@@ -190,7 +217,24 @@ impl StreamsClients {
             kafka,
             redis,
             cloudflare_queues,
+            finalized_buffers: AsyncMutex::new(HashMap::new()),
+            reorg_safe_distances: StdMutex::new(HashMap::new()),
         }
+    }
+
+    /// Register the `reorg_safe_distance` to use for any `Finalized` buffer on
+    /// this network. Must be called before the first finalized event on the
+    /// network is buffered — otherwise a buffer gets created with a default
+    /// distance of 0 (always-safe) and would flush immediately. `start.rs`
+    /// calls this for every live-indexed network at coordinator construction.
+    pub fn register_network_reorg_distance(&self, network: String, distance: u64) {
+        let mut map = self.reorg_safe_distances.lock().expect("reorg_safe_distances poisoned");
+        map.insert(network, distance);
+    }
+
+    fn reorg_safe_distance_for(&self, network: &str) -> u64 {
+        let map = self.reorg_safe_distances.lock().expect("reorg_safe_distances poisoned");
+        map.get(network).copied().unwrap_or(0)
     }
 
     /// Redirects the Cloudflare Queues client to a different base URL. Intended
@@ -930,6 +974,171 @@ impl StreamsClients {
         )
         .await
     }
+
+    /// Drain finalized-delivery buffers for `network` that have become safe
+    /// relative to `head_block` (i.e., buried by at least the network's
+    /// registered `reorg_safe_distance`). Called by `ReorgCoordinator` on every
+    /// validated `on_new_block`. Returns the total number of events dispatched.
+    pub async fn flush_finalized(
+        &self,
+        network: &str,
+        head_block: u64,
+    ) -> Result<usize, StreamError> {
+        let mut ready_by_key: Vec<(BufferKey, Vec<(u64, Vec<Value>)>)> = Vec::new();
+        {
+            let mut map = self.finalized_buffers.lock().await;
+            for (key, buffer) in map.iter_mut() {
+                if key.network != network {
+                    continue;
+                }
+                let ready = buffer.flush(head_block);
+                if !ready.is_empty() {
+                    ready_by_key.push((key.clone(), ready));
+                }
+            }
+        }
+
+        let mut total_sent = 0;
+        for (key, ready) in ready_by_key {
+            total_sent += self.dispatch_flushed(&key, ready).await?;
+        }
+        Ok(total_sent)
+    }
+
+    /// Remove buffered events for `network` whose source block falls in the
+    /// inclusive range `[fork_point, detection_point]`. Called by
+    /// `ReorgCoordinator::handle_reorg` *before* the next `flush_finalized` so
+    /// invalidated events never escape the buffer.
+    pub async fn discard_finalized(
+        &self,
+        network: &str,
+        fork_point: u64,
+        detection_point: u64,
+    ) {
+        let mut map = self.finalized_buffers.lock().await;
+        for (key, buffer) in map.iter_mut() {
+            if key.network != network {
+                continue;
+            }
+            buffer.discard_range(fork_point, detection_point);
+        }
+    }
+
+    /// Re-publish a block's worth of previously-buffered events through the
+    /// stream-type-specific `*_stream_tasks` helper. Does NOT re-enter
+    /// `stream_with_mode` — that would re-buffer indefinitely.
+    async fn dispatch_flushed(
+        &self,
+        key: &BufferKey,
+        ready: Vec<(u64, Vec<Value>)>,
+    ) -> Result<usize, StreamError> {
+        let mut total_sent = 0;
+        for (block_number, events) in ready {
+            let event_message = EventMessage {
+                event_name: key.event_name.clone(),
+                event_data: Value::Array(events.clone()),
+                event_signature_hash: key.event_signature_hash,
+                network: key.network.clone(),
+                block_number,
+            };
+            let chunks = Arc::new(self.chunk_data(&events));
+            let id = format!(
+                "finalized_{}_{}_{}_blk{}",
+                key.stream_type, key.config_index, key.network, block_number
+            );
+
+            let tasks: StreamPublishes = match key.stream_type {
+                "sns" => {
+                    let sns = self.sns.as_ref().expect("sns buffer without sns config");
+                    let config = &sns.config[key.config_index];
+                    self.sns_stream_tasks(
+                        config,
+                        Arc::clone(&sns.client),
+                        &id,
+                        &event_message,
+                        chunks,
+                        false,
+                    )
+                }
+                "webhook" => {
+                    let webhook =
+                        self.webhook.as_ref().expect("webhook buffer without webhook config");
+                    let config = &webhook.config[key.config_index];
+                    self.webhook_stream_tasks(
+                        config,
+                        Arc::clone(&webhook.client),
+                        &id,
+                        &event_message,
+                        chunks,
+                        false,
+                    )
+                }
+                "rabbitmq" => {
+                    let rabbitmq =
+                        self.rabbitmq.as_ref().expect("rabbitmq buffer without rabbitmq config");
+                    let config = &rabbitmq.config.exchanges[key.config_index];
+                    self.rabbitmq_stream_tasks(
+                        config,
+                        Arc::clone(&rabbitmq.client),
+                        &id,
+                        &event_message,
+                        chunks,
+                        false,
+                    )
+                }
+                #[cfg(feature = "kafka")]
+                "kafka" => {
+                    let kafka = self.kafka.as_ref().expect("kafka buffer without kafka config");
+                    let config = &kafka.config.topics[key.config_index];
+                    self.kafka_stream_tasks(
+                        config,
+                        Arc::clone(&kafka.client),
+                        &id,
+                        &event_message,
+                        chunks,
+                        false,
+                    )
+                }
+                "redis" => {
+                    let redis = self.redis.as_ref().expect("redis buffer without redis config");
+                    let config = &redis.config.streams[key.config_index];
+                    self.redis_stream_tasks(
+                        config,
+                        Arc::clone(&redis.client),
+                        &id,
+                        &event_message,
+                        chunks,
+                        false,
+                    )
+                }
+                "cloudflare_queues" => {
+                    let cf = self
+                        .cloudflare_queues
+                        .as_ref()
+                        .expect("cloudflare_queues buffer without cloudflare_queues config");
+                    let config = &cf.config.queues[key.config_index];
+                    self.cloudflare_queues_stream_tasks(
+                        config,
+                        Arc::clone(&cf.client),
+                        &id,
+                        &event_message,
+                        chunks,
+                        false,
+                    )
+                }
+                other => unreachable!("unknown stream_type in BufferKey: {other}"),
+            };
+
+            for task in tasks {
+                match task.await {
+                    Ok(Ok(n)) => total_sent += n,
+                    Ok(Err(e)) => return Err(e),
+                    Err(e) => return Err(StreamError::JoinError(e)),
+                }
+            }
+        }
+        Ok(total_sent)
+    }
 }
 
 /// Per-(stream-type, config-index, network) buffer of JSON events keyed by
@@ -939,6 +1148,7 @@ impl StreamsClients {
 /// `flush(current_head)` drains every bucket whose block is `<= current_head -
 /// reorg_safe_distance`; `discard_range(fork_point, detection_point)` removes
 /// buckets in an invalidated range when a reorg is detected.
+#[derive(Debug)]
 pub(crate) struct FinalizedBuffer {
     buffer: BTreeMap<u64, Vec<Value>>,
     reorg_safe_distance: u64,
@@ -1010,6 +1220,8 @@ mod tests {
             kafka: None,
             redis: None,
             cloudflare_queues: None,
+            finalized_buffers: AsyncMutex::new(HashMap::new()),
+            reorg_safe_distances: StdMutex::new(HashMap::new()),
         }
     }
 
@@ -1022,6 +1234,8 @@ mod tests {
             kafka: None,
             redis: None,
             cloudflare_queues: None,
+            finalized_buffers: AsyncMutex::new(HashMap::new()),
+            reorg_safe_distances: StdMutex::new(HashMap::new()),
         }
     }
 
@@ -1048,6 +1262,8 @@ mod tests {
                         .with_base_url(base_url.to_string()),
                 ),
             }),
+            finalized_buffers: AsyncMutex::new(HashMap::new()),
+            reorg_safe_distances: StdMutex::new(HashMap::new()),
         }
     }
 
