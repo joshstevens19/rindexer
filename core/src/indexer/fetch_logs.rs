@@ -1351,8 +1351,18 @@ async fn live_indexing_stream(
                             let contract_address = current_filter.contract_addresses().await;
 
                             let to_block = safe_block_number;
-                            if from_block == to_block
-                                && !disable_logs_bloom_checks
+                            // The bloom-filter shortcut only applies when the
+                            // single block we're about to fetch IS `latest_block`.
+                            // With `reorg_safe_distance > 0` the processed block
+                            // lags behind the tip, so using `latest_block`'s
+                            // bloom is wrong — and if the tip happens to be
+                            // empty it would falsely skip a block that actually
+                            // has matching logs.
+                            let bloom_check_applies = from_block
+                                == U64::from(latest_block.header.number)
+                                && from_block == to_block
+                                && !disable_logs_bloom_checks;
+                            if bloom_check_applies
                                 && !is_relevant_block(&contract_address, topic_id, &latest_block)
                             {
                                 debug!(
