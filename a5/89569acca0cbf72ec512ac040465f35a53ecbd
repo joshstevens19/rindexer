@@ -1,0 +1,29 @@
+core/src/indexer/fetch_logs.rs
+  babcd1c453882c13 27,62,443,502,509-510,519,580,598,600,781,789,805
+core/src/indexer/native_transfer.rs
+  babcd1c453882c13 11,17-18,106-112,116-132,135-157,179,187-226,243,245-246,257,271-278,281-294,301-308,894-945,947-957,961-970,972-991,995-1004,1006-1014,1021,1075-1088,1090-1097
+documentation/docs/pages/docs/start-building/rust-project-deep-dive/indexers.mdx
+  babcd1c453882c13 1065,1175
+core/src/indexer/process.rs
+  babcd1c453882c13 55,86,201,297-298,319,372,415,429,431
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "a589569acca0cbf72ec512ac040465f35a53ecbd",
+  "prompts": {
+    "babcd1c453882c13": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "974b351c-cba9-4628-9473-e022654ecdb6",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 27,
+      "total_deletions": 23,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    }
+  }
+}

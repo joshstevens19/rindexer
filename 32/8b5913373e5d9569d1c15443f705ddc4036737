@@ -1,0 +1,29 @@
+core/Cargo.toml
+  babcd1c453882c13 18
+core/src/lib.rs
+  babcd1c453882c13 64
+core/tests/e2e_reorg_streams.rs
+  babcd1c453882c13 1-146,151-186,188-200,204-422
+core/src/streams/clients.rs
+  babcd1c453882c13 16,891,904-911,1361-1377,1380,1387-1389,1391-1400,1402-1414,1431,1433-1475,1478-1484,1489-1497,1502-1516
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "328b5913373e5d9569d1c15443f705ddc4036737",
+  "prompts": {
+    "babcd1c453882c13": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "974b351c-cba9-4628-9473-e022654ecdb6",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 502,
+      "total_deletions": 31,
+      "accepted_lines": 419,
+      "overriden_lines": 0
+    }
+  }
+}

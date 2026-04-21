@@ -1,0 +1,47 @@
+core/src/indexer/no_code.rs
+  babcd1c453882c13 1067,1103,1120,1127
+core/src/indexer/fetch_logs.rs
+  babcd1c453882c13 27,62,443,502,508-509,518,579,596,598,779,786,802
+core/src/indexer/reorg/mod.rs
+  babcd1c453882c13 14,85
+core/src/indexer/start.rs
+  babcd1c453882c13 324-326,328-329,333-334,339-340,475,675-676,981-983,988,1616-1622,1624-1636,1641-1663,1665-1667,1669-1673,1677-1680,1682-1689,1691-1694,1696-1700,1704-1705,1709,1714-1729,1732-1737,1744,1748-1808,1811-1846
+examples/clickhouse_factory_indexing/src/main.rs
+  babcd1c453882c13 56
+core/src/indexer/native_transfer.rs
+  babcd1c453882c13 11,17-18,106-112,116-132,135-157,179,187-226,243,245-246,257,271-278,281-294,301-308,894-945,947-957,961-970,972-991,995-1004,1006-1014,1021,1075-1088,1090-1097
+core/src/indexer/process.rs
+  babcd1c453882c13 55,86,201,297-298,319,372,415,428,430
+examples/rindexer_factory_indexing/src/main.rs
+  babcd1c453882c13 57
+examples/rindexer_rust_playground/src/main.rs
+  babcd1c453882c13 59
+core/src/indexer/reorg/coordinator.rs
+  babcd1c453882c13 499-518,616-653,655-658,661-695
+examples/rust_clickhouse/src/main.rs
+  babcd1c453882c13 57
+core/src/generator/build.rs
+  babcd1c453882c13 570-573
+core/src/event/callback_registry.rs
+  babcd1c453882c13 442-445,550-556,570-572,617-618,631-633,664-666,670-672,676-677
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "8af07ded326a0b66037143adee96b5c31b7fea9d",
+  "prompts": {
+    "babcd1c453882c13": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "974b351c-cba9-4628-9473-e022654ecdb6",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 164,
+      "total_deletions": 23,
+      "accepted_lines": 93,
+      "overriden_lines": 0
+    }
+  }
+}

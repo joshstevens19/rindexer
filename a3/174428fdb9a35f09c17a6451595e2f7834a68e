@@ -1,0 +1,29 @@
+core/src/indexer/no_code.rs
+  babcd1c453882c13 1053,1089,1105,1112
+core/src/event/callback_registry.rs
+  babcd1c453882c13 440-443,537-543,557-559,604-605,618-620,651-653,657-659,663-664
+core/src/generator/trace_bindings.rs
+  babcd1c453882c13 650
+core/src/indexer/start.rs
+  babcd1c453882c13 310-312,314-315,327-328,334-335,359,636-637,931-933,938,1571-1577,1579-1591,1596-1621,1623-1627,1629-1630,1632-1633,1635-1642,1644-1645,1647-1648,1650-1654,1658-1659,1664,1669
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "a3174428fdb9a35f09c17a6451595e2f7834a68e",
+  "prompts": {
+    "babcd1c453882c13": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "974b351c-cba9-4628-9473-e022654ecdb6",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 213,
+      "total_deletions": 40,
+      "accepted_lines": 100,
+      "overriden_lines": 0
+    }
+  }
+}
