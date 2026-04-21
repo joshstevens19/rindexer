@@ -777,3 +777,76 @@ async fn handle_logs_result(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! Regression tests for the in-flight `JoinHandle` handling in
+    //! `process_event_logs`. Each test exercises the exact pattern used
+    //! there (push + non-blocking drain + final await-drain) so a future
+    //! refactor that silently reintroduces the leak will trip a test.
+
+    use super::*;
+    use std::task::Poll;
+
+    #[tokio::test]
+    async fn inline_drain_keeps_queue_bounded_under_live_indexing_pattern() {
+        // Live indexing never terminates the log stream, so any unbounded
+        // accumulation in the in-flight queue is a memory leak. The inline
+        // `poll!` drain must keep the queue at a small constant size.
+        let mut in_flight: FuturesUnordered<JoinHandle<()>> = FuturesUnordered::new();
+        let mut peak = 0usize;
+
+        for _ in 0..500 {
+            in_flight.push(tokio::spawn(async {}));
+            tokio::task::yield_now().await;
+            while let Poll::Ready(Some(joined)) = poll!(in_flight.next()) {
+                joined.expect("task should not fail");
+            }
+            peak = peak.max(in_flight.len());
+        }
+
+        while let Some(joined) = in_flight.next().await {
+            joined.expect("task should not fail");
+        }
+
+        assert!(
+            peak <= 4,
+            "queue grew to {peak}; inline drain is not keeping up — would leak under live indexing"
+        );
+    }
+
+    #[tokio::test]
+    async fn final_drain_awaits_pending_tasks_after_stream_ends() {
+        // Historical-only runs (`force_no_live_indexing=true` or live indexing
+        // disabled via config) terminate the stream while tasks may still be
+        // in flight — the final await-drain must wait for those to complete.
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let mut in_flight: FuturesUnordered<JoinHandle<()>> = FuturesUnordered::new();
+        in_flight.push(tokio::spawn(async move {
+            rx.await.expect("oneshot sender dropped");
+        }));
+
+        while let Poll::Ready(Some(joined)) = poll!(in_flight.next()) {
+            joined.expect("task should not fail");
+        }
+        assert_eq!(in_flight.len(), 1, "non-blocking drain must leave pending tasks in place");
+
+        tx.send(()).expect("receiver dropped");
+        while let Some(joined) = in_flight.next().await {
+            joined.expect("task should not fail");
+        }
+        assert_eq!(in_flight.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn panic_in_spawned_task_surfaces_as_join_error() {
+        // `try_join_all(tasks)` in the old code surfaced panics as `JoinError`
+        // at the end of the stream; the new drain loops must preserve that.
+        let mut in_flight: FuturesUnordered<JoinHandle<()>> = FuturesUnordered::new();
+        in_flight.push(tokio::spawn(async { panic!("boom") }));
+
+        let result = in_flight.next().await.expect("task should complete");
+        let err = result.expect_err("panicking task should yield a JoinError");
+        assert!(err.is_panic(), "expected panic cause, got: {err:?}");
+    }
+}
