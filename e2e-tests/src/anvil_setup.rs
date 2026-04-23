@@ -310,6 +310,47 @@ impl AnvilInstance {
         Ok(tx_hash)
     }
 
+    /// Send an ERC20 approve. Returns the tx hash.
+    /// Does NOT auto-mine — call `mine_block()` afterwards if using manual mining.
+    pub async fn send_approve(
+        &self,
+        contract_address: &str,
+        spender: &ethers::types::Address,
+        amount: ethers::types::U256,
+    ) -> Result<String> {
+        use ethers::middleware::MiddlewareBuilder;
+        use ethers::providers::{Http, Middleware, Provider};
+        use ethers::signers::{LocalWallet, Signer};
+        use ethers::types::TransactionRequest;
+
+        let base_provider = Provider::<Http>::try_from(&self.rpc_url)?;
+        let chain_id = base_provider.get_chainid().await?.as_u64();
+
+        let wallet: LocalWallet = ANVIL_DEFAULT_PRIVATE_KEY.parse()?;
+        let wallet = wallet.with_chain_id(chain_id);
+        let signer_address = wallet.address();
+        let provider = base_provider.with_signer(wallet);
+
+        let contract_addr: ethers::types::Address = contract_address.parse()?;
+        let data = encode_approve_call(*spender, amount);
+        let nonce = provider.get_transaction_count(signer_address, None).await?;
+
+        let tx = TransactionRequest {
+            from: Some(signer_address),
+            to: Some(contract_addr.into()),
+            data: Some(data.into()),
+            gas: Some(100000u64.into()),
+            nonce: Some(nonce),
+            gas_price: Some(20000000000u128.into()),
+            value: None,
+            chain_id: None,
+        };
+
+        let pending = provider.send_transaction(tx, None).await?;
+        let tx_hash = format!("{:?}", pending.tx_hash()).to_lowercase();
+        Ok(tx_hash)
+    }
+
     /// Send multiple ERC20 transfers without mining between them.
     /// All transactions sit in the mempool until the next `mine_block()`.
     /// Returns tx hashes in submission order.
@@ -536,6 +577,19 @@ fn encode_transfer_call(to: ethers::types::Address, value: ethers::types::U256) 
     let mut to_bytes = [0u8; 32];
     to_bytes[12..].copy_from_slice(to.as_bytes());
     data.extend_from_slice(&to_bytes);
+    let mut value_bytes = [0u8; 32];
+    let value_be: [u8; 32] = value.into();
+    value_bytes.copy_from_slice(&value_be);
+    data.extend_from_slice(&value_bytes);
+    data
+}
+
+/// Encode ERC20 approve(address,uint256) call data.
+fn encode_approve_call(spender: ethers::types::Address, value: ethers::types::U256) -> Vec<u8> {
+    let mut data = vec![0x09, 0x5e, 0xa7, 0xb3]; // approve selector
+    let mut spender_bytes = [0u8; 32];
+    spender_bytes[12..].copy_from_slice(spender.as_bytes());
+    data.extend_from_slice(&spender_bytes);
     let mut value_bytes = [0u8; 32];
     let value_be: [u8; 32] = value.into();
     value_bytes.copy_from_slice(&value_be);
