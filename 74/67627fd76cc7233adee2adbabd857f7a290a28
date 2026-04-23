@@ -1,0 +1,29 @@
+core/src/manifest/config.rs
+  1c310fb5324a32f8 50-55,88-107
+core/src/indexer/fetch_logs.rs
+  1c310fb5324a32f8 26,28,90-98,100,105-106,113-124,130-133,137-139,141-151,155-157,159-201,205-206,211,248-252,258-259,265-275,280-313,650-651,657-678,680-699,706-707,721-736,738-742,744-751,756-758,760-767,770-776,781-804,810-811,816-824,826,828-978,982-990,2156
+core/src/indexer/process.rs
+  1c310fb5324a32f8 106,110-113,152-153,158-163,176,198,216-225,227-239,247,262,266-268
+cli/src/commands/new.rs
+  1c310fb5324a32f8 222
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "7467627fd76cc7233adee2adbabd857f7a290a28",
+  "prompts": {
+    "1c310fb5324a32f8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3a6e88e9-e1d4-4670-a53c-5571d0e432d8",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 2510,
+      "total_deletions": 577,
+      "accepted_lines": 503,
+      "overriden_lines": 0
+    }
+  }
+}

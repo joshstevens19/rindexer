@@ -1,0 +1,26 @@
+core/src/adaptive_concurrency.rs
+  04be97ba88c602d3 8,225-231,235
+core/src/indexer/fetch_logs.rs
+  1c310fb5324a32f8 26,28,90-98,100,103-104,108-123,126-128,132-142,146-148,151-189,192-197,199,204-208,210-211,213-223,226-259,596-597,714-755,759,762-782,791-798,802-804,806-813,816-822,826-849,851-852,855-863,865-1016,1018-1026,2192-2426,2432-2466,2469-2499,2503,2506-2519,2523-2534,2538-2552,2556-2561
+  04be97ba88c602d3 1,129-131,149-150
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "3d85b43b6e263d0cff9cb87f22329f2157744dc9",
+  "prompts": {
+    "04be97ba88c602d3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f58de5a7-18ee-42a7-a998-d551004b6eca",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 45,
+      "total_deletions": 42,
+      "accepted_lines": 15,
+      "overriden_lines": 0
+    }
+  }
+}
