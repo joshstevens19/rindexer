@@ -1860,7 +1860,7 @@ fn reorg_native_transfer_only(
         let recipients: Vec<_> = (300..305u64).map(generate_test_address).collect();
         for (i, r) in recipients.iter().enumerate() {
             let amount = U256::from((i as u64 + 1) * 1_000_000_000u64); // wei
-            context.anvil.send_native_eth(r, amount).await?;
+            context.anvil.send_eth_transfer(r, amount).await?;
             context.anvil.mine_block().await?;
         }
 
@@ -1886,7 +1886,7 @@ fn reorg_native_transfer_only(
 
         // Confirm the poller is live by sending one more NT and waiting for it.
         let live_rcpt = generate_test_address(311);
-        context.anvil.send_native_eth(&live_rcpt, U256::from(5_000_000_000u64)).await?;
+        context.anvil.send_eth_transfer(&live_rcpt, U256::from(5_000_000_000u64)).await?;
         context.anvil.mine_block().await?;
         let live_count = wait_for_pg_count(&conn_str, nt_table, pre_count + 1, 20).await?;
         info!("After live NT: {} rows", live_count);
@@ -1976,7 +1976,7 @@ fn reorg_native_transfer_and_contracts(
         let nt_recipients: Vec<_> = (500..504u64).map(generate_test_address).collect();
         for (i, r) in nt_recipients.iter().enumerate() {
             let amount = U256::from((i as u64 + 1) * 1_000_000_000u64);
-            context.anvil.send_native_eth(r, amount).await?;
+            context.anvil.send_eth_transfer(r, amount).await?;
             context.anvil.mine_block().await?;
         }
 
@@ -2018,7 +2018,7 @@ fn reorg_native_transfer_and_contracts(
             .await?;
         context.anvil.mine_block().await?;
         let live_nt_rcpt = generate_test_address(510);
-        context.anvil.send_native_eth(&live_nt_rcpt, U256::from(8_000_000_000u64)).await?;
+        context.anvil.send_eth_transfer(&live_nt_rcpt, U256::from(8_000_000_000u64)).await?;
         context.anvil.mine_block().await?;
         let live_nt = wait_for_pg_count(&conn_str, nt_table, pre_nt + 1, 20).await?;
         let live_erc20 = wait_for_pg_count(&conn_str, erc20_table, pre_erc20 + 1, 20).await?;
