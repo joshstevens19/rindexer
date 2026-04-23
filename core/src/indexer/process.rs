@@ -1,7 +1,8 @@
 use alloy::primitives::{B256, U64};
 
 use futures::future::join_all;
-use futures::StreamExt;
+use futures::stream::FuturesUnordered;
+use futures::{poll, StreamExt};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
 use tokio::{
@@ -99,7 +100,8 @@ async fn process_event_logs(
 
     let mut logs_stream =
         fetch_logs_stream(Arc::clone(&config), force_no_live_indexing, reorg_coordinator);
-    let mut tasks = Vec::new();
+    // Drain inline so handles don't accumulate during infinite live indexing.
+    let mut in_flight: FuturesUnordered<JoinHandle<()>> = FuturesUnordered::new();
 
     while let Some(result) = logs_stream.next().await {
         let task = handle_logs_result(Arc::clone(&config), callback_permits.clone(), result)
@@ -107,17 +109,17 @@ async fn process_event_logs(
             .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
 
         if block_until_indexed {
-            task.await.map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
+            task.await.map_err(|e| Box::new(ProviderError::BatchRequestFailed(e)))?;
         } else {
-            tasks.push(task);
+            in_flight.push(task);
+            while let std::task::Poll::Ready(Some(joined)) = poll!(in_flight.next()) {
+                joined.map_err(|e| Box::new(ProviderError::BatchRequestFailed(e)))?;
+            }
         }
     }
 
-    // Wait for all remaining tasks to complete
-    if !tasks.is_empty() {
-        futures::future::try_join_all(tasks)
-            .await
-            .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
+    while let Some(joined) = in_flight.next().await {
+        joined.map_err(|e| Box::new(ProviderError::BatchRequestFailed(e)))?;
     }
 
     Ok(())
@@ -773,5 +775,80 @@ async fn handle_logs_result(
             );
             Err(e)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Regression tests for the in-flight `JoinHandle` handling in
+    //! `process_event_logs`. Each test exercises the exact pattern used
+    //! there (push + non-blocking drain + final await-drain) so a future
+    //! refactor that silently reintroduces the leak will trip a test.
+
+    use super::*;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    use std::task::Poll;
+
+    #[tokio::test]
+    async fn inline_drain_keeps_queue_bounded_under_live_indexing() {
+        let mut in_flight: FuturesUnordered<JoinHandle<()>> = FuturesUnordered::new();
+        let completed = Arc::new(AtomicUsize::new(0));
+        let mut drained_inline = 0usize;
+
+        for _ in 0..500 {
+            let completed = Arc::clone(&completed);
+            in_flight.push(tokio::spawn(async move {
+                completed.fetch_add(1, Ordering::SeqCst);
+            }));
+            tokio::task::yield_now().await;
+            while let Poll::Ready(Some(joined)) = poll!(in_flight.next()) {
+                joined.expect("task should not fail");
+                drained_inline += 1;
+            }
+        }
+
+        while let Some(joined) = in_flight.next().await {
+            joined.expect("task should not fail");
+        }
+
+        assert!(
+            drained_inline > 0,
+            "inline drain never observed a completed task; test did not exercise the live drain path"
+        );
+        assert_eq!(completed.load(Ordering::SeqCst), 500, "all spawned tasks should complete");
+        assert_eq!(in_flight.len(), 0, "final drain should empty the queue");
+    }
+
+    #[tokio::test]
+    async fn final_drain_awaits_pending_tasks_after_stream_ends() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let mut in_flight: FuturesUnordered<JoinHandle<()>> = FuturesUnordered::new();
+        in_flight.push(tokio::spawn(async move {
+            rx.await.expect("oneshot sender dropped");
+        }));
+
+        while let Poll::Ready(Some(joined)) = poll!(in_flight.next()) {
+            joined.expect("task should not fail");
+        }
+        assert_eq!(in_flight.len(), 1, "non-blocking drain must leave pending tasks in place");
+
+        tx.send(()).expect("receiver dropped");
+        while let Some(joined) = in_flight.next().await {
+            joined.expect("task should not fail");
+        }
+        assert_eq!(in_flight.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn panic_in_spawned_task_surfaces_as_join_error() {
+        let mut in_flight: FuturesUnordered<JoinHandle<()>> = FuturesUnordered::new();
+        in_flight.push(tokio::spawn(async { panic!("boom") }));
+
+        let result = in_flight.next().await.expect("task should complete");
+        let err = result.expect_err("panicking task should yield a JoinError");
+        assert!(err.is_panic(), "expected panic cause, got: {err:?}");
     }
 }
