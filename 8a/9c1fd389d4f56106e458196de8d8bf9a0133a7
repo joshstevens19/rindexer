@@ -1,0 +1,26 @@
+core/src/generator/database_bindings.rs
+  22d09adda86e8756 5-7,9,11-19,26-28,30,32-40
+core/src/generator/build.rs
+  babcd1c453882c13 568-571
+  22d09adda86e8756 128-135,176-183
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "8a9c1fd389d4f56106e458196de8d8bf9a0133a7",
+  "prompts": {
+    "22d09adda86e8756": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f41382eb-e2e3-4655-bbee-967bce811789",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 40,
+      "total_deletions": 50,
+      "accepted_lines": 42,
+      "overriden_lines": 0
+    }
+  }
+}

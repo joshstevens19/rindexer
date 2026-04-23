@@ -1,0 +1,14 @@
+core/src/event/callback_registry.rs
+  babcd1c453882c13 442-445,550-553,778-780,825-826,839-841,872-874,878-880,884-885
+core/src/indexer/no_code.rs
+  babcd1c453882c13 1129,1165,1182,1189-1244,1247-1256
+  44b351e982b77fbd 242,385-389,1245-1246
+e2e-tests/src/tests/reorg_e2e.rs
+  babcd1c453882c13 100-113,1662-1689,1691-1705,1707-1741,1743-1747,1754-2074
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "9d3767d7380f36f4c280f71c69de4d7970876597",
+  "prompts": {}
+}
