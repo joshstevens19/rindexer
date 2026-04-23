@@ -1,3 +1,4 @@
+use crate::adaptive_concurrency::{AdaptiveConcurrency, ADAPTIVE_CONCURRENCY};
 use crate::blockclock::BlockClock;
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::event::callback_registry::EventCallbackRegistry;
@@ -22,7 +23,9 @@ use alloy::{
 use lru::LruCache;
 use rand::{random_bool, random_ratio};
 use regex::Regex;
+use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
 use tokio::{sync::mpsc, time::Instant};
 use tokio_stream::wrappers::ReceiverStream;
@@ -84,6 +87,176 @@ pub fn fetch_logs_stream(
         let original_max_limit = config.network_contract().cached_provider.max_block_range();
         let mut max_block_range_limitation =
             config.network_contract().cached_provider.max_block_range();
+
+        // Parallel historical backfill path. Activated when fetch_concurrency > 1
+        // and the event is not a factory event (factory needs sequential discovery).
+        let use_parallel = matches!(
+            config.config().fetch_concurrency,
+            Some(n) if n > 1 && !config.is_factory_event()
+        );
+
+        if use_parallel {
+            let concurrency = config.config().fetch_concurrency.unwrap();
+            // Use inclusive block count so a range [a, a] counts as 1 block.
+            let total_blocks =
+                snapshot_to_block.saturating_sub(from_block).to::<u64>().saturating_add(1);
+
+            // Fallback to sequential for small ranges (not worth the overhead).
+            if total_blocks >= PARALLEL_MIN_BLOCKS {
+                let ParallelFetchParams { chunk_size, effective_concurrency } =
+                    plan_parallel_fetch(total_blocks, concurrency);
+
+                info!(
+                    "{} - Parallel fetch: {} workers, chunk_size: {} blocks, total: {} blocks",
+                    config.info_log_name(),
+                    effective_concurrency,
+                    chunk_size,
+                    total_blocks
+                );
+
+                let (worker_tx, mut worker_rx) =
+                    mpsc::channel::<SequencedFetchBatch>(effective_concurrency * 2);
+
+                let active_workers = Arc::new(AtomicUsize::new(0));
+                let worker_done_notify = Arc::new(tokio::sync::Notify::new());
+                let cancel_token = config.cancel_token().clone();
+
+                // worker_tx is MOVED into the dispatcher so the channel is kept
+                // alive only by the worker clones once dispatching finishes.
+                let dispatcher_filter = current_filter.clone();
+                let dispatcher_config = Arc::clone(&config);
+                let dispatcher_cancel = cancel_token.clone();
+                // Shared: a 429 from any worker (any event) shrinks live
+                // concurrency for all of them.
+                let dispatcher_controller = Arc::clone(&ADAPTIVE_CONCURRENCY);
+                let dispatcher_active = Arc::clone(&active_workers);
+                let dispatcher_notify = Arc::clone(&worker_done_notify);
+                let dispatcher_handle = tokio::spawn(async move {
+                    let mut next_from = from_block;
+                    let mut sequence_id: u64 = 0;
+
+                    while next_from <= snapshot_to_block {
+                        if !is_running() || dispatcher_cancel.is_cancelled() {
+                            break;
+                        }
+
+                        // Register `notified()` BEFORE the load — otherwise a
+                        // worker finishing between load and await would be a
+                        // lost wakeup.
+                        loop {
+                            let notified = dispatcher_notify.notified();
+                            let active = dispatcher_active.load(Ordering::Acquire);
+                            let limit =
+                                dispatcher_controller.current().clamp(1, effective_concurrency);
+                            if active < limit {
+                                break;
+                            }
+                            notified.await;
+                        }
+
+                        dispatcher_active.fetch_add(1, Ordering::Release);
+
+                        let sub_to = U64::from(std::cmp::min(
+                            next_from.to::<u64>().saturating_add(chunk_size - 1),
+                            snapshot_to_block.to::<u64>(),
+                        ));
+
+                        let worker_filter = dispatcher_filter
+                            .clone()
+                            .set_from_block(next_from)
+                            .set_to_block(sub_to);
+
+                        let worker_state = WorkerState {
+                            sequence_id,
+                            filter: worker_filter,
+                            max_block_range_limitation: original_max_limit,
+                            original_max_limit,
+                        };
+
+                        let wtx = worker_tx.clone();
+                        let cfg = Arc::clone(&dispatcher_config);
+                        let ct = dispatcher_cancel.clone();
+                        let ctrl = Arc::clone(&dispatcher_controller);
+                        let aw = Arc::clone(&dispatcher_active);
+                        let wdn = Arc::clone(&dispatcher_notify);
+
+                        tokio::spawn(async move {
+                            parallel_worker(cfg, worker_state, wtx, ct, ctrl, aw, wdn).await;
+                        });
+
+                        next_from = sub_to + U64::from(1);
+                        sequence_id = sequence_id.saturating_add(1);
+                    }
+                    // Load-bearing: reorder task terminates only when every
+                    // worker_tx clone is dropped.
+                    drop(worker_tx);
+                });
+
+                // Reorder buffer: forwards worker results in strict sequence_id order.
+                let reorder_tx = tx.clone();
+                let reorder_handle = tokio::spawn(async move {
+                    let mut buffer = ReorderBuffer::new();
+                    while let Some(batch) = worker_rx.recv().await {
+                        for r in buffer.accept(batch) {
+                            if reorder_tx.send(r).await.is_err() {
+                                return;
+                            }
+                        }
+                    }
+                });
+
+                if let Err(e) = dispatcher_handle.await {
+                    error!("{} - Dispatcher task failed: {:?}", config.info_log_name(), e);
+                }
+                if let Err(e) = reorder_handle.await {
+                    error!("{} - Reorder task failed: {:?}", config.info_log_name(), e);
+                }
+
+                info!(
+                    "{} - {} - Finished parallel indexing historic events",
+                    config.info_log_name(),
+                    IndexingEventProgressStatus::completed_log()
+                );
+
+                if config.live_indexing() && !force_no_live_indexing {
+                    let registry = config.registry();
+                    let live_from = snapshot_to_block + U64::from(1);
+                    let live_filter =
+                        current_filter.clone().set_from_block(live_from).set_to_block(live_from);
+
+                    live_indexing_stream(
+                        config.timestamps(),
+                        config.network_contract().block_clock.clone(),
+                        config.network_contract().cached_provider.clone(),
+                        &tx,
+                        snapshot_to_block,
+                        &config.topic_id(),
+                        &config.indexing_distance_from_head(),
+                        live_filter,
+                        &config.info_log_name(),
+                        &config.network_contract().network,
+                        config.network_contract().disable_logs_bloom_checks,
+                        original_max_limit,
+                        config.cancel_token().clone(),
+                        reorg_coordinator,
+                        config.postgres(),
+                        config.clickhouse(),
+                        config.streams_clients(),
+                        &registry,
+                    )
+                    .await;
+                }
+
+                return;
+            } else {
+                info!(
+                    "{} - Range too small ({} blocks) for parallel fetching, using sequential",
+                    config.info_log_name(),
+                    total_blocks
+                );
+            }
+        }
+
         #[allow(clippy::unnecessary_unwrap)]
         if max_block_range_limitation.is_some() {
             current_filter = current_filter.set_to_block(calculate_process_historic_log_to_block(
@@ -418,6 +591,503 @@ async fn fetch_historic_logs_stream<P: ChainProvider>(
     }
 
     None
+}
+
+/// Cap per-worker results to prevent unbounded memory growth.
+const MAX_WORKER_RESULTS: usize = 1000;
+
+/// Minimum total blocks to enable the parallel path. Below this we fall back
+/// to the sequential implementation — the overhead of workers/reorder buffer
+/// is not worth it for small ranges.
+const PARALLEL_MIN_BLOCKS: u64 = 1000;
+
+/// Minimum per-worker chunk size. Ensures each worker has meaningful work to
+/// do rather than thrashing on single blocks.
+const PARALLEL_MIN_CHUNK: u64 = 1000;
+
+/// Maximum fetch_concurrency regardless of user config. Guards against
+/// accidentally spawning hundreds of workers and overloading the RPC.
+const PARALLEL_MAX_CONCURRENCY: usize = 32;
+
+#[derive(Debug, PartialEq, Eq)]
+struct ParallelFetchParams {
+    chunk_size: u64,
+    effective_concurrency: usize,
+}
+
+fn plan_parallel_fetch(total_blocks: u64, concurrency: usize) -> ParallelFetchParams {
+    let capped = concurrency.clamp(1, PARALLEL_MAX_CONCURRENCY);
+    // Each worker gets at least PARALLEL_MIN_CHUNK blocks; above that we
+    // divide the range evenly across the requested number of workers.
+    let chunk_size = std::cmp::max(PARALLEL_MIN_CHUNK, total_blocks / capped as u64);
+    // Never spawn more workers than there are MIN_CHUNK-sized pieces. For a
+    // 2500-block range with concurrency=10 this yields 2 workers, not 10.
+    let effective_concurrency =
+        std::cmp::min(capped, std::cmp::max(1, (total_blocks / PARALLEL_MIN_CHUNK) as usize));
+    ParallelFetchParams { chunk_size, effective_concurrency }
+}
+
+struct SequencedFetchBatch {
+    sequence_id: u64,
+    results: Vec<Result<FetchLogsResult, Box<dyn Error + Send>>>,
+    is_final: bool,
+}
+
+/// In-order delivery buffer for parallel-worker batches.
+///
+/// Workers may complete out of order but consumers need strict block-order.
+/// This buffer holds back-of-queue batches until the in-order prefix is
+/// known, then emits the next contiguous run. Partial batches (is_final=false)
+/// are forwarded as soon as their sequence_id is current but do NOT advance
+/// the cursor — the cursor only moves when the final batch for that id arrives.
+///
+/// Worst-case memory: if the worker for `next_expected` stalls indefinitely
+/// (without panicking — WorkerDropGuard handles the panic case by forcibly
+/// sending a final error batch), completed later workers pile up here with
+/// one `PendingSlot` per sequence_id. In practice the pipeline's cancel_token
+/// or the worker's own is_running()/cancel check bounds the stall; the
+/// bound is NOT the channel capacity (the reorder task drains it eagerly).
+struct ReorderBuffer {
+    next_expected: u64,
+    pending: BTreeMap<u64, PendingSlot>,
+}
+
+struct PendingSlot {
+    batches: Vec<SequencedFetchBatch>,
+    finalized: bool,
+}
+
+impl ReorderBuffer {
+    fn new() -> Self {
+        Self { next_expected: 0, pending: BTreeMap::new() }
+    }
+
+    #[cfg(test)]
+    fn next_expected(&self) -> u64 {
+        self.next_expected
+    }
+
+    #[cfg(test)]
+    fn pending_sequence_ids(&self) -> Vec<u64> {
+        self.pending.keys().copied().collect()
+    }
+
+    /// Feed a batch into the buffer. Returns the list of results that are now
+    /// ready to be forwarded downstream, in strict block order.
+    fn accept(
+        &mut self,
+        batch: SequencedFetchBatch,
+    ) -> Vec<Result<FetchLogsResult, Box<dyn Error + Send>>> {
+        let mut out = Vec::new();
+        let sid = batch.sequence_id;
+        let is_final = batch.is_final;
+
+        if sid == self.next_expected {
+            out.extend(batch.results);
+
+            if is_final {
+                self.next_expected = self.next_expected.saturating_add(1);
+                while let Some(slot) = self.pending.remove(&self.next_expected) {
+                    for b in slot.batches {
+                        out.extend(b.results);
+                    }
+                    if slot.finalized {
+                        self.next_expected = self.next_expected.saturating_add(1);
+                    } else {
+                        break;
+                    }
+                }
+            }
+        } else {
+            let slot = self
+                .pending
+                .entry(sid)
+                .or_insert_with(|| PendingSlot { batches: Vec::new(), finalized: false });
+            if is_final {
+                slot.finalized = true;
+            }
+            slot.batches.push(batch);
+        }
+
+        out
+    }
+}
+
+struct WorkerState {
+    sequence_id: u64,
+    filter: RindexerEventFilter,
+    max_block_range_limitation: Option<U64>,
+    original_max_limit: Option<U64>,
+}
+
+/// Drop guard ensuring the reorder buffer always receives a message for every
+/// sequence_id, even if the worker panics. Without this, a panicked worker
+/// would leave the reorder buffer waiting forever, deadlocking the pipeline.
+///
+/// On failure to send (channel full/closed), cancels the pipeline via
+/// `cancel_token` to prevent silent data gaps.
+struct WorkerDropGuard {
+    sequence_id: u64,
+    tx: mpsc::Sender<SequencedFetchBatch>,
+    cancel_token: CancellationToken,
+    active_workers: Arc<AtomicUsize>,
+    worker_done_notify: Arc<tokio::sync::Notify>,
+    sent: bool,
+}
+
+impl Drop for WorkerDropGuard {
+    fn drop(&mut self) {
+        if !self.sent {
+            let error_batch = SequencedFetchBatch {
+                sequence_id: self.sequence_id,
+                results: vec![Err(Box::new(std::io::Error::other(
+                    "worker panicked or was cancelled without sending results",
+                )) as Box<dyn Error + Send>)],
+                is_final: true,
+            };
+            if self.tx.try_send(error_batch).is_err() {
+                error!(
+                    "WorkerDropGuard: failed to send panic error for sequence {}. \
+                     Cancelling pipeline to prevent data gaps.",
+                    self.sequence_id
+                );
+                self.cancel_token.cancel();
+            }
+        }
+        self.active_workers.fetch_sub(1, Ordering::Release);
+        self.worker_done_notify.notify_one();
+    }
+}
+
+async fn parallel_worker(
+    config: Arc<EventProcessingConfig>,
+    mut state: WorkerState,
+    tx: mpsc::Sender<SequencedFetchBatch>,
+    cancel_token: CancellationToken,
+    controller: Arc<AdaptiveConcurrency>,
+    active_workers: Arc<AtomicUsize>,
+    worker_done_notify: Arc<tokio::sync::Notify>,
+) {
+    let mut guard = WorkerDropGuard {
+        sequence_id: state.sequence_id,
+        tx: tx.clone(),
+        cancel_token: cancel_token.clone(),
+        active_workers: Arc::clone(&active_workers),
+        worker_done_notify: Arc::clone(&worker_done_notify),
+        sent: false,
+    };
+
+    let sub_range_end = state.filter.to_block();
+    let mut current_filter = state.filter.clone();
+    let mut results: Vec<Result<FetchLogsResult, Box<dyn Error + Send>>> = Vec::new();
+
+    // Hoist per-worker constants out of the fetch loop — each one costs
+    // heap allocations or Arc refcount bumps on every iteration.
+    let timestamps = config.timestamps();
+    let block_clock = config.network_contract().block_clock.clone();
+    let cached_provider = Arc::clone(&config.network_contract().cached_provider);
+    let info_log_name = config.info_log_name();
+
+    // Bail out if the same sub-range fails this many times in a row. Prevents
+    // a stuck single/tiny range from holding the reorder buffer open forever
+    // when the provider keeps returning an unclassified error that
+    // `halved_block_number` can't shrink any further (minimum range is 2).
+    const MAX_STUCK_ITERATIONS: usize = 10;
+    let mut stuck_iterations: usize = 0;
+    let mut last_range: Option<(U64, U64)> = None;
+
+    while current_filter.from_block() <= sub_range_end {
+        if !is_running() || cancel_token.is_cancelled() {
+            break;
+        }
+
+        controller.wait_for_backoff().await;
+
+        let (maybe_result, next_state, error_kind) = fetch_logs_once(
+            timestamps,
+            &block_clock,
+            cached_provider.as_ref(),
+            current_filter.clone(),
+            state.max_block_range_limitation,
+            sub_range_end,
+            &info_log_name,
+        )
+        .await;
+
+        match maybe_result {
+            Some(fetch_result) => {
+                controller.record_success();
+                results.push(Ok(fetch_result));
+
+                if results.len() >= MAX_WORKER_RESULTS
+                    && tx
+                        .send(SequencedFetchBatch {
+                            sequence_id: state.sequence_id,
+                            results: std::mem::take(&mut results),
+                            is_final: false,
+                        })
+                        .await
+                        .is_err()
+                {
+                    // Downstream closed — no point continuing.
+                    break;
+                }
+            }
+            None => match error_kind {
+                Some(FetchErrorKind::RateLimit) => controller.record_rate_limit(),
+                Some(FetchErrorKind::Other) => controller.record_error(),
+                None => {}
+            },
+        }
+
+        match next_state {
+            Some(next) => {
+                let new_range = (next.next.from_block(), next.next.to_block());
+                if last_range == Some(new_range) && error_kind.is_some() {
+                    stuck_iterations += 1;
+                    if stuck_iterations >= MAX_STUCK_ITERATIONS {
+                        error!(
+                            "{} - worker for sid={} stuck on range {}-{} after {} retries; \
+                             failing this sub-range so downstream can advance",
+                            info_log_name,
+                            state.sequence_id,
+                            new_range.0,
+                            new_range.1,
+                            stuck_iterations
+                        );
+                        results.push(Err(Box::new(std::io::Error::other(format!(
+                            "fetch_logs: stuck on range {}-{} after {} retries",
+                            new_range.0, new_range.1, stuck_iterations
+                        ))) as Box<dyn Error + Send>));
+                        break;
+                    }
+                } else {
+                    stuck_iterations = 0;
+                    last_range = Some(new_range);
+                }
+                current_filter = next.next;
+                state.max_block_range_limitation = if random_bool(0.10) {
+                    state.original_max_limit
+                } else {
+                    next.max_block_range_limitation
+                };
+            }
+            None => break,
+        }
+    }
+
+    // Send final batch (may be empty, but must carry is_final=true)
+    let _ = tx
+        .send(SequencedFetchBatch { sequence_id: state.sequence_id, results, is_final: true })
+        .await;
+    guard.sent = true;
+    // Counter release + notify happen in WorkerDropGuard::drop when `guard`
+    // goes out of scope here, keeping the cleanup path single-sourced.
+}
+
+/// Classification of a recoverable fetch error. Rate-limit errors warrant
+/// the aggressive -50% scale-down + backoff in `record_rate_limit`; other
+/// errors only warrant the gentler -10% in `record_error`. Raw HTTP 429s are
+/// intercepted at the RPC layer (`layer_extensions.rs`), but provider-specific
+/// throttle phrasings ("too many requests", "quota exceeded", etc.) can reach
+/// the worker as generic errors — this is the safety net for those.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FetchErrorKind {
+    RateLimit,
+    Other,
+}
+
+fn classify_fetch_error(err: &ProviderError) -> FetchErrorKind {
+    let s = err.to_string().to_lowercase();
+    if s.contains("429")
+        || s.contains("rate limit")
+        || s.contains("rate-limit")
+        || s.contains("too many requests")
+        || s.contains("quota")
+        || s.contains("throttle")
+    {
+        FetchErrorKind::RateLimit
+    } else {
+        FetchErrorKind::Other
+    }
+}
+
+/// Pure fetch: get_logs + retry logic. No channel interaction.
+/// Returns a three-tuple: (result, next_state, error_kind). `error_kind` is
+/// `Some` iff this call hit a recoverable error, so callers can feed it to
+/// the adaptive concurrency controller.
+#[allow(clippy::too_many_arguments)]
+async fn fetch_logs_once<P: ChainProvider + ?Sized>(
+    timestamps: bool,
+    block_clock: &BlockClock,
+    cached_provider: &P,
+    current_filter: RindexerEventFilter,
+    max_block_range_limitation: Option<U64>,
+    snapshot_to_block: U64,
+    info_log_name: &str,
+) -> (Option<FetchLogsResult>, Option<ProcessHistoricLogsStreamResult>, Option<FetchErrorKind>) {
+    let from_block = current_filter.from_block();
+    let to_block = current_filter.to_block();
+
+    debug!(
+        "{} - {} - Process historic events - blocks: {} - {}",
+        info_log_name,
+        IndexingEventProgressStatus::syncing_log(),
+        from_block,
+        to_block
+    );
+
+    if from_block > to_block {
+        warn!(
+            "{} - {} - from_block {:?} > to_block {:?}",
+            info_log_name,
+            IndexingEventProgressStatus::syncing_log(),
+            from_block,
+            to_block
+        );
+
+        return (
+            None,
+            Some(ProcessHistoricLogsStreamResult {
+                next: current_filter.set_from_block(to_block).set_to_block(to_block + U64::from(1)),
+                max_block_range_limitation,
+            }),
+            None,
+        );
+    }
+
+    match cached_provider.get_logs(&current_filter).await {
+        Ok(logs) => {
+            let logs_empty = logs.is_empty();
+            let last_log = logs.last().cloned();
+
+            if !logs_empty {
+                info!(
+                    "{} - {} - Fetched {} logs between: {} - {}",
+                    info_log_name,
+                    IndexingEventProgressStatus::syncing_log(),
+                    logs.len(),
+                    from_block,
+                    to_block
+                );
+            }
+
+            let result = if timestamps {
+                if let Ok(logs) = block_clock.attach_log_timestamps(logs).await {
+                    Some(FetchLogsResult { logs, from_block, to_block, reorg: None })
+                } else {
+                    return (
+                        None,
+                        Some(ProcessHistoricLogsStreamResult {
+                            next: current_filter
+                                .set_from_block(from_block)
+                                .set_to_block(halved_block_number(to_block, from_block)),
+                            max_block_range_limitation,
+                        }),
+                        Some(FetchErrorKind::Other),
+                    );
+                }
+            } else {
+                Some(FetchLogsResult { logs, from_block, to_block, reorg: None })
+            };
+
+            if logs_empty {
+                let next_from_block = to_block + U64::from(1);
+                return if next_from_block > snapshot_to_block {
+                    (result, None, None)
+                } else {
+                    let new_to_block = calculate_process_historic_log_to_block(
+                        &next_from_block,
+                        &snapshot_to_block,
+                        &max_block_range_limitation,
+                    );
+                    (
+                        result,
+                        Some(ProcessHistoricLogsStreamResult {
+                            next: current_filter
+                                .set_from_block(next_from_block)
+                                .set_to_block(new_to_block),
+                            max_block_range_limitation,
+                        }),
+                        None,
+                    )
+                };
+            }
+
+            if let Some(last_log) = last_log {
+                let next_from_block = U64::from(
+                    last_log.block_number.expect("block number should always be present in a log")
+                        + 1,
+                );
+                return if next_from_block > snapshot_to_block {
+                    (result, None, None)
+                } else {
+                    let new_to_block = calculate_process_historic_log_to_block(
+                        &next_from_block,
+                        &snapshot_to_block,
+                        &max_block_range_limitation,
+                    );
+                    (
+                        result,
+                        Some(ProcessHistoricLogsStreamResult {
+                            next: current_filter
+                                .set_from_block(next_from_block)
+                                .set_to_block(new_to_block),
+                            max_block_range_limitation,
+                        }),
+                        None,
+                    )
+                };
+            }
+        }
+        Err(err) => {
+            let kind = classify_fetch_error(&err);
+
+            if let Some(retry_result) = retry_with_block_range(
+                info_log_name,
+                &err,
+                from_block,
+                to_block,
+                max_block_range_limitation,
+            )
+            .await
+            {
+                return (
+                    None,
+                    Some(ProcessHistoricLogsStreamResult {
+                        next: current_filter
+                            .set_from_block(U64::from(retry_result.from))
+                            .set_to_block(U64::from(retry_result.to)),
+                        max_block_range_limitation: retry_result.max_block_range,
+                    }),
+                    Some(kind),
+                );
+            }
+
+            let halved_to_block = halved_block_number(to_block, from_block);
+            error!(
+                "{} - {} - Unexpected error fetching logs in range {} - {}. Retry fetching {} - {}: {:?}",
+                info_log_name,
+                IndexingEventProgressStatus::syncing_log(),
+                from_block,
+                to_block,
+                from_block,
+                halved_to_block,
+                err
+            );
+
+            return (
+                None,
+                Some(ProcessHistoricLogsStreamResult {
+                    next: current_filter.set_from_block(from_block).set_to_block(halved_to_block),
+                    max_block_range_limitation,
+                }),
+                Some(kind),
+            );
+        }
+    }
+
+    (None, None, None)
 }
 
 /// Handles live indexing mode, continuously checking for new blocks, ensuring they are
@@ -1585,5 +2255,413 @@ mod tests {
         let result =
             retry_with_block_range("test", &error, U64::from(100), U64::from(100), None).await;
         assert!(result.is_none());
+    }
+
+    // --- classify_fetch_error tests ---
+
+    #[test]
+    fn classify_rate_limit_signals() {
+        for msg in [
+            "HTTP 429 Too Many Requests",
+            "rate limit exceeded",
+            "request was rate-limited",
+            "Too Many Requests",
+            "monthly quota exceeded",
+            "request throttled by upstream",
+        ] {
+            let err = ProviderError::CustomError(msg.to_string());
+            assert_eq!(
+                classify_fetch_error(&err),
+                FetchErrorKind::RateLimit,
+                "expected RateLimit for message: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_non_rate_limit_is_other() {
+        for msg in [
+            "block range is too wide",
+            "response is too big",
+            "error decoding response body",
+            "connection reset",
+        ] {
+            let err = ProviderError::CustomError(msg.to_string());
+            assert_eq!(
+                classify_fetch_error(&err),
+                FetchErrorKind::Other,
+                "expected Other for message: {msg}"
+            );
+        }
+    }
+
+    mod parallel {
+        use super::*;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use tokio_util::sync::CancellationToken;
+
+        #[test]
+        fn plan_small_range_below_threshold_is_not_reached_but_returns_one_worker() {
+            // Small ranges never reach plan_parallel_fetch (the caller filters them
+            // via PARALLEL_MIN_BLOCKS), but plan must still produce a sane result
+            // if called directly.
+            let p = plan_parallel_fetch(500, 4);
+            assert_eq!(p.chunk_size, 1000, "chunk_size floored at PARALLEL_MIN_CHUNK");
+            assert_eq!(p.effective_concurrency, 1, "never spawn 0 workers");
+        }
+
+        #[test]
+        fn plan_exact_threshold_yields_single_worker() {
+            // 1000 blocks / 1000-block chunks = 1 worker regardless of requested N.
+            let p = plan_parallel_fetch(1000, 4);
+            assert_eq!(p.chunk_size, 1000);
+            assert_eq!(p.effective_concurrency, 1);
+        }
+
+        #[test]
+        fn plan_evenly_divisible_range_saturates_all_workers() {
+            // 10000 blocks / 4 workers = 2500 per worker.
+            let p = plan_parallel_fetch(10_000, 4);
+            assert_eq!(p.chunk_size, 2500);
+            assert_eq!(p.effective_concurrency, 4);
+        }
+
+        #[test]
+        fn plan_concurrency_capped_at_max() {
+            // Requesting 100 workers for a 1M-block range should cap at 32.
+            let p = plan_parallel_fetch(1_000_000, 100);
+            assert_eq!(p.effective_concurrency, 32, "capped to PARALLEL_MAX_CONCURRENCY");
+            assert_eq!(p.chunk_size, 31_250);
+        }
+
+        #[test]
+        fn plan_concurrency_limited_by_range_size() {
+            // 3500-block range with requested 10 workers: each worker needs ≥1000
+            // blocks, so we can only use 3.
+            let p = plan_parallel_fetch(3_500, 10);
+            assert_eq!(p.chunk_size, 1000, "floored at min chunk");
+            assert_eq!(p.effective_concurrency, 3, "floor(3500/1000)=3");
+        }
+
+        #[test]
+        fn plan_zero_concurrency_clamps_to_one() {
+            let p = plan_parallel_fetch(10_000, 0);
+            assert_eq!(p.effective_concurrency, 1);
+            assert_eq!(p.chunk_size, 10_000);
+        }
+
+        #[test]
+        fn plan_huge_range_no_overflow() {
+            // Near-u64::MAX range must not overflow the chunk-size calc.
+            let p = plan_parallel_fetch(u64::MAX / 2, 32);
+            assert!(p.chunk_size > 0);
+            assert_eq!(p.effective_concurrency, 32);
+        }
+
+        fn batch(sid: u64, blocks: &[u64], is_final: bool) -> SequencedFetchBatch {
+            let results = blocks
+                .iter()
+                .map(|&b| {
+                    Ok(FetchLogsResult {
+                        logs: vec![],
+                        from_block: U64::from(b),
+                        to_block: U64::from(b),
+                        reorg: None,
+                    })
+                })
+                .collect();
+            SequencedFetchBatch { sequence_id: sid, results, is_final }
+        }
+
+        fn drained_from_blocks(
+            emitted: Vec<Result<FetchLogsResult, Box<dyn Error + Send>>>,
+        ) -> Vec<u64> {
+            emitted
+                .into_iter()
+                .map(|r| r.expect("test batch had no errors").from_block.to::<u64>())
+                .collect()
+        }
+
+        #[test]
+        fn reorder_in_order_finals_emit_immediately() {
+            let mut buf = ReorderBuffer::new();
+            let out0 = buf.accept(batch(0, &[0], true));
+            let out1 = buf.accept(batch(1, &[1], true));
+            let out2 = buf.accept(batch(2, &[2], true));
+
+            assert_eq!(drained_from_blocks(out0), vec![0]);
+            assert_eq!(drained_from_blocks(out1), vec![1]);
+            assert_eq!(drained_from_blocks(out2), vec![2]);
+            assert_eq!(buf.next_expected(), 3);
+            assert!(buf.pending_sequence_ids().is_empty());
+        }
+
+        #[test]
+        fn reorder_out_of_order_buffers_until_gap_closes() {
+            let mut buf = ReorderBuffer::new();
+
+            // Worker 2 finishes first — buffered.
+            let out_a = buf.accept(batch(2, &[20], true));
+            assert!(out_a.is_empty(), "sid 2 must wait while 0 and 1 are missing");
+            assert_eq!(buf.pending_sequence_ids(), vec![2]);
+
+            // Worker 0 finishes next — only 0 is emitted (1 is still missing).
+            let out_b = buf.accept(batch(0, &[0], true));
+            assert_eq!(drained_from_blocks(out_b), vec![0]);
+            assert_eq!(buf.next_expected(), 1);
+
+            // Worker 1 finishes — emits 1, then drains buffered 2 in one shot.
+            let out_c = buf.accept(batch(1, &[10], true));
+            assert_eq!(drained_from_blocks(out_c), vec![10, 20], "ordering preserved after drain");
+            assert_eq!(buf.next_expected(), 3);
+        }
+
+        #[test]
+        fn reorder_partial_batches_forwarded_but_do_not_advance_cursor() {
+            let mut buf = ReorderBuffer::new();
+
+            // Partial batch for sid 0 — forwarded but cursor stays at 0.
+            let out_p1 = buf.accept(batch(0, &[0, 1], false));
+            assert_eq!(drained_from_blocks(out_p1), vec![0, 1]);
+            assert_eq!(buf.next_expected(), 0, "partial must NOT advance cursor");
+
+            // Second partial for same sid — also forwarded.
+            let out_p2 = buf.accept(batch(0, &[2], false));
+            assert_eq!(drained_from_blocks(out_p2), vec![2]);
+            assert_eq!(buf.next_expected(), 0);
+
+            // Final batch for sid 0 — flushes and advances cursor.
+            let out_f = buf.accept(batch(0, &[3], true));
+            assert_eq!(drained_from_blocks(out_f), vec![3]);
+            assert_eq!(buf.next_expected(), 1);
+        }
+
+        #[test]
+        fn reorder_partial_then_final_for_buffered_sid() {
+            let mut buf = ReorderBuffer::new();
+
+            // Buffered partial then final for sid 1 while waiting on sid 0.
+            buf.accept(batch(1, &[10], false));
+            buf.accept(batch(1, &[11], true));
+            assert_eq!(buf.pending_sequence_ids(), vec![1]);
+
+            // sid 0 arrives — should flush 0 then both chunks of 1 in order.
+            let out = buf.accept(batch(0, &[0], true));
+            assert_eq!(
+                drained_from_blocks(out),
+                vec![0, 10, 11],
+                "buffered partial + final of sid 1 must flush in original arrival order"
+            );
+            assert_eq!(buf.next_expected(), 2);
+        }
+
+        #[test]
+        fn reorder_many_out_of_order_preserves_block_order() {
+            let mut buf = ReorderBuffer::new();
+            let mut emitted: Vec<u64> = Vec::new();
+
+            // Arrive in reverse sequence order: 4, 3, 2, 1, 0 — each with one block.
+            for sid in [4u64, 3, 2, 1, 0] {
+                let out = buf.accept(batch(sid, &[sid * 10], true));
+                emitted.extend(drained_from_blocks(out));
+            }
+
+            assert_eq!(emitted, vec![0, 10, 20, 30, 40]);
+            assert_eq!(buf.next_expected(), 5);
+        }
+
+        #[test]
+        fn reorder_empty_final_batch_still_advances() {
+            let mut buf = ReorderBuffer::new();
+            let out = buf.accept(batch(0, &[], true));
+            assert!(out.is_empty());
+            assert_eq!(buf.next_expected(), 1, "empty final batch still advances cursor");
+        }
+
+        #[tokio::test]
+        async fn drop_guard_unsent_on_panic_sends_error_and_decrements_counter() {
+            let (tx, mut rx) = mpsc::channel::<SequencedFetchBatch>(4);
+            let cancel = CancellationToken::new();
+            let active = Arc::new(AtomicUsize::new(1));
+            let notify = Arc::new(tokio::sync::Notify::new());
+
+            {
+                let _guard = WorkerDropGuard {
+                    sequence_id: 7,
+                    tx: tx.clone(),
+                    cancel_token: cancel.clone(),
+                    active_workers: Arc::clone(&active),
+                    worker_done_notify: Arc::clone(&notify),
+                    sent: false,
+                };
+                // guard dropped at scope end without sent=true — simulates panic.
+            }
+
+            let batch = rx.try_recv().expect("panic batch must be sent");
+            assert_eq!(batch.sequence_id, 7);
+            assert!(batch.is_final, "panic batch must be final to unblock reorder buffer");
+            assert_eq!(batch.results.len(), 1);
+            assert!(batch.results[0].is_err(), "panic batch must carry an error");
+
+            assert_eq!(active.load(Ordering::Acquire), 0, "counter must be decremented");
+            assert!(!cancel.is_cancelled(), "cancel only fires when try_send fails");
+        }
+
+        #[tokio::test]
+        async fn drop_guard_sent_true_skips_error_batch() {
+            let (tx, mut rx) = mpsc::channel::<SequencedFetchBatch>(4);
+            let cancel = CancellationToken::new();
+            let active = Arc::new(AtomicUsize::new(1));
+            let notify = Arc::new(tokio::sync::Notify::new());
+
+            {
+                let mut guard = WorkerDropGuard {
+                    sequence_id: 3,
+                    tx: tx.clone(),
+                    cancel_token: cancel.clone(),
+                    active_workers: Arc::clone(&active),
+                    worker_done_notify: Arc::clone(&notify),
+                    sent: false,
+                };
+                guard.sent = true; // normal exit path
+            }
+
+            assert!(rx.try_recv().is_err(), "no extra batch when worker exited cleanly");
+            assert_eq!(
+                active.load(Ordering::Acquire),
+                0,
+                "counter release is now single-sourced in Drop — always decrements"
+            );
+        }
+
+        #[tokio::test]
+        async fn drop_guard_closed_channel_cancels_pipeline() {
+            let (tx, rx) = mpsc::channel::<SequencedFetchBatch>(1);
+            drop(rx); // downstream closed before the worker can report.
+
+            let cancel = CancellationToken::new();
+            let active = Arc::new(AtomicUsize::new(1));
+            let notify = Arc::new(tokio::sync::Notify::new());
+
+            {
+                let _guard = WorkerDropGuard {
+                    sequence_id: 42,
+                    tx: tx.clone(),
+                    cancel_token: cancel.clone(),
+                    active_workers: Arc::clone(&active),
+                    worker_done_notify: Arc::clone(&notify),
+                    sent: false,
+                };
+            }
+
+            assert!(
+                cancel.is_cancelled(),
+                "guard must cancel pipeline when the error batch cannot be delivered"
+            );
+        }
+
+        #[tokio::test]
+        async fn drop_guard_decrements_counter_even_when_channel_is_full() {
+            // If the reorder buffer is slow and the channel is saturated, try_send
+            // fails, cancel fires, but the counter MUST still be released to
+            // unblock the dispatcher.
+            let (tx, _rx) = mpsc::channel::<SequencedFetchBatch>(1);
+            // Fill the buffer so try_send fails.
+            tx.try_send(SequencedFetchBatch { sequence_id: 0, results: vec![], is_final: false })
+                .expect("first send fits");
+
+            let cancel = CancellationToken::new();
+            let active = Arc::new(AtomicUsize::new(1));
+            let notify = Arc::new(tokio::sync::Notify::new());
+
+            {
+                let _guard = WorkerDropGuard {
+                    sequence_id: 1,
+                    tx: tx.clone(),
+                    cancel_token: cancel.clone(),
+                    active_workers: Arc::clone(&active),
+                    worker_done_notify: Arc::clone(&notify),
+                    sent: false,
+                };
+            }
+
+            assert!(cancel.is_cancelled());
+            assert_eq!(
+                active.load(Ordering::Acquire),
+                0,
+                "counter must be released even on channel-full path or dispatcher deadlocks"
+            );
+        }
+
+        #[tokio::test]
+        async fn fetch_logs_once_empty_range_advances() {
+            let mock = MockChainProvider::new(1);
+            let filter = RindexerEventFilter::empty_for_test()
+                .set_from_block(U64::from(100))
+                .set_to_block(U64::from(200));
+
+            let bc = BlockClock::new(None, None, Arc::new(MockChainProvider::new(1)));
+            let (result, next, kind) =
+                fetch_logs_once(false, &bc, &mock, filter, None, U64::from(500), "test").await;
+
+            let r =
+                result.expect("empty logs still return a result so sink can advance checkpoint");
+            assert_eq!(r.from_block, U64::from(100));
+            assert_eq!(r.to_block, U64::from(200));
+            assert!(r.logs.is_empty());
+            let next = next.expect("range not exhausted");
+            assert_eq!(next.next.from_block(), U64::from(201));
+            assert!(kind.is_none(), "success path reports no error kind");
+        }
+
+        #[tokio::test]
+        async fn fetch_logs_once_past_snapshot_returns_no_next() {
+            let mock = MockChainProvider::new(1);
+            let filter = RindexerEventFilter::empty_for_test()
+                .set_from_block(U64::from(500))
+                .set_to_block(U64::from(500));
+
+            let bc = BlockClock::new(None, None, Arc::new(MockChainProvider::new(1)));
+            let (_result, next, _kind) =
+                fetch_logs_once(false, &bc, &mock, filter, None, U64::from(500), "test").await;
+
+            assert!(next.is_none(), "no further work past snapshot_to_block");
+        }
+
+        #[tokio::test]
+        async fn fetch_logs_once_with_logs_advances_past_last_log() {
+            let logs = vec![make_log_at_block(120), make_log_at_block(180)];
+            let mock = MockChainProvider::new(1).with_logs(logs);
+            let filter = RindexerEventFilter::empty_for_test()
+                .set_from_block(U64::from(100))
+                .set_to_block(U64::from(200));
+
+            let bc = BlockClock::new(None, None, Arc::new(MockChainProvider::new(1)));
+            let (result, next, _kind) =
+                fetch_logs_once(false, &bc, &mock, filter, None, U64::from(500), "test").await;
+
+            let r = result.expect("should return logs");
+            assert_eq!(r.logs.len(), 2);
+            assert!(r.reorg.is_none(), "historical fetch must never emit a reorg");
+            let next = next.expect("more range remaining");
+            assert_eq!(next.next.from_block(), U64::from(181));
+        }
+
+        #[tokio::test]
+        async fn fetch_logs_once_from_gt_to_corrects_instead_of_failing() {
+            let mock = MockChainProvider::new(1);
+            let filter = RindexerEventFilter::empty_for_test()
+                .set_from_block(U64::from(300))
+                .set_to_block(U64::from(200));
+
+            let bc = BlockClock::new(None, None, Arc::new(MockChainProvider::new(1)));
+            let (result, next, _kind) =
+                fetch_logs_once(false, &bc, &mock, filter, None, U64::from(500), "test").await;
+
+            assert!(result.is_none(), "no logs emitted for inverted range");
+            let next = next.expect("self-correction returns a fixed next filter");
+            assert_eq!(next.next.from_block(), U64::from(200));
+        }
     }
 }
