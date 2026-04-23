@@ -971,4 +971,74 @@ mod tests {
         let err = result.expect_err("panicking task should yield a JoinError");
         assert!(err.is_panic(), "expected panic cause, got: {err:?}");
     }
+
+    /// The mid-coalesce reorg flush (2cd5c7de) does two dispatches back-to-back
+    /// on the same `in_flight` queue, then `continue 'outer` to reset the
+    /// coalescing block-range state. This test exercises that exact pattern:
+    /// push the pre-reorg coalesced batch, push the reorg batch, then enter a
+    /// fresh outer iteration that continues pushing on the same queue. No
+    /// task may be lost, duplicated, or surface in the wrong order.
+    #[tokio::test]
+    async fn mid_coalesce_reorg_flush_drains_both_dispatches_and_continues() {
+        // Mirrors `dispatch_batch`'s non-blocking branch: push a task, then
+        // drain whatever's already ready inline. Free helper so each callsite
+        // below reads as one `dispatch(...)` call.
+        async fn dispatch(
+            queue: &mut FuturesUnordered<JoinHandle<()>>,
+            order: Arc<std::sync::Mutex<Vec<u32>>>,
+            tag: u32,
+        ) {
+            queue.push(tokio::spawn(async move {
+                // Yield so the scheduler has a chance to interleave pushes
+                // and drains — this is what makes the drain-path realistic.
+                tokio::task::yield_now().await;
+                order.lock().unwrap().push(tag);
+            }));
+            while let Poll::Ready(Some(joined)) = poll!(queue.next()) {
+                joined.expect("dispatched task should not fail");
+            }
+        }
+
+        let mut in_flight: FuturesUnordered<JoinHandle<()>> = FuturesUnordered::new();
+        let order: Arc<std::sync::Mutex<Vec<u32>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        // ---- Pre-reorg coalesced window: 5 dispatches. ----
+        for tag in 0..5u32 {
+            dispatch(&mut in_flight, Arc::clone(&order), tag).await;
+        }
+
+        // ---- Mid-coalesce reorg: flush the coalesced batch, then the reorg.
+        // Both pushes hit the SAME in_flight queue with the inline drain in
+        // between — exactly what the `continue 'outer` path does. ----
+        dispatch(&mut in_flight, Arc::clone(&order), 100).await; // coalesced flush
+        dispatch(&mut in_flight, Arc::clone(&order), 101).await; // reorg forward
+
+        // ---- `continue 'outer`: a fresh outer iteration starts, reusing
+        // the same in_flight queue but with fresh coalescing state. ----
+        for tag in 200..205u32 {
+            dispatch(&mut in_flight, Arc::clone(&order), tag).await;
+        }
+
+        // Final drain after the outer loop exits.
+        while let Some(joined) = in_flight.next().await {
+            joined.expect("final-drain task should not fail");
+        }
+
+        let completed = order.lock().unwrap().clone();
+        assert_eq!(in_flight.len(), 0, "final drain must empty the queue");
+        assert_eq!(
+            completed.len(),
+            12,
+            "all 5 pre-reorg + 2 reorg-flush + 5 post-reset dispatches must complete, got {completed:?}"
+        );
+
+        // Every dispatched tag must appear exactly once — duplicates would
+        // mean a handle surfaced twice; omissions would mean a handle was
+        // dropped by the drain.
+        let seen: std::collections::BTreeSet<u32> = completed.iter().copied().collect();
+        assert_eq!(seen.len(), completed.len(), "duplicate completions: {completed:?}");
+        for expected in (0..5).chain([100, 101]).chain(200..205) {
+            assert!(seen.contains(&expected), "missing dispatch for tag {expected}: {completed:?}");
+        }
+    }
 }

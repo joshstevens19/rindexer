@@ -278,6 +278,55 @@ contracts:
     std::fs::write(dir.join("rindexer.yaml"), yaml).expect("write yaml");
 }
 
+/// Live-mode variant of `write_manifest` — omits `end_block` so the contract
+/// flips to live indexing once historical sync completes. Used by the
+/// historical→live transition test to exercise the coalescing + FuturesUnordered
+/// drain path across the mode switch.
+fn write_manifest_live(
+    dir: &std::path::Path,
+    indexer_name: &str,
+    rpc_url: &str,
+    contract_address: Address,
+    start_block: u64,
+    fetch_concurrency: usize,
+) {
+    std::fs::create_dir_all(dir.join("abis")).expect("mkdir abis");
+    std::fs::write(dir.join("abis/PingPong.abi.json"), PING_PONG_ABI).expect("write abi");
+
+    let yaml = format!(
+        r#"name: {indexer_name}
+description: "Parallel fetch e2e — live transition"
+repository: "https://example.invalid"
+project_type: no-code
+config:
+  fetch_concurrency: {fetch_concurrency}
+networks:
+  - name: dev
+    chain_id: 31337
+    rpc: {rpc_url}
+storage:
+  postgres:
+    enabled: true
+native_transfers: false
+contracts:
+  - name: PingPong
+    details:
+      - network: dev
+        address: "{contract_address:#x}"
+        start_block: "{start_block}"
+    abi: ./abis/PingPong.abi.json
+    include_events:
+      - Ping
+"#,
+        indexer_name = indexer_name,
+        rpc_url = rpc_url,
+        contract_address = contract_address,
+        start_block = start_block,
+        fetch_concurrency = fetch_concurrency,
+    );
+    std::fs::write(dir.join("rindexer.yaml"), yaml).expect("write yaml");
+}
+
 /// Rows returned from the Ping event table, normalized to a tuple of
 /// (id, block_number, tx_hash, log_index) for cross-run comparison. We include
 /// enough columns that any ordering / deduplication / metadata-attachment
@@ -481,6 +530,14 @@ async fn parallel_fetch_large_range_eight_workers() {
     let end_block = get_block_number(&env.http, &env.rpc_url).await;
     mine_blocks(&env.http, &env.rpc_url, 10).await;
 
+    // Sanity: the range must be wide enough that floor(total/1000) >= 5, else
+    // the "out-of-order completion" scenario this test exercises can't arise.
+    assert!(
+        end_block - deploy_block >= 5000,
+        "setup produced only {} blocks, 8-worker run won't engage >=5 concurrent workers",
+        end_block - deploy_block
+    );
+
     let start_block = deploy_block + 1;
     let indexer_name = "ParallelFetchLarge8";
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -518,5 +575,188 @@ async fn parallel_fetch_large_range_eight_workers() {
             id,
             row.tx_hash
         );
+    }
+}
+
+/// Poll the ping table until it holds at least `expected` rows or the timeout
+/// expires. Returns the final row count. Tolerates the early window where
+/// rindexer hasn't yet created the schema/table — treats that as "0 rows".
+async fn wait_for_ping_rows(
+    env: &TestEnv,
+    schema: &str,
+    expected: usize,
+    timeout: Duration,
+) -> usize {
+    let deadline = std::time::Instant::now() + timeout;
+    let table = format!("{}.ping", schema);
+    let sql = format!(
+        "SELECT id::text, block_number::bigint, tx_hash, log_index::text, block_hash, sender \
+         FROM {} ORDER BY block_number ASC, log_index ASC, id ASC",
+        table
+    );
+    let mut last_count = 0usize;
+    loop {
+        let pg = env.pg_client().await;
+        match pg.query(&sql, &[]).await {
+            Ok(rows) => {
+                last_count = rows.len();
+                if last_count >= expected {
+                    return last_count;
+                }
+            }
+            Err(_) => {
+                // Table not yet created — rindexer is still bootstrapping.
+                // Re-poll after a brief wait.
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            panic!("timeout waiting for {} rows in {}.ping — got {}", expected, schema, last_count,);
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+/// Parallel historical backfill followed by sustained live indexing on the
+/// same indexer instance — the only path that exercises the coalescing +
+/// `FuturesUnordered` drain across the historic→live boundary.
+///
+/// The existing `parallel_fetch_*` tests stop at historical; the live-indexing
+/// unit tests never engage parallel historical. This test makes sure the
+/// in-flight drain discipline added by master's #419 and the coalescing loop
+/// from PR #380 stay consistent when the contract transitions from the
+/// parallel-chunked historical path to the single-stream live path.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn parallel_historical_to_live_transition() {
+    let env = TestEnv::new().await;
+
+    let contract = deploy_ping_pong(&env.http, &env.rpc_url, env.deployer).await;
+    let deploy_block = get_block_number(&env.http, &env.rpc_url).await;
+
+    // Historical phase: 50 events spread across >8000 blocks so c=8 fully
+    // engages 8 parallel workers (same sizing as the parity test).
+    let mut expected_historical: Vec<(u64, u64)> = Vec::new();
+    for id in 1u64..=50 {
+        mine_blocks(&env.http, &env.rpc_url, 170).await;
+        let blk = send_ping(&env.http, &env.rpc_url, env.deployer, contract, id).await;
+        expected_historical.push((id, blk));
+    }
+    let historical_tip = get_block_number(&env.http, &env.rpc_url).await;
+    assert!(
+        historical_tip - deploy_block >= 8000,
+        "historical setup produced only {} blocks, c=8 won't fully engage",
+        historical_tip - deploy_block
+    );
+
+    // No `end_block` → live indexing takes over once historical catches up.
+    let indexer_name = "ParallelHistToLive";
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_manifest_live(tmp.path(), indexer_name, &env.rpc_url, contract, deploy_block + 1, 8);
+
+    // Run rindexer and the test driver concurrently via `select!`. The rindexer
+    // future can't be `tokio::spawn`ed (its error type isn't `Send`), and in
+    // live mode it only exits on a real process signal — so once the driver
+    // verifies all rows and triggers `initiate_shutdown`, we let `select!`
+    // drop the rindexer future to cancel its live-indexing loop. The rows
+    // are already durably in Postgres by that point, so cancellation is safe
+    // and leaves nothing to verify elsewhere.
+    let manifest_path = tmp.path().join("rindexer.yaml");
+    let schema = "parallel_hist_to_live_ping_pong";
+    const LIVE_PINGS: u64 = 100;
+
+    let rindexer_fut = rindexer::start_rindexer_no_code(StartNoCodeDetails {
+        manifest_path: &manifest_path,
+        indexing_details: IndexerNoCodeDetails { enabled: true },
+        graphql_details: GraphqlOverrideSettings { enabled: false, override_port: None },
+        watch: false,
+    });
+
+    let env_ref = &env;
+    let expected_historical_len = expected_historical.len();
+    let driver_fut = async move {
+        // Wait for historical sync to surface all historical rows.
+        wait_for_ping_rows(env_ref, schema, expected_historical_len, Duration::from_secs(60)).await;
+
+        // Sustained live load: alternate a ping every block for LIVE_PINGS
+        // blocks so the live stream sees both event-bearing and empty batches
+        // — the mix that drives coalescing during live indexing.
+        let mut expected_live: Vec<(u64, u64)> = Vec::new();
+        for id in
+            (expected_historical_len as u64 + 1)..=(expected_historical_len as u64 + LIVE_PINGS)
+        {
+            let blk =
+                send_ping(&env_ref.http, &env_ref.rpc_url, env_ref.deployer, contract, id).await;
+            expected_live.push((id, blk));
+            mine_blocks(&env_ref.http, &env_ref.rpc_url, 1).await;
+        }
+        // Trailing empty blocks so any stragglers drain before we shut down.
+        mine_blocks(&env_ref.http, &env_ref.rpc_url, 20).await;
+
+        let total_expected = expected_historical_len + expected_live.len();
+        wait_for_ping_rows(env_ref, schema, total_expected, Duration::from_secs(120)).await;
+
+        // Signal rindexer's live-indexing loops to stop; `select!` will then
+        // drop the rindexer future and cancel anything still pending.
+        rindexer::initiate_shutdown().await;
+
+        expected_live
+    };
+
+    let expected_live = tokio::select! {
+        res = rindexer_fut => {
+            panic!("rindexer exited before driver finished: {:?}", res);
+        }
+        live = driver_fut => live,
+    };
+
+    // Final assertions: counts, strict block ordering, no duplicates, every
+    // expected id present at its mined block. Any regression in the drain
+    // path (lost tasks, double-dispatch, reordering) surfaces here.
+    let pg = env.pg_client().await;
+    let rows = query_ping_rows(&pg, schema).await;
+    let total_expected = expected_historical.len() + expected_live.len();
+
+    assert_eq!(
+        rows.len(),
+        total_expected,
+        "expected {} rows total ({} historical + {} live), got {}",
+        total_expected,
+        expected_historical.len(),
+        expected_live.len(),
+        rows.len()
+    );
+
+    // Strict non-decreasing block ordering — the reorder buffer guarantees this
+    // for parallel historical, and live indexing is serial per-stream.
+    let mut last_block: i64 = -1;
+    for r in &rows {
+        assert!(
+            r.block_number >= last_block,
+            "out-of-order block {} after {}",
+            r.block_number,
+            last_block
+        );
+        last_block = r.block_number;
+    }
+
+    // (block_number, log_index) must uniquely identify each row — duplicates
+    // here would mean the drain surfaced the same JoinHandle twice or the
+    // coalescer merged a batch that was already dispatched.
+    let mut seen: std::collections::BTreeSet<(i64, String)> = std::collections::BTreeSet::new();
+    for r in &rows {
+        assert!(
+            seen.insert((r.block_number, r.log_index.clone())),
+            "duplicate row at (block={}, log_index={})",
+            r.block_number,
+            r.log_index
+        );
+    }
+
+    // Every historical and live ping must be indexed at its mined block.
+    for (id, blk) in expected_historical.iter().chain(expected_live.iter()) {
+        let want_id = id.to_string();
+        let want_blk = *blk as i64;
+        rows.iter()
+            .find(|r| r.id == want_id && r.block_number == want_blk)
+            .unwrap_or_else(|| panic!("missing Ping(id={}, block={})", id, blk));
     }
 }

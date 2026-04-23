@@ -788,6 +788,14 @@ async fn parallel_worker(
     let cached_provider = Arc::clone(&config.network_contract().cached_provider);
     let info_log_name = config.info_log_name();
 
+    // Bail out if the same sub-range fails this many times in a row. Prevents
+    // a stuck single/tiny range from holding the reorder buffer open forever
+    // when the provider keeps returning an unclassified error that
+    // `halved_block_number` can't shrink any further (minimum range is 2).
+    const MAX_STUCK_ITERATIONS: usize = 10;
+    let mut stuck_iterations: usize = 0;
+    let mut last_range: Option<(U64, U64)> = None;
+
     while current_filter.from_block() <= sub_range_end {
         if !is_running() || cancel_token.is_cancelled() {
             break;
@@ -795,7 +803,7 @@ async fn parallel_worker(
 
         controller.wait_for_backoff().await;
 
-        let (maybe_result, next_state) = fetch_logs_once(
+        let (maybe_result, next_state, error_kind) = fetch_logs_once(
             timestamps,
             &block_clock,
             cached_provider.as_ref(),
@@ -825,15 +833,38 @@ async fn parallel_worker(
                     break;
                 }
             }
-            None => {
-                if next_state.is_some() {
-                    controller.record_error();
-                }
-            }
+            None => match error_kind {
+                Some(FetchErrorKind::RateLimit) => controller.record_rate_limit(),
+                Some(FetchErrorKind::Other) => controller.record_error(),
+                None => {}
+            },
         }
 
         match next_state {
             Some(next) => {
+                let new_range = (next.next.from_block(), next.next.to_block());
+                if last_range == Some(new_range) && error_kind.is_some() {
+                    stuck_iterations += 1;
+                    if stuck_iterations >= MAX_STUCK_ITERATIONS {
+                        error!(
+                            "{} - worker for sid={} stuck on range {}-{} after {} retries; \
+                             failing this sub-range so downstream can advance",
+                            info_log_name,
+                            state.sequence_id,
+                            new_range.0,
+                            new_range.1,
+                            stuck_iterations
+                        );
+                        results.push(Err(Box::new(std::io::Error::other(format!(
+                            "fetch_logs: stuck on range {}-{} after {} retries",
+                            new_range.0, new_range.1, stuck_iterations
+                        ))) as Box<dyn Error + Send>));
+                        break;
+                    }
+                } else {
+                    stuck_iterations = 0;
+                    last_range = Some(new_range);
+                }
                 current_filter = next.next;
                 state.max_block_range_limitation = if random_bool(0.10) {
                     state.original_max_limit
@@ -854,10 +885,37 @@ async fn parallel_worker(
     // goes out of scope here, keeping the cleanup path single-sourced.
 }
 
+/// Classification of a recoverable fetch error. Rate-limit errors warrant
+/// the aggressive -50% scale-down + backoff in `record_rate_limit`; other
+/// errors only warrant the gentler -10% in `record_error`. Raw HTTP 429s are
+/// intercepted at the RPC layer (`layer_extensions.rs`), but provider-specific
+/// throttle phrasings ("too many requests", "quota exceeded", etc.) can reach
+/// the worker as generic errors — this is the safety net for those.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FetchErrorKind {
+    RateLimit,
+    Other,
+}
+
+fn classify_fetch_error(err: &ProviderError) -> FetchErrorKind {
+    let s = err.to_string().to_lowercase();
+    if s.contains("429")
+        || s.contains("rate limit")
+        || s.contains("rate-limit")
+        || s.contains("too many requests")
+        || s.contains("quota")
+        || s.contains("throttle")
+    {
+        FetchErrorKind::RateLimit
+    } else {
+        FetchErrorKind::Other
+    }
+}
+
 /// Pure fetch: get_logs + retry logic. No channel interaction.
-/// Returns (Some(logs), Some(next_state)) on success with more to fetch,
-/// (Some(logs), None) on success at end, (None, Some(next_state)) on recoverable
-/// error with adjusted range, (None, None) on completion.
+/// Returns a three-tuple: (result, next_state, error_kind). `error_kind` is
+/// `Some` iff this call hit a recoverable error, so callers can feed it to
+/// the adaptive concurrency controller.
 #[allow(clippy::too_many_arguments)]
 async fn fetch_logs_once<P: ChainProvider + ?Sized>(
     timestamps: bool,
@@ -867,7 +925,7 @@ async fn fetch_logs_once<P: ChainProvider + ?Sized>(
     max_block_range_limitation: Option<U64>,
     snapshot_to_block: U64,
     info_log_name: &str,
-) -> (Option<FetchLogsResult>, Option<ProcessHistoricLogsStreamResult>) {
+) -> (Option<FetchLogsResult>, Option<ProcessHistoricLogsStreamResult>, Option<FetchErrorKind>) {
     let from_block = current_filter.from_block();
     let to_block = current_filter.to_block();
 
@@ -894,6 +952,7 @@ async fn fetch_logs_once<P: ChainProvider + ?Sized>(
                 next: current_filter.set_from_block(to_block).set_to_block(to_block + U64::from(1)),
                 max_block_range_limitation,
             }),
+            None,
         );
     }
 
@@ -925,6 +984,7 @@ async fn fetch_logs_once<P: ChainProvider + ?Sized>(
                                 .set_to_block(halved_block_number(to_block, from_block)),
                             max_block_range_limitation,
                         }),
+                        Some(FetchErrorKind::Other),
                     );
                 }
             } else {
@@ -934,7 +994,7 @@ async fn fetch_logs_once<P: ChainProvider + ?Sized>(
             if logs_empty {
                 let next_from_block = to_block + U64::from(1);
                 return if next_from_block > snapshot_to_block {
-                    (result, None)
+                    (result, None, None)
                 } else {
                     let new_to_block = calculate_process_historic_log_to_block(
                         &next_from_block,
@@ -949,6 +1009,7 @@ async fn fetch_logs_once<P: ChainProvider + ?Sized>(
                                 .set_to_block(new_to_block),
                             max_block_range_limitation,
                         }),
+                        None,
                     )
                 };
             }
@@ -959,7 +1020,7 @@ async fn fetch_logs_once<P: ChainProvider + ?Sized>(
                         + 1,
                 );
                 return if next_from_block > snapshot_to_block {
-                    (result, None)
+                    (result, None, None)
                 } else {
                     let new_to_block = calculate_process_historic_log_to_block(
                         &next_from_block,
@@ -974,11 +1035,14 @@ async fn fetch_logs_once<P: ChainProvider + ?Sized>(
                                 .set_to_block(new_to_block),
                             max_block_range_limitation,
                         }),
+                        None,
                     )
                 };
             }
         }
         Err(err) => {
+            let kind = classify_fetch_error(&err);
+
             if let Some(retry_result) = retry_with_block_range(
                 info_log_name,
                 &err,
@@ -996,6 +1060,7 @@ async fn fetch_logs_once<P: ChainProvider + ?Sized>(
                             .set_to_block(U64::from(retry_result.to)),
                         max_block_range_limitation: retry_result.max_block_range,
                     }),
+                    Some(kind),
                 );
             }
 
@@ -1017,11 +1082,12 @@ async fn fetch_logs_once<P: ChainProvider + ?Sized>(
                     next: current_filter.set_from_block(from_block).set_to_block(halved_to_block),
                     max_block_range_limitation,
                 }),
+                Some(kind),
             );
         }
     }
 
-    (None, None)
+    (None, None, None)
 }
 
 /// Handles live indexing mode, continuously checking for new blocks, ensuring they are
@@ -2191,6 +2257,44 @@ mod tests {
         assert!(result.is_none());
     }
 
+    // --- classify_fetch_error tests ---
+
+    #[test]
+    fn classify_rate_limit_signals() {
+        for msg in [
+            "HTTP 429 Too Many Requests",
+            "rate limit exceeded",
+            "request was rate-limited",
+            "Too Many Requests",
+            "monthly quota exceeded",
+            "request throttled by upstream",
+        ] {
+            let err = ProviderError::CustomError(msg.to_string());
+            assert_eq!(
+                classify_fetch_error(&err),
+                FetchErrorKind::RateLimit,
+                "expected RateLimit for message: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_non_rate_limit_is_other() {
+        for msg in [
+            "block range is too wide",
+            "response is too big",
+            "error decoding response body",
+            "connection reset",
+        ] {
+            let err = ProviderError::CustomError(msg.to_string());
+            assert_eq!(
+                classify_fetch_error(&err),
+                FetchErrorKind::Other,
+                "expected Other for message: {msg}"
+            );
+        }
+    }
+
     mod parallel {
         use super::*;
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -2498,7 +2602,7 @@ mod tests {
                 .set_to_block(U64::from(200));
 
             let bc = BlockClock::new(None, None, Arc::new(MockChainProvider::new(1)));
-            let (result, next) =
+            let (result, next, kind) =
                 fetch_logs_once(false, &bc, &mock, filter, None, U64::from(500), "test").await;
 
             let r =
@@ -2508,6 +2612,7 @@ mod tests {
             assert!(r.logs.is_empty());
             let next = next.expect("range not exhausted");
             assert_eq!(next.next.from_block(), U64::from(201));
+            assert!(kind.is_none(), "success path reports no error kind");
         }
 
         #[tokio::test]
@@ -2518,7 +2623,7 @@ mod tests {
                 .set_to_block(U64::from(500));
 
             let bc = BlockClock::new(None, None, Arc::new(MockChainProvider::new(1)));
-            let (_result, next) =
+            let (_result, next, _kind) =
                 fetch_logs_once(false, &bc, &mock, filter, None, U64::from(500), "test").await;
 
             assert!(next.is_none(), "no further work past snapshot_to_block");
@@ -2533,7 +2638,7 @@ mod tests {
                 .set_to_block(U64::from(200));
 
             let bc = BlockClock::new(None, None, Arc::new(MockChainProvider::new(1)));
-            let (result, next) =
+            let (result, next, _kind) =
                 fetch_logs_once(false, &bc, &mock, filter, None, U64::from(500), "test").await;
 
             let r = result.expect("should return logs");
@@ -2551,7 +2656,7 @@ mod tests {
                 .set_to_block(U64::from(200));
 
             let bc = BlockClock::new(None, None, Arc::new(MockChainProvider::new(1)));
-            let (result, next) =
+            let (result, next, _kind) =
                 fetch_logs_once(false, &bc, &mock, filter, None, U64::from(500), "test").await;
 
             assert!(result.is_none(), "no logs emitted for inverted range");
