@@ -105,7 +105,7 @@ reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.8.
 reth-tracing = { git = "https://github.com/paradigmxyz/reth", tag = "v1.8.2", optional = true }
 
 [target.'cfg(not(windows))'.dependencies]
-rdkafka = { version = "0.38.0", features = ["tokio", "cmake-build", "ssl"], optional = true }
+rdkafka = { version = "0.38.0", features = ["tokio", "ssl"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 rdkafka = { version = "0.38.0", features = ["tokio", "cmake-build", "ssl"], optional = true }
