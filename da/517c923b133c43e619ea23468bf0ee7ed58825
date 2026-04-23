@@ -1,0 +1,23 @@
+e2e-tests/src/tests/reorg_e2e.rs
+  22d09adda86e8756 1863,1889,1979,2021
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "da517c923b133c43e619ea23468bf0ee7ed58825",
+  "prompts": {
+    "22d09adda86e8756": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f41382eb-e2e3-4655-bbee-967bce811789",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 4,
+      "total_deletions": 40,
+      "accepted_lines": 132,
+      "overriden_lines": 0
+    }
+  }
+}
