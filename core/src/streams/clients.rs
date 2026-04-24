@@ -246,6 +246,70 @@ impl StreamsClients {
         map.get(network).copied().unwrap_or(0)
     }
 
+    /// Build an empty `StreamsClients` with no publishers configured. Used by
+    /// cross-module tests (e.g. `ReorgCoordinator::handle_reorg`) that need a
+    /// real `StreamsClients` value to wire up but don't need to actually
+    /// publish. Flush paths will panic if the buffer is populated for a
+    /// stream type whose publisher is `None`, so seed only via
+    /// `test_seed_finalized_buffer` in tests that don't also call
+    /// `flush_finalized`.
+    #[cfg(test)]
+    pub(crate) fn empty_for_test() -> Self {
+        Self {
+            sns: None,
+            webhook: None,
+            rabbitmq: None,
+            #[cfg(feature = "kafka")]
+            kafka: None,
+            redis: None,
+            cloudflare_queues: None,
+            finalized_buffers: AsyncMutex::new(HashMap::new()),
+            reorg_safe_distances: StdMutex::new(HashMap::new()),
+        }
+    }
+
+    /// Directly populate the finalized-delivery buffer for a given
+    /// (network, event) pair. Tests only — production code reaches the
+    /// buffer via `stream_with_mode` + `StreamDeliveryMode::Finalized`.
+    #[cfg(test)]
+    pub(crate) async fn test_seed_finalized_buffer(
+        &self,
+        network: &str,
+        event_name: &str,
+        blocks: &[u64],
+        distance: u64,
+    ) {
+        use alloy::primitives::B256;
+        self.register_network_reorg_distance(network.to_string(), distance);
+        let key = BufferKey {
+            stream_type: crate::metrics::streams::stream_type::WEBHOOK,
+            config_index: 0,
+            network: network.to_string(),
+            event_name: event_name.to_string(),
+            event_signature_hash: B256::ZERO,
+        };
+        let mut map = self.finalized_buffers.lock().await;
+        let buf = map.entry(key).or_insert_with(|| FinalizedBuffer::new(distance));
+        for &b in blocks {
+            buf.add(b, vec![serde_json::json!({"block": b})]);
+        }
+    }
+
+    /// Returns the sorted block numbers still present in the buffer for
+    /// `network` across all event types. Tests only.
+    #[cfg(test)]
+    pub(crate) async fn test_buffered_blocks(&self, network: &str) -> Vec<u64> {
+        let map = self.finalized_buffers.lock().await;
+        let mut out = Vec::new();
+        for (key, buf) in map.iter() {
+            if key.network == network {
+                out.extend(buf.buffer.keys().copied());
+            }
+        }
+        out.sort_unstable();
+        out
+    }
+
     /// Redirects the Cloudflare Queues client to a different base URL. Intended
     /// solely for integration tests that mock the Cloudflare REST API with
     /// `mockito` — prefer configuring the real `api_token`/`account_id` in
@@ -1987,5 +2051,187 @@ mod tests {
         buf.add(50, vec![json!({"a": 1})]);
         buf.add(50, vec![json!({"a": 2})]);
         assert_eq!(buf.len(), 2);
+    }
+
+    // ---- StreamsClients finalized-buffer integration tests ----
+    //
+    // These exercise the public `discard_finalized` / `flush_finalized`
+    // surface that `ReorgCoordinator::handle_reorg` drives, covering the
+    // exact path that silently leaked stale events before the reth-semantic
+    // fix (`on_exex_reorg` now passes the correct `fork_point = first
+    // reverted, detection_point = last reverted` range).
+
+    async fn seed_buffer(
+        clients: &StreamsClients,
+        network: &str,
+        event_name: &str,
+        blocks: &[u64],
+        distance: u64,
+    ) {
+        clients.register_network_reorg_distance(network.to_string(), distance);
+        let key = BufferKey {
+            stream_type: stream_type::WEBHOOK,
+            config_index: 0,
+            network: network.to_string(),
+            event_name: event_name.to_string(),
+            event_signature_hash: B256::ZERO,
+        };
+        let mut map = clients.finalized_buffers.lock().await;
+        let buf = map.entry(key).or_insert_with(|| FinalizedBuffer::new(distance));
+        for &b in blocks {
+            buf.add(b, vec![json!({"block": b})]);
+        }
+    }
+
+    async fn buffered_blocks(clients: &StreamsClients, network: &str) -> Vec<u64> {
+        let map = clients.finalized_buffers.lock().await;
+        let mut out = Vec::new();
+        for (key, buf) in map.iter() {
+            if key.network == network {
+                out.extend(buf.buffer.keys().copied());
+            }
+        }
+        out.sort_unstable();
+        out
+    }
+
+    #[tokio::test]
+    async fn discard_finalized_removes_exactly_the_reorged_span() {
+        // The reth-semantic bug caused fork_point to equal last_reverted, so
+        // the discard range collapsed to a single block and the other
+        // reverted blocks leaked out on the next flush. This verifies the
+        // post-fix path: a reorg of 101..=110 discards exactly those 10
+        // blocks, leaving 95..=100 and 111..=115 untouched.
+        let clients = empty_clients();
+        let all: Vec<u64> = (95..=115).collect();
+        seed_buffer(&clients, "ethereum", "Transfer", &all, 10).await;
+
+        clients.discard_finalized("ethereum", 101, 110).await;
+
+        let remaining = buffered_blocks(&clients, "ethereum").await;
+        let expected: Vec<u64> = (95..=100).chain(111..=115).collect();
+        assert_eq!(remaining, expected);
+    }
+
+    #[tokio::test]
+    async fn discard_finalized_single_block_reorg_only_drops_that_block() {
+        // Minimum-depth reorg: `on_exex_reorg(n, n)` must discard only block
+        // n. This guards against an accidental re-introduction of a `+ 1`
+        // drift in the inclusive-range discard.
+        let clients = empty_clients();
+        seed_buffer(&clients, "ethereum", "Transfer", &[99, 100, 101], 10).await;
+
+        clients.discard_finalized("ethereum", 100, 100).await;
+
+        assert_eq!(buffered_blocks(&clients, "ethereum").await, vec![99, 101]);
+    }
+
+    #[tokio::test]
+    async fn discard_finalized_is_scoped_to_network() {
+        // A reorg on Ethereum must not touch Polygon's buffer. The buffer
+        // map is keyed on network, but the discard iterates all entries and
+        // filters — this pins the filter.
+        let clients = empty_clients();
+        seed_buffer(&clients, "ethereum", "Transfer", &[100, 101, 102], 10).await;
+        seed_buffer(&clients, "polygon", "Transfer", &[100, 101, 102], 10).await;
+
+        clients.discard_finalized("ethereum", 100, 102).await;
+
+        assert!(buffered_blocks(&clients, "ethereum").await.is_empty());
+        assert_eq!(buffered_blocks(&clients, "polygon").await, vec![100, 101, 102]);
+    }
+
+    #[tokio::test]
+    async fn discard_finalized_spans_multiple_event_types() {
+        // Reorgs are chain-level, not event-level — if two different events
+        // on the same network have buffered entries at reorged heights,
+        // both must be cleared.
+        let clients = empty_clients();
+        seed_buffer(&clients, "ethereum", "Transfer", &[100, 101], 10).await;
+        seed_buffer(&clients, "ethereum", "Approval", &[100, 101], 10).await;
+
+        clients.discard_finalized("ethereum", 101, 101).await;
+
+        // Both event buckets for block 101 are gone; block 100 survives in both.
+        let map = clients.finalized_buffers.lock().await;
+        for (_key, buf) in map.iter() {
+            assert!(buf.buffer.get(&100).is_some(), "block 100 must survive");
+            assert!(buf.buffer.get(&101).is_none(), "block 101 must be discarded");
+        }
+    }
+
+    #[tokio::test]
+    async fn flush_finalized_emits_blocks_up_to_inclusive_threshold() {
+        // Sanity-check that `flush_finalized(head)` uses the same
+        // `head - distance` inclusive threshold as `calculate_safe_block_number`.
+        // A block at the threshold must flush; a block one above must stay.
+        // Runs the flush through a real webhook dispatch so any future change
+        // to the threshold condition is observable as a delivered-count diff.
+        let mut server = mockito::Server::new_async().await;
+        let mock = server.mock("POST", "/hook").with_status(200).expect(1).create_async().await;
+        let config = WebhookStreamConfig {
+            endpoint: format!("{}/hook", server.url()),
+            shared_secret: "s".to_string(),
+            networks: vec!["ethereum".to_string()],
+            events: vec![stream_event("Transfer")],
+            delivery: None,
+        };
+        let clients = webhook_clients(vec![config]);
+        seed_buffer(&clients, "ethereum", "Transfer", &[100, 101], 10).await;
+
+        let sent = clients.flush_finalized("ethereum", 110).await.unwrap();
+
+        // Threshold = 110 - 10 = 100, so block 100 flushes and block 101 stays.
+        assert_eq!(sent, 1, "exactly one block should flush at the threshold");
+        assert_eq!(buffered_blocks(&clients, "ethereum").await, vec![101]);
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn flush_then_reorg_clears_only_unflushed_reorged_blocks() {
+        // End-to-end: blocks 95..=115 buffered, head=105 flushes only block
+        // 95 (threshold = 95), then a reorg hits [100, 105]. Post-fix the
+        // buffer must end up as [96..=99] ∪ [106..=115]. Before the reth
+        // semantic fix `discard_finalized(100, 100)` (collapsed to a
+        // single-block range) would have left 101..=105 in the buffer —
+        // they would then flush as canonical on the next tip advance,
+        // shipping reorged data.
+        let mut server = mockito::Server::new_async().await;
+        let mock = server.mock("POST", "/hook").with_status(200).expect(1).create_async().await;
+        let config = WebhookStreamConfig {
+            endpoint: format!("{}/hook", server.url()),
+            shared_secret: "s".to_string(),
+            networks: vec!["ethereum".to_string()],
+            events: vec![stream_event("Transfer")],
+            delivery: None,
+        };
+        let clients = webhook_clients(vec![config]);
+        let all: Vec<u64> = (95..=115).collect();
+        seed_buffer(&clients, "ethereum", "Transfer", &all, 10).await;
+
+        let sent = clients.flush_finalized("ethereum", 105).await.unwrap();
+        assert_eq!(sent, 1, "only block 95 is at/below threshold (105-10)");
+
+        clients.discard_finalized("ethereum", 100, 105).await;
+
+        let remaining = buffered_blocks(&clients, "ethereum").await;
+        let expected: Vec<u64> = (96..=99).chain(106..=115).collect();
+        assert_eq!(remaining, expected);
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn flush_finalized_with_head_below_distance_flushes_nothing() {
+        // Early in a chain's life `head < distance`; saturating_sub yields 0
+        // and nothing should flush. No webhook setup needed because with
+        // `head=5, distance=10` the flush produces an empty ready-set and
+        // `dispatch_flushed` is never invoked.
+        let clients = empty_clients();
+        seed_buffer(&clients, "ethereum", "Transfer", &[1, 2, 5], 10).await;
+
+        let sent = clients.flush_finalized("ethereum", 5).await.unwrap();
+
+        assert_eq!(sent, 0);
+        assert_eq!(buffered_blocks(&clients, "ethereum").await, vec![1, 2, 5]);
     }
 }

@@ -485,9 +485,7 @@ async fn fetch_historic_logs_stream<P: ChainProvider>(
                 );
 
                 return Some(ProcessHistoricLogsStreamResult {
-                    next: current_filter
-                        .set_from_block(next_from_block)
-                        .set_to_block(new_to_block),
+                    next: current_filter.set_from_block(next_from_block).set_to_block(new_to_block),
                     max_block_range_limitation,
                 });
             }
@@ -518,9 +516,7 @@ async fn fetch_historic_logs_stream<P: ChainProvider>(
                 };
 
                 return Some(ProcessHistoricLogsStreamResult {
-                    next: current_filter
-                        .set_from_block(next_from_block)
-                        .set_to_block(new_to_block),
+                    next: current_filter.set_from_block(next_from_block).set_to_block(new_to_block),
                     max_block_range_limitation,
                 });
             }
@@ -2173,7 +2169,8 @@ mod tests {
         )
         .await;
 
-        let next = result.expect("termination must still return Some so caller advances from_block");
+        let next =
+            result.expect("termination must still return Some so caller advances from_block");
         assert_eq!(
             next.next.from_block(),
             U64::from(501),

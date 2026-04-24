@@ -883,4 +883,166 @@ mod tests {
         assert_eq!(task.detection_point, 110);
         assert_eq!(task.event_tables.len(), 1);
     }
+
+    // ======================================================================
+    // End-to-end: reth reorg notification → coordinator → FinalizedBuffer
+    //
+    // Locks in the post-fix invariant that a reth-shaped reorg notification
+    // (`revert_from < revert_to`) drives `discard_finalized` across the
+    // exact span of reverted blocks. Before the fix the chain collapsed to a
+    // single-block discard, leaking reverted events to downstream consumers.
+    // ======================================================================
+
+    fn make_coordinator_with_streams(
+        window: BlockChainWindow,
+        streams_clients: Vec<Arc<Option<StreamsClients>>>,
+    ) -> ReorgCoordinator {
+        let persistence = Arc::new(ReorgBlockHashPersistence::new(None, None));
+        ReorgCoordinator {
+            network: "ethereum".to_string(),
+            window,
+            persistence,
+            provider: None,
+            event_tables: vec![],
+            derived_tables: vec![],
+            streams_clients,
+            blocks_since_flush: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_discards_exact_reverted_span_from_buffer() {
+        // Seed the finalized buffer with blocks 95..=115. A reth reorg of
+        // blocks 101..=110 (inclusive on both ends) must leave exactly
+        // [95..=100] ∪ [111..=115] in the buffer.
+        let clients = StreamsClients::empty_for_test();
+        let blocks: Vec<u64> = (95..=115).collect();
+        clients.test_seed_finalized_buffer("ethereum", "Transfer", &blocks, 10).await;
+        let streams = vec![Arc::new(Some(clients))];
+
+        let window = make_window_with_blocks(&[(99, 99, 98), (100, 100, 99)]);
+        let mut coordinator = make_coordinator_with_streams(window, streams.clone());
+
+        let task = coordinator.on_exex_reorg(101, 110).unwrap();
+        let ctx =
+            ReorgContext { postgres: None, clickhouse: None, registry: None, trace_registry: None };
+        coordinator.handle_reorg(task, &ctx).await.unwrap();
+
+        let remaining =
+            streams[0].as_ref().as_ref().unwrap().test_buffered_blocks("ethereum").await;
+        let expected: Vec<u64> = (95..=100).chain(111..=115).collect();
+        assert_eq!(
+            remaining, expected,
+            "handle_reorg must discard exactly the [fork_point, detection_point] span"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_full_roundtrip_from_reth_notification() {
+        // Drives the full chain: ChainStateNotification::Reorged (as reth
+        // emits it) → handle_chain_notification → ReorgInfo → the arithmetic
+        // applied by `fetch_logs.rs` (fork_block + depth - 1 = last_reverted)
+        // → on_exex_reorg → handle_reorg → FinalizedBuffer::discard_range.
+        //
+        // This is the one test that would have caught the original
+        // inverted-semantic bug end-to-end. Pre-fix: depth saturated to 0
+        // and fork_block pointed at the highest reverted block, so the
+        // discard collapsed to a single block and 101..=109 leaked.
+        use crate::indexer::reorg::handle_chain_notification;
+        use crate::notifications::ChainStateNotification;
+        use alloy::primitives::B256;
+
+        let clients = StreamsClients::empty_for_test();
+        let blocks: Vec<u64> = (95..=115).collect();
+        clients.test_seed_finalized_buffer("ethereum", "Transfer", &blocks, 10).await;
+        let streams = vec![Arc::new(Some(clients))];
+        let mut coordinator = make_coordinator_with_streams(
+            make_window_with_blocks(&[(99, 99, 98), (100, 100, 99)]),
+            streams.clone(),
+        );
+
+        // Reth's native range form: start=lowest, end=highest (both inclusive).
+        let notification = ChainStateNotification::Reorged {
+            revert_from_block: 101,
+            revert_to_block: 110,
+            new_from_block: 101,
+            new_to_block: 112,
+            new_tip_hash: B256::from([0xab; 32]),
+        };
+
+        let reorg_info =
+            handle_chain_notification(notification, "roundtrip", "ethereum").expect("reorg");
+        assert_eq!(reorg_info.fork_block.to::<u64>(), 101);
+        assert_eq!(reorg_info.depth, 10);
+
+        // The same arithmetic the `fetch_logs` reth consumer applies.
+        let fork_block = reorg_info.fork_block.to::<u64>();
+        let last_reverted = fork_block + reorg_info.depth.saturating_sub(1);
+        assert_eq!(last_reverted, 110);
+
+        let task = coordinator.on_exex_reorg(fork_block, last_reverted).unwrap();
+        assert_eq!(task.fork_point, 101);
+        assert_eq!(task.detection_point, 110);
+
+        let ctx =
+            ReorgContext { postgres: None, clickhouse: None, registry: None, trace_registry: None };
+        coordinator.handle_reorg(task, &ctx).await.unwrap();
+
+        let remaining =
+            streams[0].as_ref().as_ref().unwrap().test_buffered_blocks("ethereum").await;
+        let expected: Vec<u64> = (95..=100).chain(111..=115).collect();
+        assert_eq!(remaining, expected);
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_single_block_depth_discards_only_that_block() {
+        // Minimum-depth reorg (`revert_from == revert_to`). fetch_logs'
+        // `depth.saturating_sub(1)` must produce `last_reverted == fork`,
+        // so the discard range is [n, n].
+        let clients = StreamsClients::empty_for_test();
+        clients.test_seed_finalized_buffer("ethereum", "Transfer", &[99, 100, 101], 10).await;
+        let streams = vec![Arc::new(Some(clients))];
+        let mut coordinator = make_coordinator_with_streams(
+            make_window_with_blocks(&[(99, 99, 98), (100, 100, 99)]),
+            streams.clone(),
+        );
+
+        let task = coordinator.on_exex_reorg(100, 100).unwrap();
+        let ctx =
+            ReorgContext { postgres: None, clickhouse: None, registry: None, trace_registry: None };
+        coordinator.handle_reorg(task, &ctx).await.unwrap();
+
+        let remaining =
+            streams[0].as_ref().as_ref().unwrap().test_buffered_blocks("ethereum").await;
+        assert_eq!(remaining, vec![99, 101]);
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_fans_out_across_all_streams_on_network() {
+        // Reorg-discard fanout: two independent StreamsClients (e.g. the
+        // contract-events and native-transfers pipelines) on the same
+        // network must both see the discard. Verifies the coordinator
+        // iterates `streams_clients` rather than touching only the first.
+        let a = StreamsClients::empty_for_test();
+        let b = StreamsClients::empty_for_test();
+        a.test_seed_finalized_buffer("ethereum", "Transfer", &[100, 101, 102], 10).await;
+        b.test_seed_finalized_buffer("ethereum", "Transfer", &[100, 101, 102], 10).await;
+        let streams = vec![Arc::new(Some(a)), Arc::new(Some(b))];
+        let mut coordinator = make_coordinator_with_streams(
+            make_window_with_blocks(&[(99, 99, 98), (100, 100, 99)]),
+            streams.clone(),
+        );
+
+        let task = coordinator.on_exex_reorg(101, 102).unwrap();
+        let ctx =
+            ReorgContext { postgres: None, clickhouse: None, registry: None, trace_registry: None };
+        coordinator.handle_reorg(task, &ctx).await.unwrap();
+
+        for s in &streams {
+            assert_eq!(
+                s.as_ref().as_ref().unwrap().test_buffered_blocks("ethereum").await,
+                vec![100]
+            );
+        }
+    }
 }
