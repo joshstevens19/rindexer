@@ -1160,14 +1160,18 @@ async fn live_indexing_stream(
                 info_log_name, reth_reorg.depth, fork_block
             );
 
-            for b in fork_block..=(fork_block + reth_reorg.depth) {
+            // `fork_block` is the first reorged block and `depth` is the
+            // inclusive count — last reorged block is `fork_block + depth - 1`.
+            // An exclusive-end range covers exactly the reorged span and
+            // degenerates to a no-op when depth == 0.
+            for b in fork_block..(fork_block + reth_reorg.depth) {
                 block_cache.pop(&b);
             }
 
             // Route through coordinator for full recovery (event deletion, checkpoint
             // rewind, derived table rollback, window update) when available.
             if let Some(coordinator) = reorg_coordinator.as_ref() {
-                let detection_point = fork_block + reth_reorg.depth;
+                let last_reverted = fork_block + reth_reorg.depth.saturating_sub(1);
                 // Mutex held across reorg handling (DB rollback, stream
                 // publishes in parallel, user on_reorg callback firing). On a
                 // real reorg this blocks the other indexing path for the
@@ -1175,7 +1179,7 @@ async fn live_indexing_stream(
                 // If latency becomes a concern, move handle_reorg out of the
                 // hot path.
                 let mut guard = coordinator.lock().await;
-                match guard.on_exex_reorg(detection_point, fork_block) {
+                match guard.on_exex_reorg(fork_block, last_reverted) {
                     Ok(task) => {
                         let reorg_ctx = ReorgContext {
                             postgres: postgres.as_deref(),

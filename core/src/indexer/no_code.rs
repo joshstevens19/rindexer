@@ -770,8 +770,20 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                             }
                         }
                         Err(e) => {
-                            error!("Error streaming event: {}", e);
-                            return Err(e.to_string());
+                            // Don't propagate: callback retry would re-run
+                            // PG/CH/CSV inserts and duplicate rows (see
+                            // `streams::publish_with_retry` header).
+                            // Instant-mode consumers lose this message;
+                            // Finalized-mode buffers are unaffected.
+                            error!(
+                                contract = %params.contract_name,
+                                event = %params.event_info.name,
+                                %network,
+                                block_number,
+                                error = %e,
+                                "Stream publish failed after retries, dropping to avoid \
+                                 re-running PG inserts on callback retry"
+                            );
                         }
                     }
                 }
@@ -820,8 +832,19 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                             }
                         }
                         Err(e) => {
-                            error!("Error sending chat messages: {}", e);
-                            return Err(e.to_string());
+                            // Same rationale as the stream-publish branch
+                            // above: do not propagate so the callback-level
+                            // retry doesn't re-run PG/ClickHouse/CSV inserts.
+                            error!(
+                                contract = %params.contract_name,
+                                event = %params.event_info.name,
+                                %network,
+                                from_block = %from_block,
+                                to_block = %to_block,
+                                error = %e,
+                                "Chat message send failed, dropping to avoid re-running \
+                                 PG inserts on callback retry"
+                            );
                         }
                     }
                 }

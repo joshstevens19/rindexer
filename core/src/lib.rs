@@ -11,7 +11,8 @@ pub mod reth;
 
 mod system_state;
 pub use system_state::{
-    get_reload_state, initiate_shutdown, is_running, set_reload_state, ReloadState,
+    _test_reset_shutdown_flag, get_reload_state, initiate_shutdown, is_running, set_reload_state,
+    ReloadState,
 };
 
 mod health;

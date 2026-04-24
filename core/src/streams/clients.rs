@@ -1670,7 +1670,9 @@ mod tests {
     #[tokio::test]
     async fn stream_webhook_propagates_error() {
         let mut server = mockito::Server::new_async().await;
-        let mock = server.mock("POST", "/hook").with_status(500).create_async().await;
+        // `publish_with_retry` runs up to 3 attempts before surfacing the
+        // terminal error, so a persistently-500 endpoint gets hit 3 times.
+        let mock = server.mock("POST", "/hook").with_status(500).expect(3).create_async().await;
 
         let config = WebhookStreamConfig {
             endpoint: format!("{}/hook", server.url()),

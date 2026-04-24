@@ -148,7 +148,10 @@ pub fn handle_chain_notification(
             new_to_block,
             new_tip_hash,
         } => {
-            let depth = revert_from_block.saturating_sub(revert_to_block);
+            // reth's `old_range.start()/end()` — `revert_from` is the lowest
+            // reverted block, `revert_to` the highest, both inclusive. The
+            // reverted span is `[revert_from, revert_to]`.
+            let depth = revert_to_block.saturating_sub(revert_from_block) + 1;
             metrics::record_reorg(network, depth);
 
             warn!(
@@ -162,13 +165,13 @@ pub fn handle_chain_notification(
             );
 
             Some(ReorgInfo {
-                fork_block: U64::from(revert_to_block),
+                fork_block: U64::from(revert_from_block),
                 depth,
                 affected_tx_hashes: vec![],
             })
         }
         ChainStateNotification::Reverted { from_block, to_block } => {
-            let depth = from_block.saturating_sub(to_block);
+            let depth = to_block.saturating_sub(from_block) + 1;
             metrics::record_reorg(network, depth);
 
             warn!(
@@ -176,7 +179,7 @@ pub fn handle_chain_notification(
                 info_log_name, from_block, to_block
             );
 
-            Some(ReorgInfo { fork_block: U64::from(to_block), depth, affected_tx_hashes: vec![] })
+            Some(ReorgInfo { fork_block: U64::from(from_block), depth, affected_tx_hashes: vec![] })
         }
         ChainStateNotification::Committed { from_block, to_block, tip_hash } => {
             debug!(
@@ -389,29 +392,33 @@ mod tests {
 
     #[test]
     fn test_handle_chain_notification_reorged() {
+        // reth emits `revert_from_block = old_range.start()` (lowest reverted)
+        // and `revert_to_block = old_range.end()` (highest reverted), both
+        // inclusive. Blocks 101..=110 reverted → 10 blocks, fork_block=101.
         let notification = ChainStateNotification::Reorged {
-            revert_from_block: 110,
-            revert_to_block: 100,
-            new_from_block: 100,
+            revert_from_block: 101,
+            revert_to_block: 110,
+            new_from_block: 101,
             new_to_block: 112,
             new_tip_hash: B256::from([0xab; 32]),
         };
         let result = handle_chain_notification(notification, "test", "polygon");
         assert!(result.is_some());
         let reorg = result.unwrap();
-        assert_eq!(reorg.fork_block, U64::from(100));
-        assert_eq!(reorg.depth, 10); // 110 - 100
+        assert_eq!(reorg.fork_block, U64::from(101));
+        assert_eq!(reorg.depth, 10);
         assert!(reorg.affected_tx_hashes.is_empty());
     }
 
     #[test]
     fn test_handle_chain_notification_reverted() {
-        let notification = ChainStateNotification::Reverted { from_block: 200, to_block: 195 };
+        // Blocks 196..=200 reverted → 5 blocks, fork_block=196.
+        let notification = ChainStateNotification::Reverted { from_block: 196, to_block: 200 };
         let result = handle_chain_notification(notification, "test", "ethereum");
         assert!(result.is_some());
         let reorg = result.unwrap();
-        assert_eq!(reorg.fork_block, U64::from(195));
-        assert_eq!(reorg.depth, 5); // 200 - 195
+        assert_eq!(reorg.fork_block, U64::from(196));
+        assert_eq!(reorg.depth, 5);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use reqwest::Client;
 use serde_json::Value;
 
-use crate::streams::STREAM_MESSAGE_ID_KEY;
+use crate::streams::{publish_with_retry, STREAM_MESSAGE_ID_KEY};
 
 #[derive(thiserror::Error, Debug)]
 pub enum WebhookError {
@@ -23,6 +23,19 @@ impl Webhook {
     }
 
     pub async fn publish(
+        &self,
+        id: &str,
+        endpoint: &str,
+        shared_secret: &str,
+        message: &Value,
+    ) -> Result<(), WebhookError> {
+        publish_with_retry("webhook", endpoint, || {
+            self.publish_once(id, endpoint, shared_secret, message)
+        })
+        .await
+    }
+
+    async fn publish_once(
         &self,
         id: &str,
         endpoint: &str,

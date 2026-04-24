@@ -2,7 +2,7 @@ use reqwest::Client;
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::streams::STREAM_MESSAGE_ID_KEY;
+use crate::streams::{publish_with_retry, STREAM_MESSAGE_ID_KEY};
 
 #[derive(Error, Debug)]
 #[allow(clippy::enum_variant_names)]
@@ -43,6 +43,18 @@ impl CloudflareQueues {
     }
 
     pub async fn publish(
+        &self,
+        id: &str,
+        queue_id: &str,
+        message: &Value,
+    ) -> Result<(), CloudflareQueuesError> {
+        publish_with_retry("cloudflare_queues", queue_id, || {
+            self.publish_once(id, queue_id, message)
+        })
+        .await
+    }
+
+    async fn publish_once(
         &self,
         id: &str,
         queue_id: &str,

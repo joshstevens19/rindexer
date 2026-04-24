@@ -4,6 +4,7 @@ use lapin::{options::*, types::FieldTable, BasicProperties, ConnectionProperties
 use serde_json::Value;
 
 use crate::manifest::stream::ExchangeKindWrapper;
+use crate::streams::publish_with_retry;
 
 #[derive(thiserror::Error, Debug)]
 pub enum RabbitMQError {
@@ -31,6 +32,20 @@ impl RabbitMQ {
     }
 
     pub async fn publish(
+        &self,
+        id: &str,
+        exchange: &str,
+        exchange_type: &ExchangeKindWrapper,
+        routing_key: &Option<String>,
+        message: &Value,
+    ) -> Result<(), RabbitMQError> {
+        publish_with_retry("rabbitmq", exchange, || {
+            self.publish_once(id, exchange, exchange_type, routing_key, message)
+        })
+        .await
+    }
+
+    async fn publish_once(
         &self,
         id: &str,
         exchange: &str,
