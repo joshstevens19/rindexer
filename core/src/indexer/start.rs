@@ -1413,10 +1413,11 @@ mod tests {
     use std::path::Path;
 
     fn empty_sync_config() -> SyncConfig<'static> {
+        use std::sync::LazyLock;
+        static EMPTY_DBS: LazyLock<DatabaseBackends> = LazyLock::new(DatabaseBackends::default);
         SyncConfig {
             project_path: Path::new("/tmp/test"),
-            postgres: &None,
-            clickhouse: &None,
+            databases: &EMPTY_DBS,
             csv_details: &None,
             stream_details: &None,
             contract_csv_enabled: false,
