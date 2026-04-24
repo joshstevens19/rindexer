@@ -13,7 +13,10 @@ use rdkafka::{
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::{manifest::stream::KafkaStreamConfig, streams::STREAM_MESSAGE_ID_KEY};
+use crate::manifest::stream::KafkaStreamConfig;
+#[cfg(not(windows))]
+use crate::streams::publish_with_retry;
+use crate::streams::STREAM_MESSAGE_ID_KEY;
 
 #[derive(Error, Debug)]
 pub enum KafkaError {
@@ -80,30 +83,39 @@ impl Kafka {
         #[cfg(not(windows))]
         {
             let message_body = serde_json::to_vec(message)?;
-
-            let record = if key.is_some() {
-                FutureRecord::to(topic).key(key.as_ref().unwrap()).payload(&message_body).headers(
-                    OwnedHeaders::new()
-                        .insert(Header { key: STREAM_MESSAGE_ID_KEY, value: Some(id) }),
-                )
-            } else {
-                FutureRecord::to(topic).payload(&message_body).headers(
-                    OwnedHeaders::new()
-                        .insert(Header { key: STREAM_MESSAGE_ID_KEY, value: Some(id) }),
-                )
-            };
-
-            self.producer
-                .send(record, Timeout::After(Duration::from_secs(0)))
-                .await
-                .map_err(|(e, _)| KafkaError::RdkafkaError(e.to_string()))?;
-
-            Ok(())
+            publish_with_retry("kafka", topic, || {
+                self.send_record(id, topic, key.as_deref(), &message_body)
+            })
+            .await
         }
 
         #[cfg(windows)]
         {
+            let _ = (id, topic, key, message);
             panic!("Kafka is not supported on Windows")
         }
+    }
+
+    #[cfg(not(windows))]
+    async fn send_record(
+        &self,
+        id: &str,
+        topic: &str,
+        key: Option<&str>,
+        message_body: &[u8],
+    ) -> Result<(), KafkaError> {
+        let headers =
+            OwnedHeaders::new().insert(Header { key: STREAM_MESSAGE_ID_KEY, value: Some(id) });
+        let record = match key {
+            Some(k) => FutureRecord::to(topic).key(k).payload(message_body).headers(headers),
+            None => FutureRecord::to(topic).payload(message_body).headers(headers),
+        };
+
+        self.producer
+            .send(record, Timeout::After(Duration::from_secs(0)))
+            .await
+            .map_err(|(e, _)| KafkaError::RdkafkaError(e.to_string()))?;
+
+        Ok(())
     }
 }

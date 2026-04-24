@@ -148,7 +148,10 @@ pub fn handle_chain_notification(
             new_to_block,
             new_tip_hash,
         } => {
-            let depth = revert_from_block.saturating_sub(revert_to_block);
+            // reth's `old_range.start()/end()` — `revert_from` is the lowest
+            // reverted block, `revert_to` the highest, both inclusive. The
+            // reverted span is `[revert_from, revert_to]`.
+            let depth = revert_to_block.saturating_sub(revert_from_block) + 1;
             metrics::record_reorg(network, depth);
 
             warn!(
@@ -162,13 +165,13 @@ pub fn handle_chain_notification(
             );
 
             Some(ReorgInfo {
-                fork_block: U64::from(revert_to_block),
+                fork_block: U64::from(revert_from_block),
                 depth,
                 affected_tx_hashes: vec![],
             })
         }
         ChainStateNotification::Reverted { from_block, to_block } => {
-            let depth = from_block.saturating_sub(to_block);
+            let depth = to_block.saturating_sub(from_block) + 1;
             metrics::record_reorg(network, depth);
 
             warn!(
@@ -176,7 +179,7 @@ pub fn handle_chain_notification(
                 info_log_name, from_block, to_block
             );
 
-            Some(ReorgInfo { fork_block: U64::from(to_block), depth, affected_tx_hashes: vec![] })
+            Some(ReorgInfo { fork_block: U64::from(from_block), depth, affected_tx_hashes: vec![] })
         }
         ChainStateNotification::Committed { from_block, to_block, tip_hash } => {
             debug!(
@@ -186,6 +189,53 @@ pub fn handle_chain_notification(
             None
         }
     }
+}
+
+/// Effective `reorg_safe_distance` (in blocks) for the finalized-delivery
+/// buffer on `network`. Equal to the maximum distance demanded by any contract
+/// or native-transfer config that touches the network: a contract that sets
+/// `reorg_safe_distance: custom(2)` wants a tighter finality window, so we
+/// honor it by not holding events longer. Any source that leaves
+/// `reorg_safe_distance` unset (or sets `false`, meaning disabled) contributes
+/// the chain default to the max, so unset configs never shrink the buffer
+/// below the safe chain-level value.
+///
+/// Returns the chain default when no contract or NT config touches the
+/// network (unusual — would mean the network has no indexing targets).
+pub fn finalized_buffer_distance_for_network(
+    manifest: &crate::manifest::core::Manifest,
+    network: &str,
+    chain_id: u64,
+) -> u64 {
+    let chain_default = reorg_safe_distance_for_chain(chain_id);
+    let mut observed: Vec<u64> = Vec::new();
+
+    for contract in manifest.all_contracts() {
+        if contract.details.iter().any(|d| d.network == network) {
+            let d = contract
+                .reorg_safe_distance
+                .and_then(|rsd| rsd.resolve(chain_id))
+                .unwrap_or(chain_default);
+            observed.push(d);
+        }
+    }
+
+    if manifest.native_transfers.enabled {
+        let touches = match &manifest.native_transfers.networks {
+            Some(nets) => nets.iter().any(|n| n.network == network),
+            None => manifest.networks.iter().any(|n| n.name == network),
+        };
+        if touches {
+            let d = manifest
+                .native_transfers
+                .reorg_safe_distance
+                .and_then(|rsd| rsd.resolve(chain_id))
+                .unwrap_or(chain_default);
+            observed.push(d);
+        }
+    }
+
+    observed.into_iter().max().unwrap_or(chain_default)
 }
 
 /// Returns the default safe reorg distance (in blocks) for a given chain.
@@ -342,29 +392,33 @@ mod tests {
 
     #[test]
     fn test_handle_chain_notification_reorged() {
+        // reth emits `revert_from_block = old_range.start()` (lowest reverted)
+        // and `revert_to_block = old_range.end()` (highest reverted), both
+        // inclusive. Blocks 101..=110 reverted → 10 blocks, fork_block=101.
         let notification = ChainStateNotification::Reorged {
-            revert_from_block: 110,
-            revert_to_block: 100,
-            new_from_block: 100,
+            revert_from_block: 101,
+            revert_to_block: 110,
+            new_from_block: 101,
             new_to_block: 112,
             new_tip_hash: B256::from([0xab; 32]),
         };
         let result = handle_chain_notification(notification, "test", "polygon");
         assert!(result.is_some());
         let reorg = result.unwrap();
-        assert_eq!(reorg.fork_block, U64::from(100));
-        assert_eq!(reorg.depth, 10); // 110 - 100
+        assert_eq!(reorg.fork_block, U64::from(101));
+        assert_eq!(reorg.depth, 10);
         assert!(reorg.affected_tx_hashes.is_empty());
     }
 
     #[test]
     fn test_handle_chain_notification_reverted() {
-        let notification = ChainStateNotification::Reverted { from_block: 200, to_block: 195 };
+        // Blocks 196..=200 reverted → 5 blocks, fork_block=196.
+        let notification = ChainStateNotification::Reverted { from_block: 196, to_block: 200 };
         let result = handle_chain_notification(notification, "test", "ethereum");
         assert!(result.is_some());
         let reorg = result.unwrap();
-        assert_eq!(reorg.fork_block, U64::from(195));
-        assert_eq!(reorg.depth, 5); // 200 - 195
+        assert_eq!(reorg.fork_block, U64::from(196));
+        assert_eq!(reorg.depth, 5);
     }
 
     #[test]

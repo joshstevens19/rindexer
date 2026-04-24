@@ -7,6 +7,7 @@ use aws_sdk_sns::{
 };
 use tracing::{error, info};
 
+use crate::streams::publish_with_retry;
 use crate::types::aws_config::AwsConfig;
 
 #[derive(Debug, Clone)]
@@ -57,6 +58,15 @@ impl SNS {
     }
 
     pub async fn publish(
+        &self,
+        id: &str,
+        topic_arn: &str,
+        message: &str,
+    ) -> Result<PublishOutput, SdkError<PublishError, HttpResponse>> {
+        publish_with_retry("sns", topic_arn, || self.publish_once(id, topic_arn, message)).await
+    }
+
+    async fn publish_once(
         &self,
         id: &str,
         topic_arn: &str,

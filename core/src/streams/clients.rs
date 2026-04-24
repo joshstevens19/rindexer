@@ -1,4 +1,8 @@
-use std::{sync::Arc, time::Instant};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::{Arc, Mutex as StdMutex},
+    time::Instant,
+};
 
 use alloy::primitives::B256;
 use aws_sdk_sns::{config::http::HttpResponse, error::SdkError, operation::publish::PublishError};
@@ -6,9 +10,11 @@ use futures::future::join_all;
 use serde_json::{json, Value};
 use thiserror::Error;
 use tokio::{
+    sync::Mutex as AsyncMutex,
     task,
     task::{JoinError, JoinHandle},
 };
+use tracing::warn;
 
 use crate::{
     event::{filter_event_data_by_conditions, EventMessage},
@@ -35,6 +41,12 @@ use crate::{
 // we should limit the max chunk size we send over when streaming to 70KB - 100KB is most limits
 // we can add this to yaml if people need it
 const MAX_CHUNK_SIZE: usize = 75 * 1024; // 75 KB
+
+/// Soft cap on how many events a single `(stream_type, config, network, event)`
+/// finalized buffer can hold before we warn + record a metric. Steady-state
+/// memory is bounded by the flush rate (one block every ~`reorg_safe_distance`
+/// blocks); sustained growth past this cap means something is stuck.
+const FINALIZED_BUFFER_SOFT_CAP: usize = 10_000;
 
 type StreamPublishes = Vec<JoinHandle<Result<usize, StreamError>>>;
 
@@ -101,6 +113,19 @@ pub struct CloudflareQueuesStream {
     client: Arc<CloudflareQueues>,
 }
 
+/// Key into the finalized-delivery buffer map. One `FinalizedBuffer` exists per
+/// `(stream_type, config_index, network, event_name)` tuple. The event
+/// signature hash rides alongside so we can rebuild faithful `EventMessage`s at
+/// flush time without re-deriving it from the ABI.
+#[derive(Hash, Eq, PartialEq, Clone, Debug)]
+pub(crate) struct BufferKey {
+    stream_type: &'static str,
+    config_index: usize,
+    network: String,
+    event_name: String,
+    event_signature_hash: B256,
+}
+
 #[derive(Debug)]
 pub struct StreamsClients {
     sns: Option<SNSStream>,
@@ -110,7 +135,18 @@ pub struct StreamsClients {
     kafka: Option<KafkaStream>,
     redis: Option<RedisStream>,
     cloudflare_queues: Option<CloudflareQueuesStream>,
+    /// Per-(stream-type, config-index, network, event) buffers for
+    /// `StreamDeliveryMode::Finalized`. `stream_with_mode` appends here when
+    /// `delivery: finalized` is set; the `ReorgCoordinator` drives draining via
+    /// `flush_finalized` and invalidation via `discard_finalized`.
+    finalized_buffers: AsyncMutex<HashMap<BufferKey, FinalizedBuffer>>,
+    /// Per-network `reorg_safe_distance`. Populated at startup by
+    /// `register_network_reorg_distance`. `FinalizedBuffer::new` needs this to
+    /// know how far behind the chain head a block must be before flushing.
+    reorg_safe_distances: StdMutex<HashMap<String, u64>>,
 }
+
+type FinalizedDeliveryBuffer = (BufferKey, Vec<(u64, Vec<Value>)>);
 
 impl StreamsClients {
     pub async fn new(stream_config: StreamsConfig) -> Self {
@@ -190,7 +226,88 @@ impl StreamsClients {
             kafka,
             redis,
             cloudflare_queues,
+            finalized_buffers: AsyncMutex::new(HashMap::new()),
+            reorg_safe_distances: StdMutex::new(HashMap::new()),
         }
+    }
+
+    /// Register the `reorg_safe_distance` to use for any `Finalized` buffer on
+    /// this network. Must be called before the first finalized event on the
+    /// network is buffered — otherwise a buffer gets created with a default
+    /// distance of 0 (always-safe) and would flush immediately. `start.rs`
+    /// calls this for every live-indexed network at coordinator construction.
+    pub fn register_network_reorg_distance(&self, network: String, distance: u64) {
+        let mut map = self.reorg_safe_distances.lock().expect("reorg_safe_distances poisoned");
+        map.insert(network, distance);
+    }
+
+    fn reorg_safe_distance_for(&self, network: &str) -> u64 {
+        let map = self.reorg_safe_distances.lock().expect("reorg_safe_distances poisoned");
+        map.get(network).copied().unwrap_or(0)
+    }
+
+    /// Build an empty `StreamsClients` with no publishers configured. Used by
+    /// cross-module tests (e.g. `ReorgCoordinator::handle_reorg`) that need a
+    /// real `StreamsClients` value to wire up but don't need to actually
+    /// publish. Flush paths will panic if the buffer is populated for a
+    /// stream type whose publisher is `None`, so seed only via
+    /// `test_seed_finalized_buffer` in tests that don't also call
+    /// `flush_finalized`.
+    #[cfg(test)]
+    pub(crate) fn empty_for_test() -> Self {
+        Self {
+            sns: None,
+            webhook: None,
+            rabbitmq: None,
+            #[cfg(feature = "kafka")]
+            kafka: None,
+            redis: None,
+            cloudflare_queues: None,
+            finalized_buffers: AsyncMutex::new(HashMap::new()),
+            reorg_safe_distances: StdMutex::new(HashMap::new()),
+        }
+    }
+
+    /// Directly populate the finalized-delivery buffer for a given
+    /// (network, event) pair. Tests only — production code reaches the
+    /// buffer via `stream_with_mode` + `StreamDeliveryMode::Finalized`.
+    #[cfg(test)]
+    pub(crate) async fn test_seed_finalized_buffer(
+        &self,
+        network: &str,
+        event_name: &str,
+        blocks: &[u64],
+        distance: u64,
+    ) {
+        use alloy::primitives::B256;
+        self.register_network_reorg_distance(network.to_string(), distance);
+        let key = BufferKey {
+            stream_type: crate::metrics::streams::stream_type::WEBHOOK,
+            config_index: 0,
+            network: network.to_string(),
+            event_name: event_name.to_string(),
+            event_signature_hash: B256::ZERO,
+        };
+        let mut map = self.finalized_buffers.lock().await;
+        let buf = map.entry(key).or_insert_with(|| FinalizedBuffer::new(distance));
+        for &b in blocks {
+            buf.add(b, vec![serde_json::json!({"block": b})]);
+        }
+    }
+
+    /// Returns the sorted block numbers still present in the buffer for
+    /// `network` across all event types. Tests only.
+    #[cfg(test)]
+    pub(crate) async fn test_buffered_blocks(&self, network: &str) -> Vec<u64> {
+        let map = self.finalized_buffers.lock().await;
+        let mut out = Vec::new();
+        for (key, buf) in map.iter() {
+            if key.network == network {
+                out.extend(buf.buffer.keys().copied());
+            }
+        }
+        out.sort_unstable();
+        out
     }
 
     /// Redirects the Cloudflare Queues client to a different base URL. Intended
@@ -273,6 +390,7 @@ impl StreamsClients {
             event_data: Value::Array(chunk.to_vec()),
             event_signature_hash: event_message.event_signature_hash,
             network: event_message.network.clone(),
+            block_number: event_message.block_number,
         };
 
         serde_json::to_string(&chunk_message)
@@ -290,6 +408,7 @@ impl StreamsClients {
             event_data: Value::Array(chunk.to_vec()),
             event_signature_hash: event_message.event_signature_hash,
             network: event_message.network.clone(),
+            block_number: event_message.block_number,
         };
 
         serde_json::to_value(&chunk_message)
@@ -344,6 +463,62 @@ impl StreamsClients {
             .collect();
 
         filtered_chunk
+    }
+
+    /// Returns `true` when the dispatch should be routed into the
+    /// `FinalizedBuffer` instead of publishing immediately. Reorg notifications
+    /// (`force_send_network_wide`) and trace events always bypass the buffer;
+    /// `block_number == 0` is a sentinel for synthetic messages that likewise
+    /// never buffer.
+    fn should_buffer(
+        delivery: Option<&crate::manifest::stream::StreamDeliveryMode>,
+        event_message: &EventMessage,
+        is_trace_event: bool,
+        force_send_network_wide: bool,
+    ) -> bool {
+        if force_send_network_wide || is_trace_event {
+            return false;
+        }
+        if event_message.block_number == 0 {
+            return false;
+        }
+        matches!(delivery, Some(crate::manifest::stream::StreamDeliveryMode::Finalized))
+    }
+
+    /// Append a per-config event to the finalized-delivery buffer. Idempotently
+    /// creates the buffer on first use using the network's registered
+    /// `reorg_safe_distance`. Emits a warning + metric if the buffer crosses
+    /// the soft cap — events are never dropped; the cap is a health signal.
+    async fn buffer_event(
+        &self,
+        stream_type: &'static str,
+        config_index: usize,
+        event_message: &EventMessage,
+    ) {
+        let distance = self.reorg_safe_distance_for(&event_message.network);
+        let key = BufferKey {
+            stream_type,
+            config_index,
+            network: event_message.network.clone(),
+            event_name: event_message.event_name.clone(),
+            event_signature_hash: event_message.event_signature_hash,
+        };
+        let mut map = self.finalized_buffers.lock().await;
+        let buffer = map.entry(key).or_insert_with(|| FinalizedBuffer::new(distance));
+        if let Value::Array(data) = &event_message.event_data {
+            buffer.add(event_message.block_number, data.clone());
+        }
+        let len = buffer.len();
+        if len > FINALIZED_BUFFER_SOFT_CAP {
+            warn!(
+                network = %event_message.network,
+                stream_type,
+                config_index,
+                buffered = len,
+                "Finalized stream buffer exceeding soft cap"
+            );
+            stream_metrics::record_finalized_buffer_overflow(stream_type, &event_message.network);
+        }
     }
 
     fn should_send_for_config(
@@ -687,7 +862,7 @@ impl StreamsClients {
             let mut streams: Vec<StreamPublishes> = Vec::new();
 
             if let Some(sns) = &self.sns {
-                for config in &sns.config {
+                for (idx, config) in sns.config.iter().enumerate() {
                     if Self::should_send_for_config(
                         &config.events,
                         &event_message.event_name,
@@ -695,6 +870,15 @@ impl StreamsClients {
                         force_send_network_wide,
                     ) && config.networks.contains(&event_message.network)
                     {
+                        if Self::should_buffer(
+                            config.delivery.as_ref(),
+                            event_message,
+                            is_trace_event,
+                            force_send_network_wide,
+                        ) {
+                            self.buffer_event(stream_type::SNS, idx, event_message).await;
+                            continue;
+                        }
                         streams.push(self.sns_stream_tasks(
                             config,
                             Arc::clone(&sns.client),
@@ -708,7 +892,7 @@ impl StreamsClients {
             };
 
             if let Some(webhook) = &self.webhook {
-                for config in &webhook.config {
+                for (idx, config) in webhook.config.iter().enumerate() {
                     if Self::should_send_for_config(
                         &config.events,
                         &event_message.event_name,
@@ -716,6 +900,15 @@ impl StreamsClients {
                         force_send_network_wide,
                     ) && config.networks.contains(&event_message.network)
                     {
+                        if Self::should_buffer(
+                            config.delivery.as_ref(),
+                            event_message,
+                            is_trace_event,
+                            force_send_network_wide,
+                        ) {
+                            self.buffer_event(stream_type::WEBHOOK, idx, event_message).await;
+                            continue;
+                        }
                         streams.push(self.webhook_stream_tasks(
                             config,
                             Arc::clone(&webhook.client),
@@ -729,7 +922,7 @@ impl StreamsClients {
             }
 
             if let Some(rabbitmq) = &self.rabbitmq {
-                for config in &rabbitmq.config.exchanges {
+                for (idx, config) in rabbitmq.config.exchanges.iter().enumerate() {
                     if Self::should_send_for_config(
                         &config.events,
                         &event_message.event_name,
@@ -737,6 +930,15 @@ impl StreamsClients {
                         force_send_network_wide,
                     ) && config.networks.contains(&event_message.network)
                     {
+                        if Self::should_buffer(
+                            config.delivery.as_ref(),
+                            event_message,
+                            is_trace_event,
+                            force_send_network_wide,
+                        ) {
+                            self.buffer_event(stream_type::RABBITMQ, idx, event_message).await;
+                            continue;
+                        }
                         streams.push(self.rabbitmq_stream_tasks(
                             config,
                             Arc::clone(&rabbitmq.client),
@@ -751,7 +953,7 @@ impl StreamsClients {
 
             #[cfg(feature = "kafka")]
             if let Some(kafka) = &self.kafka {
-                for config in &kafka.config.topics {
+                for (idx, config) in kafka.config.topics.iter().enumerate() {
                     if Self::should_send_for_config(
                         &config.events,
                         &event_message.event_name,
@@ -759,6 +961,15 @@ impl StreamsClients {
                         force_send_network_wide,
                     ) && config.networks.contains(&event_message.network)
                     {
+                        if Self::should_buffer(
+                            config.delivery.as_ref(),
+                            event_message,
+                            is_trace_event,
+                            force_send_network_wide,
+                        ) {
+                            self.buffer_event(stream_type::KAFKA, idx, event_message).await;
+                            continue;
+                        }
                         streams.push(self.kafka_stream_tasks(
                             config,
                             Arc::clone(&kafka.client),
@@ -772,7 +983,7 @@ impl StreamsClients {
             }
 
             if let Some(redis) = &self.redis {
-                for config in &redis.config.streams {
+                for (idx, config) in redis.config.streams.iter().enumerate() {
                     if Self::should_send_for_config(
                         &config.events,
                         &event_message.event_name,
@@ -780,6 +991,15 @@ impl StreamsClients {
                         force_send_network_wide,
                     ) && config.networks.contains(&event_message.network)
                     {
+                        if Self::should_buffer(
+                            config.delivery.as_ref(),
+                            event_message,
+                            is_trace_event,
+                            force_send_network_wide,
+                        ) {
+                            self.buffer_event(stream_type::REDIS, idx, event_message).await;
+                            continue;
+                        }
                         streams.push(self.redis_stream_tasks(
                             config,
                             Arc::clone(&redis.client),
@@ -793,7 +1013,7 @@ impl StreamsClients {
             }
 
             if let Some(cloudflare_queues) = &self.cloudflare_queues {
-                for config in &cloudflare_queues.config.queues {
+                for (idx, config) in cloudflare_queues.config.queues.iter().enumerate() {
                     if Self::should_send_for_config(
                         &config.events,
                         &event_message.event_name,
@@ -801,6 +1021,16 @@ impl StreamsClients {
                         force_send_network_wide,
                     ) && config.networks.contains(&event_message.network)
                     {
+                        if Self::should_buffer(
+                            config.delivery.as_ref(),
+                            event_message,
+                            is_trace_event,
+                            force_send_network_wide,
+                        ) {
+                            self.buffer_event(stream_type::CLOUDFLARE_QUEUES, idx, event_message)
+                                .await;
+                            continue;
+                        }
                         streams.push(self.cloudflare_queues_stream_tasks(
                             config,
                             Arc::clone(&cloudflare_queues.client),
@@ -913,6 +1143,10 @@ impl StreamsClients {
             event_data: Value::Array(vec![reorg_payload]),
             event_signature_hash: B256::ZERO,
             network: network.to_string(),
+            // Synthetic reorg notifications are never buffered for finalized
+            // delivery — `should_buffer` treats `block_number == 0` as a
+            // sentinel for "always dispatch immediately".
+            block_number: 0,
         };
 
         self.stream_with_mode(
@@ -923,6 +1157,213 @@ impl StreamsClients {
             true,
         )
         .await
+    }
+
+    /// Drain finalized-delivery buffers for `network` that have become safe
+    /// relative to `head_block` (i.e., buried by at least the network's
+    /// registered `reorg_safe_distance`). Called by `ReorgCoordinator` on every
+    /// validated `on_new_block`. Returns the total number of events dispatched.
+    pub async fn flush_finalized(
+        &self,
+        network: &str,
+        head_block: u64,
+    ) -> Result<usize, StreamError> {
+        let mut ready_by_key: Vec<FinalizedDeliveryBuffer> = Vec::new();
+        {
+            let mut map = self.finalized_buffers.lock().await;
+            for (key, buffer) in map.iter_mut() {
+                if key.network != network {
+                    continue;
+                }
+                let ready = buffer.flush(head_block);
+                if !ready.is_empty() {
+                    ready_by_key.push((key.clone(), ready));
+                }
+            }
+        }
+
+        let mut total_sent = 0;
+        for (key, ready) in ready_by_key {
+            total_sent += self.dispatch_flushed(&key, ready).await?;
+        }
+        Ok(total_sent)
+    }
+
+    /// Remove buffered events for `network` whose source block falls in the
+    /// inclusive range `[fork_point, detection_point]`. Called by
+    /// `ReorgCoordinator::handle_reorg` *before* the next `flush_finalized` so
+    /// invalidated events never escape the buffer.
+    pub async fn discard_finalized(&self, network: &str, fork_point: u64, detection_point: u64) {
+        let mut map = self.finalized_buffers.lock().await;
+        for (key, buffer) in map.iter_mut() {
+            if key.network != network {
+                continue;
+            }
+            buffer.discard_range(fork_point, detection_point);
+        }
+    }
+
+    /// Re-publish a block's worth of previously-buffered events through the
+    /// stream-type-specific `*_stream_tasks` helper. Does NOT re-enter
+    /// `stream_with_mode` — that would re-buffer indefinitely.
+    ///
+    /// Per-block `*_stream_tasks` calls are built sequentially (they only
+    /// allocate; they don't await network I/O), and every resulting JoinHandle
+    /// from every block is then awaited through a single `join_all`, so a
+    /// flush of N buffered blocks runs at ~1 RTT instead of N.
+    async fn dispatch_flushed(
+        &self,
+        key: &BufferKey,
+        ready: Vec<(u64, Vec<Value>)>,
+    ) -> Result<usize, StreamError> {
+        let mut all_tasks: StreamPublishes = Vec::new();
+        for (block_number, events) in ready {
+            let event_message = EventMessage {
+                event_name: key.event_name.clone(),
+                event_data: Value::Array(events.clone()),
+                event_signature_hash: key.event_signature_hash,
+                network: key.network.clone(),
+                block_number,
+            };
+            let chunks = Arc::new(self.chunk_data(&events));
+            let id = format!(
+                "finalized_{}_{}_{}_blk{}",
+                key.stream_type, key.config_index, key.network, block_number
+            );
+
+            let tasks: StreamPublishes = match key.stream_type {
+                stream_type::SNS => {
+                    let sns = self.sns.as_ref().expect("sns buffer without sns config");
+                    self.sns_stream_tasks(
+                        &sns.config[key.config_index],
+                        Arc::clone(&sns.client),
+                        &id,
+                        &event_message,
+                        chunks,
+                        false,
+                    )
+                }
+                stream_type::WEBHOOK => {
+                    let webhook =
+                        self.webhook.as_ref().expect("webhook buffer without webhook config");
+                    self.webhook_stream_tasks(
+                        &webhook.config[key.config_index],
+                        Arc::clone(&webhook.client),
+                        &id,
+                        &event_message,
+                        chunks,
+                        false,
+                    )
+                }
+                stream_type::RABBITMQ => {
+                    let rabbitmq =
+                        self.rabbitmq.as_ref().expect("rabbitmq buffer without rabbitmq config");
+                    self.rabbitmq_stream_tasks(
+                        &rabbitmq.config.exchanges[key.config_index],
+                        Arc::clone(&rabbitmq.client),
+                        &id,
+                        &event_message,
+                        chunks,
+                        false,
+                    )
+                }
+                #[cfg(feature = "kafka")]
+                stream_type::KAFKA => {
+                    let kafka = self.kafka.as_ref().expect("kafka buffer without kafka config");
+                    self.kafka_stream_tasks(
+                        &kafka.config.topics[key.config_index],
+                        Arc::clone(&kafka.client),
+                        &id,
+                        &event_message,
+                        chunks,
+                        false,
+                    )
+                }
+                stream_type::REDIS => {
+                    let redis = self.redis.as_ref().expect("redis buffer without redis config");
+                    self.redis_stream_tasks(
+                        &redis.config.streams[key.config_index],
+                        Arc::clone(&redis.client),
+                        &id,
+                        &event_message,
+                        chunks,
+                        false,
+                    )
+                }
+                stream_type::CLOUDFLARE_QUEUES => {
+                    let cf = self
+                        .cloudflare_queues
+                        .as_ref()
+                        .expect("cloudflare_queues buffer without cloudflare_queues config");
+                    self.cloudflare_queues_stream_tasks(
+                        &cf.config.queues[key.config_index],
+                        Arc::clone(&cf.client),
+                        &id,
+                        &event_message,
+                        chunks,
+                        false,
+                    )
+                }
+                other => unreachable!("unknown stream_type in BufferKey: {other}"),
+            };
+            all_tasks.extend(tasks);
+        }
+
+        let mut total_sent = 0;
+        for result in join_all(all_tasks).await {
+            match result {
+                Ok(Ok(n)) => total_sent += n,
+                Ok(Err(e)) => return Err(e),
+                Err(e) => return Err(StreamError::JoinError(e)),
+            }
+        }
+        Ok(total_sent)
+    }
+}
+
+/// Per-(stream-type, config-index, network) buffer of JSON events keyed by
+/// source block number. Used by `StreamDeliveryMode::Finalized` to delay
+/// dispatch until a block is deeper than the chain's `reorg_safe_distance`.
+///
+/// `flush(current_head)` drains every bucket whose block is `<= current_head -
+/// reorg_safe_distance`; `discard_range(fork_point, detection_point)` removes
+/// buckets in an invalidated range when a reorg is detected.
+#[derive(Debug)]
+pub(crate) struct FinalizedBuffer {
+    buffer: BTreeMap<u64, Vec<Value>>,
+    reorg_safe_distance: u64,
+}
+
+impl FinalizedBuffer {
+    pub fn new(reorg_safe_distance: u64) -> Self {
+        Self { buffer: BTreeMap::new(), reorg_safe_distance }
+    }
+
+    pub fn add(&mut self, block_number: u64, events: Vec<Value>) {
+        self.buffer.entry(block_number).or_default().extend(events);
+    }
+
+    pub fn flush(&mut self, current_head: u64) -> Vec<(u64, Vec<Value>)> {
+        let finality_threshold = current_head.saturating_sub(self.reorg_safe_distance);
+        let ready_keys: Vec<u64> =
+            self.buffer.keys().copied().filter(|&k| k <= finality_threshold).collect();
+        ready_keys.into_iter().filter_map(|k| self.buffer.remove(&k).map(|v| (k, v))).collect()
+    }
+
+    pub fn discard_range(&mut self, fork_point: u64, detection_point: u64) {
+        let keys_to_remove: Vec<u64> = self
+            .buffer
+            .keys()
+            .copied()
+            .filter(|&k| k >= fork_point && k <= detection_point)
+            .collect();
+        for k in keys_to_remove {
+            self.buffer.remove(&k);
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.buffer.values().map(|v| v.len()).sum()
     }
 }
 
@@ -959,6 +1400,8 @@ mod tests {
             kafka: None,
             redis: None,
             cloudflare_queues: None,
+            finalized_buffers: AsyncMutex::new(HashMap::new()),
+            reorg_safe_distances: StdMutex::new(HashMap::new()),
         }
     }
 
@@ -971,6 +1414,8 @@ mod tests {
             kafka: None,
             redis: None,
             cloudflare_queues: None,
+            finalized_buffers: AsyncMutex::new(HashMap::new()),
+            reorg_safe_distances: StdMutex::new(HashMap::new()),
         }
     }
 
@@ -997,6 +1442,8 @@ mod tests {
                         .with_base_url(base_url.to_string()),
                 ),
             }),
+            finalized_buffers: AsyncMutex::new(HashMap::new()),
+            reorg_safe_distances: StdMutex::new(HashMap::new()),
         }
     }
 
@@ -1006,6 +1453,7 @@ mod tests {
             event_data: json!([{"from": "0x1", "to": "0x2", "value": "100"}]),
             event_signature_hash: B256::ZERO,
             network: "ethereum".to_string(),
+            block_number: 100,
         }
     }
 
@@ -1210,6 +1658,7 @@ mod tests {
             event_data: json!([]),
             event_signature_hash: B256::ZERO,
             network: "ethereum".to_string(),
+            block_number: 100,
         };
         let chunk = vec![json!({"v": 1})];
         let result =
@@ -1285,7 +1734,9 @@ mod tests {
     #[tokio::test]
     async fn stream_webhook_propagates_error() {
         let mut server = mockito::Server::new_async().await;
-        let mock = server.mock("POST", "/hook").with_status(500).create_async().await;
+        // `publish_with_retry` runs up to 3 attempts before surfacing the
+        // terminal error, so a persistently-500 endpoint gets hit 3 times.
+        let mock = server.mock("POST", "/hook").with_status(500).expect(3).create_async().await;
 
         let config = WebhookStreamConfig {
             endpoint: format!("{}/hook", server.url()),
@@ -1321,6 +1772,7 @@ mod tests {
             event_data: json!([{"from": "0x1", "to": "0x2", "value": "1000"}]),
             event_signature_hash: B256::ZERO,
             network: "ethereum".to_string(),
+            block_number: 100,
         };
 
         let result = webhook_clients(vec![config])
@@ -1553,5 +2005,233 @@ mod tests {
             .await;
 
         assert_eq!(result.unwrap(), 0);
+    }
+
+    // ---- FinalizedBuffer ----
+
+    #[test]
+    fn finalized_buffer_flushes_only_below_threshold() {
+        let mut buf = FinalizedBuffer::new(10);
+        buf.add(100, vec![json!({"event": "a"})]);
+        buf.add(105, vec![json!({"event": "b"})]);
+
+        let flushed = buf.flush(112); // threshold = 102
+        assert_eq!(flushed.len(), 1);
+        assert_eq!(flushed[0].0, 100);
+
+        let flushed2 = buf.flush(120);
+        assert_eq!(flushed2.len(), 1);
+        assert_eq!(flushed2[0].0, 105);
+    }
+
+    #[test]
+    fn finalized_buffer_discards_range_inclusive() {
+        let mut buf = FinalizedBuffer::new(10);
+        buf.add(98, vec![json!({"event": "a"})]);
+        buf.add(99, vec![json!({"event": "b"})]);
+        buf.add(100, vec![json!({"event": "c"})]);
+
+        buf.discard_range(99, 100);
+
+        let flushed = buf.flush(200);
+        assert_eq!(flushed.len(), 1);
+        assert_eq!(flushed[0].0, 98);
+    }
+
+    #[test]
+    fn finalized_buffer_discard_on_empty_is_noop() {
+        let mut buf = FinalizedBuffer::new(10);
+        buf.discard_range(5, 10);
+        assert_eq!(buf.len(), 0);
+    }
+
+    #[test]
+    fn finalized_buffer_add_merges_same_block() {
+        let mut buf = FinalizedBuffer::new(10);
+        buf.add(50, vec![json!({"a": 1})]);
+        buf.add(50, vec![json!({"a": 2})]);
+        assert_eq!(buf.len(), 2);
+    }
+
+    // ---- StreamsClients finalized-buffer integration tests ----
+    //
+    // These exercise the public `discard_finalized` / `flush_finalized`
+    // surface that `ReorgCoordinator::handle_reorg` drives, covering the
+    // exact path that silently leaked stale events before the reth-semantic
+    // fix (`on_exex_reorg` now passes the correct `fork_point = first
+    // reverted, detection_point = last reverted` range).
+
+    async fn seed_buffer(
+        clients: &StreamsClients,
+        network: &str,
+        event_name: &str,
+        blocks: &[u64],
+        distance: u64,
+    ) {
+        clients.register_network_reorg_distance(network.to_string(), distance);
+        let key = BufferKey {
+            stream_type: stream_type::WEBHOOK,
+            config_index: 0,
+            network: network.to_string(),
+            event_name: event_name.to_string(),
+            event_signature_hash: B256::ZERO,
+        };
+        let mut map = clients.finalized_buffers.lock().await;
+        let buf = map.entry(key).or_insert_with(|| FinalizedBuffer::new(distance));
+        for &b in blocks {
+            buf.add(b, vec![json!({"block": b})]);
+        }
+    }
+
+    async fn buffered_blocks(clients: &StreamsClients, network: &str) -> Vec<u64> {
+        let map = clients.finalized_buffers.lock().await;
+        let mut out = Vec::new();
+        for (key, buf) in map.iter() {
+            if key.network == network {
+                out.extend(buf.buffer.keys().copied());
+            }
+        }
+        out.sort_unstable();
+        out
+    }
+
+    #[tokio::test]
+    async fn discard_finalized_removes_exactly_the_reorged_span() {
+        // The reth-semantic bug caused fork_point to equal last_reverted, so
+        // the discard range collapsed to a single block and the other
+        // reverted blocks leaked out on the next flush. This verifies the
+        // post-fix path: a reorg of 101..=110 discards exactly those 10
+        // blocks, leaving 95..=100 and 111..=115 untouched.
+        let clients = empty_clients();
+        let all: Vec<u64> = (95..=115).collect();
+        seed_buffer(&clients, "ethereum", "Transfer", &all, 10).await;
+
+        clients.discard_finalized("ethereum", 101, 110).await;
+
+        let remaining = buffered_blocks(&clients, "ethereum").await;
+        let expected: Vec<u64> = (95..=100).chain(111..=115).collect();
+        assert_eq!(remaining, expected);
+    }
+
+    #[tokio::test]
+    async fn discard_finalized_single_block_reorg_only_drops_that_block() {
+        // Minimum-depth reorg: `on_exex_reorg(n, n)` must discard only block
+        // n. This guards against an accidental re-introduction of a `+ 1`
+        // drift in the inclusive-range discard.
+        let clients = empty_clients();
+        seed_buffer(&clients, "ethereum", "Transfer", &[99, 100, 101], 10).await;
+
+        clients.discard_finalized("ethereum", 100, 100).await;
+
+        assert_eq!(buffered_blocks(&clients, "ethereum").await, vec![99, 101]);
+    }
+
+    #[tokio::test]
+    async fn discard_finalized_is_scoped_to_network() {
+        // A reorg on Ethereum must not touch Polygon's buffer. The buffer
+        // map is keyed on network, but the discard iterates all entries and
+        // filters — this pins the filter.
+        let clients = empty_clients();
+        seed_buffer(&clients, "ethereum", "Transfer", &[100, 101, 102], 10).await;
+        seed_buffer(&clients, "polygon", "Transfer", &[100, 101, 102], 10).await;
+
+        clients.discard_finalized("ethereum", 100, 102).await;
+
+        assert!(buffered_blocks(&clients, "ethereum").await.is_empty());
+        assert_eq!(buffered_blocks(&clients, "polygon").await, vec![100, 101, 102]);
+    }
+
+    #[tokio::test]
+    async fn discard_finalized_spans_multiple_event_types() {
+        // Reorgs are chain-level, not event-level — if two different events
+        // on the same network have buffered entries at reorged heights,
+        // both must be cleared.
+        let clients = empty_clients();
+        seed_buffer(&clients, "ethereum", "Transfer", &[100, 101], 10).await;
+        seed_buffer(&clients, "ethereum", "Approval", &[100, 101], 10).await;
+
+        clients.discard_finalized("ethereum", 101, 101).await;
+
+        // Both event buckets for block 101 are gone; block 100 survives in both.
+        let map = clients.finalized_buffers.lock().await;
+        for (_key, buf) in map.iter() {
+            assert!(buf.buffer.get(&100).is_some(), "block 100 must survive");
+            assert!(buf.buffer.get(&101).is_none(), "block 101 must be discarded");
+        }
+    }
+
+    #[tokio::test]
+    async fn flush_finalized_emits_blocks_up_to_inclusive_threshold() {
+        // Sanity-check that `flush_finalized(head)` uses the same
+        // `head - distance` inclusive threshold as `calculate_safe_block_number`.
+        // A block at the threshold must flush; a block one above must stay.
+        // Runs the flush through a real webhook dispatch so any future change
+        // to the threshold condition is observable as a delivered-count diff.
+        let mut server = mockito::Server::new_async().await;
+        let mock = server.mock("POST", "/hook").with_status(200).expect(1).create_async().await;
+        let config = WebhookStreamConfig {
+            endpoint: format!("{}/hook", server.url()),
+            shared_secret: "s".to_string(),
+            networks: vec!["ethereum".to_string()],
+            events: vec![stream_event("Transfer")],
+            delivery: None,
+        };
+        let clients = webhook_clients(vec![config]);
+        seed_buffer(&clients, "ethereum", "Transfer", &[100, 101], 10).await;
+
+        let sent = clients.flush_finalized("ethereum", 110).await.unwrap();
+
+        // Threshold = 110 - 10 = 100, so block 100 flushes and block 101 stays.
+        assert_eq!(sent, 1, "exactly one block should flush at the threshold");
+        assert_eq!(buffered_blocks(&clients, "ethereum").await, vec![101]);
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn flush_then_reorg_clears_only_unflushed_reorged_blocks() {
+        // End-to-end: blocks 95..=115 buffered, head=105 flushes only block
+        // 95 (threshold = 95), then a reorg hits [100, 105]. Post-fix the
+        // buffer must end up as [96..=99] ∪ [106..=115]. Before the reth
+        // semantic fix `discard_finalized(100, 100)` (collapsed to a
+        // single-block range) would have left 101..=105 in the buffer —
+        // they would then flush as canonical on the next tip advance,
+        // shipping reorged data.
+        let mut server = mockito::Server::new_async().await;
+        let mock = server.mock("POST", "/hook").with_status(200).expect(1).create_async().await;
+        let config = WebhookStreamConfig {
+            endpoint: format!("{}/hook", server.url()),
+            shared_secret: "s".to_string(),
+            networks: vec!["ethereum".to_string()],
+            events: vec![stream_event("Transfer")],
+            delivery: None,
+        };
+        let clients = webhook_clients(vec![config]);
+        let all: Vec<u64> = (95..=115).collect();
+        seed_buffer(&clients, "ethereum", "Transfer", &all, 10).await;
+
+        let sent = clients.flush_finalized("ethereum", 105).await.unwrap();
+        assert_eq!(sent, 1, "only block 95 is at/below threshold (105-10)");
+
+        clients.discard_finalized("ethereum", 100, 105).await;
+
+        let remaining = buffered_blocks(&clients, "ethereum").await;
+        let expected: Vec<u64> = (96..=99).chain(106..=115).collect();
+        assert_eq!(remaining, expected);
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn flush_finalized_with_head_below_distance_flushes_nothing() {
+        // Early in a chain's life `head < distance`; saturating_sub yields 0
+        // and nothing should flush. No webhook setup needed because with
+        // `head=5, distance=10` the flush produces an empty ready-set and
+        // `dispatch_flushed` is never invoked.
+        let clients = empty_clients();
+        seed_buffer(&clients, "ethereum", "Transfer", &[1, 2, 5], 10).await;
+
+        let sent = clients.flush_finalized("ethereum", 5).await.unwrap();
+
+        assert_eq!(sent, 0);
+        assert_eq!(buffered_blocks(&clients, "ethereum").await, vec![1, 2, 5]);
     }
 }

@@ -262,6 +262,33 @@ pub static STREAM_MESSAGE_DURATION: Lazy<HistogramVec> = Lazy::new(|| {
     .expect("failed to register STREAM_MESSAGE_DURATION")
 });
 
+/// Number of times a per-(stream, network) finalized-delivery buffer grew past
+/// the soft cap. Not a hard drop — events still flush when the block finalizes
+/// — but sustained growth indicates a flush stall or an under-configured
+/// `reorg_safe_distance`.
+/// Labels: stream_type, network
+pub static STREAM_FINALIZED_BUFFER_OVERFLOW_TOTAL: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
+        "rindexer_stream_finalized_buffer_overflow_total",
+        "Count of finalized-delivery buffer soft-cap overflows per (stream_type, network)",
+        &["stream_type", "network"]
+    )
+    .expect("failed to register STREAM_FINALIZED_BUFFER_OVERFLOW_TOTAL")
+});
+
+/// Terminal publish failures — a message hit `publish_with_retry`'s final
+/// attempt and was not delivered. In Instant delivery mode this is a lost
+/// message from the consumer's point of view. Alert on any sustained non-zero
+/// rate. Labels: stream_type, target (topic/queue/endpoint id).
+pub static STREAM_PUBLISH_DROPPED_TOTAL: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
+        "rindexer_stream_publish_dropped_total",
+        "Publishes that exhausted retries and were dropped, per (stream_type, target)",
+        &["stream_type", "target"]
+    )
+    .expect("failed to register STREAM_PUBLISH_DROPPED_TOTAL")
+});
+
 // =============================================================================
 // Build Info
 // =============================================================================

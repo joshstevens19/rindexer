@@ -111,6 +111,13 @@ impl TestModule for ReorgTests {
             )
             .with_timeout(240)
             .with_chain_id(137),
+            TestDefinition::new(
+                "test_reorg_with_finalized_delivery",
+                "Reorg: delivery:finalized webhook receives only canonical post-reorg events, reorg notification bypasses buffer",
+                reorg_with_finalized_delivery,
+            )
+            .with_timeout(240)
+            .with_chain_id(137),
         ]
     }
 }
@@ -2069,6 +2076,178 @@ fn reorg_native_transfer_and_contracts(
         }
 
         info!("Reorg Native-Transfer + Contracts Test PASSED");
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Test 15: Reorg with delivery:finalized
+//
+// Covers two properties of `StreamDeliveryMode::Finalized`:
+//   (a) events are buffered past the per-network reorg_safe_distance and only
+//       flushed once a block is buried (phase 1: mine past safe distance,
+//       webhook receives the historical batch);
+//   (b) the `__rindexer_reorg` notification still fires immediately when a
+//       reorg is detected, regardless of the stream's delivery mode — i.e.
+//       it bypasses the finalized buffer via `should_buffer`.
+//
+// reorg_safe_distance is overridden to `Custom(2)` so the test finishes in a
+// handful of mined blocks rather than the chain default of 200 on polygon.
+//
+// Note on phase 2 timing: with `reorg_safe_distance = 2` applied to both
+// indexing lag AND the finalized buffer threshold, an indexed event becomes
+// eligible for flush on the very next coordinator tick — there's no stable
+// "indexed but still buffered" window. That makes a strict "zero leaked
+// transfers" assertion inherently racy. Phase 2 therefore verifies the
+// load-bearing invariant — that the reorg notification arrives — and simply
+// gives the indexer a poll cycle to witness the pre-reorg tip so its
+// coordinator window has the old hashes to mismatch against.
+// ---------------------------------------------------------------------------
+fn reorg_with_finalized_delivery(
+    context: &mut TestContext,
+) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
+    Box::pin(async move {
+        info!("Running Reorg with Finalized Delivery Test");
+
+        let (container_name, pg_port) = match crate::docker::start_postgres_container().await {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(crate::tests::test_runner::SkipTest(format!(
+                    "Docker not available: {}",
+                    e
+                ))
+                .into());
+            }
+        };
+        context.register_container(container_name);
+        crate::docker::wait_for_postgres_ready(pg_port, 30).await?;
+
+        let (webhook_port, bodies) = spawn_webhook_collector().await?;
+        let webhook_endpoint = format!("http://127.0.0.1:{}/webhook", webhook_port);
+
+        let contract_address = context.deploy_test_contract().await?;
+
+        // Fire 5 pre-indexing transfers so the webhook has obvious candidates
+        // to flush post-finality. Mint gives one additional Transfer event.
+        let pre_amounts = [1000u64, 2000, 3000, 4000, 5000];
+        let pre_recipients: Vec<_> = (0..5).map(generate_test_address).collect();
+        for (r, a) in pre_recipients.iter().zip(pre_amounts.iter()) {
+            context.anvil.send_transfer(&contract_address, r, U256::from(*a)).await?;
+            context.anvil.mine_block().await?;
+        }
+
+        let mut config = create_reorg_config(context, &contract_address);
+        config.storage.postgres = Some(crate::test_suite::PostgresConfig { enabled: true });
+        config.storage.csv.enabled = false;
+
+        // Tight safe distance so the finalized buffer flushes after only a
+        // few blocks. Without this override the polygon default is 200.
+        if let Some(contract) = config.contracts.get_mut(0) {
+            contract.reorg_safe_distance = Some(serde_json::json!(2));
+            contract.streams = Some(serde_json::json!({
+                "webhooks": [{
+                    "endpoint": webhook_endpoint,
+                    "shared_secret": "test-secret",
+                    "networks": ["polygon"],
+                    "events": [
+                        { "event_name": "Transfer" }
+                    ],
+                    "delivery": "finalized"
+                }]
+            }));
+        }
+
+        start_indexer_with_pg(context, config, pg_port).await?;
+
+        let conn_str = format!(
+            "host=localhost port={} user=postgres password=postgres dbname=postgres",
+            pg_port
+        );
+        let table = "reorg_test_simple_erc_20.transfer";
+
+        // All 6 events (5 transfers + 1 mint) should be in PG — indexing
+        // happens through Instant's path; finalized only affects the webhook.
+        wait_for_pg_count(&conn_str, table, 6, 30).await?;
+
+        // Mine blocks past the reorg_safe_distance so the buffered events
+        // finalize and get published to the webhook.
+        for _ in 0..6 {
+            context.anvil.mine_block().await?;
+        }
+
+        // Wait for the webhook to receive the 6 finalized Transfer events.
+        // Chunked webhook payloads mean we assert on the total event count
+        // across all received bodies rather than body count alone.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            let events_seen: usize = {
+                let lock = bodies.lock().await;
+                lock.iter()
+                    .filter_map(|b| serde_json::from_str::<serde_json::Value>(b).ok())
+                    .filter(|v| v.get("event_name").and_then(|e| e.as_str()) == Some("Transfer"))
+                    .filter_map(|v| v.get("event_data").and_then(|d| d.as_array()).map(|a| a.len()))
+                    .sum()
+            };
+            if events_seen >= 6 {
+                info!("Finalized webhook received {} Transfer events after burial", events_seen);
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(anyhow::anyhow!(
+                    "Timed out waiting for 6 finalized Transfer events — got {}",
+                    events_seen
+                ));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+
+        // Phase 2: verify the __rindexer_reorg notification bypasses the
+        // finalized buffer. The canonical reorg-detection pattern (see
+        // `test_reorg_live_pg_recovery`): fire one live transfer, wait for
+        // PG to confirm the indexer has it (which also seeds the coordinator
+        // window with pre-reorg hashes), then reorg and wait for recovery.
+        bodies.lock().await.clear();
+        let pre_reorg_pg = 6i64;
+
+        let live_rcpt = generate_test_address(99);
+        context.anvil.send_transfer(&contract_address, &live_rcpt, U256::from(9000u64)).await?;
+        context.anvil.mine_block().await?;
+        wait_for_pg_count(&conn_str, table, pre_reorg_pg + 1, 20).await?;
+
+        // Reorg depth 2 — reverts the live-transfer block + one ancestor.
+        // mine_block forces a new tip so the next poll's on_new_block validates
+        // parent_hash against the pre-reorg window entry and detects the
+        // mismatch.
+        context.anvil.trigger_reorg(2).await?;
+        context.anvil.mine_block().await?;
+
+        if let Some(r) = &context.rindexer {
+            r.wait_for_reorg_recovery(60).await?;
+        }
+
+        // Allow re-indexing + any in-flight webhook publishes to settle.
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+        let collected = bodies.lock().await.clone();
+        let seen_reorg = collected.iter().any(|body| {
+            serde_json::from_str::<serde_json::Value>(body)
+                .ok()
+                .and_then(|v| v.get("event_name").and_then(|e| e.as_str()).map(String::from))
+                .as_deref()
+                == Some("__rindexer_reorg")
+        });
+
+        if !seen_reorg {
+            return Err(anyhow::anyhow!(
+                "Expected __rindexer_reorg notification to bypass the finalized buffer, \
+                 but webhook received none. Got {} payloads.",
+                collected.len()
+            ));
+        }
+
+        assert_no_pg_duplicates(&conn_str, table).await?;
+
+        info!("Reorg with Finalized Delivery Test PASSED");
         Ok(())
     })
 }

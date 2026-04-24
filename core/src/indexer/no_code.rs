@@ -410,8 +410,9 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
             let mut sql_bulk_column_types: Vec<PgType> = Vec::new();
             let mut csv_bulk_data: Vec<Vec<String>> = Vec::new();
 
-            // stream and chat info
-            let mut event_message_data: Vec<Value> = Vec::new();
+            // stream and chat info, paired with source block_number so the
+            // streams dispatch can split per-block for finalized delivery.
+            let mut event_message_data: Vec<(u64, Value)> = Vec::new();
 
             // table operations data: (log_params, network, tx_metadata)
             let mut table_events_data: Vec<(Vec<LogParam>, String, TxMetadata)> = Vec::new();
@@ -569,7 +570,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                         },
                         false,
                     );
-                    event_message_data.push(event_result);
+                    event_message_data.push((block_number, event_result));
                 }
 
                 let mut all_params: Vec<EthereumSqlTypeWrapper> = vec![contract_address];
@@ -707,49 +708,94 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                 }
             }
 
-            let event_message = EventMessage {
-                event_name: params.event_info.name.clone(),
-                event_data: Value::Array(event_message_data),
-                event_signature_hash: params.event.selector(),
-                network: network.clone(),
-            };
+            // Build the cross-block chat payload first (one clone per event)
+            // so the streams path can consume `event_message_data` into
+            // per-block buckets without a second clone pass. Finalized
+            // delivery keys its buffer by `EventMessage.block_number`, so
+            // streams must split per-block; chat dispatch does not consult
+            // the finalized buffer so it keeps the aggregated shape.
+            let chat_event_data: Vec<Value> =
+                event_message_data.iter().map(|(_, v)| v.clone()).collect();
+
+            let mut events_by_block: std::collections::BTreeMap<u64, Vec<Value>> =
+                std::collections::BTreeMap::new();
+            for (blk, ev) in event_message_data {
+                events_by_block.entry(blk).or_default().push(ev);
+            }
 
             if let Some(streams_clients) = params.streams_clients.as_ref() {
-                let stream_id = format!(
-                    "{}-{}-{}-{}-{}",
-                    params.contract_name, params.event_info.name, network, from_block, to_block
-                );
-
                 let is_trace_event = match results {
                     CallbackResult::Event(_) => false,
                     CallbackResult::Trace(_) => true,
                 };
 
-                match streams_clients
-                    .stream(stream_id, &event_message, params.index_event_in_order, is_trace_event)
-                    .await
-                {
-                    Ok(streamed) => {
-                        if streamed > 0 {
-                            info!(
-                                "{}::{} - {} - {} events {}",
-                                params.contract_name,
-                                params.event_info.name,
-                                "STREAMED",
-                                streamed,
-                                format!(
-                                    "- blocks: {} - {} - network: {}",
-                                    from_block, to_block, network
-                                )
+                for (block_number, block_events) in events_by_block {
+                    let event_message = EventMessage {
+                        event_name: params.event_info.name.clone(),
+                        event_data: Value::Array(block_events),
+                        event_signature_hash: params.event.selector(),
+                        network: network.clone(),
+                        block_number,
+                    };
+
+                    let stream_id = format!(
+                        "{}-{}-{}-{}-{}-blk{}",
+                        params.contract_name,
+                        params.event_info.name,
+                        network,
+                        from_block,
+                        to_block,
+                        block_number
+                    );
+
+                    match streams_clients
+                        .stream(
+                            stream_id,
+                            &event_message,
+                            params.index_event_in_order,
+                            is_trace_event,
+                        )
+                        .await
+                    {
+                        Ok(streamed) => {
+                            if streamed > 0 {
+                                info!(
+                                    "{}::{} - {} - {} events {}",
+                                    params.contract_name,
+                                    params.event_info.name,
+                                    "STREAMED",
+                                    streamed,
+                                    format!("- block: {} - network: {}", block_number, network)
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            // Don't propagate: callback retry would re-run
+                            // PG/CH/CSV inserts and duplicate rows (see
+                            // `streams::publish_with_retry` header).
+                            // Instant-mode consumers lose this message;
+                            // Finalized-mode buffers are unaffected.
+                            error!(
+                                contract = %params.contract_name,
+                                event = %params.event_info.name,
+                                %network,
+                                block_number,
+                                error = %e,
+                                "Stream publish failed after retries, dropping to avoid \
+                                 re-running PG inserts on callback retry"
                             );
                         }
                     }
-                    Err(e) => {
-                        error!("Error streaming event: {}", e);
-                        return Err(e.to_string());
-                    }
                 }
             }
+
+            let event_message = EventMessage {
+                event_name: params.event_info.name.clone(),
+                event_data: Value::Array(chat_event_data),
+                event_signature_hash: params.event.selector(),
+                network: network.clone(),
+                block_number: from_block.to::<u64>(),
+            };
 
             if let Some(chat_clients) = params.chat_clients.as_ref() {
                 if !chat_clients.is_in_block_range_to_send(&from_block, &to_block) {
@@ -786,8 +832,19 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                             }
                         }
                         Err(e) => {
-                            error!("Error sending chat messages: {}", e);
-                            return Err(e.to_string());
+                            // Same rationale as the stream-publish branch
+                            // above: do not propagate so the callback-level
+                            // retry doesn't re-run PG/ClickHouse/CSV inserts.
+                            error!(
+                                contract = %params.contract_name,
+                                event = %params.event_info.name,
+                                %network,
+                                from_block = %from_block,
+                                to_block = %to_block,
+                                error = %e,
+                                "Chat message send failed, dropping to avoid re-running \
+                                 PG inserts on callback retry"
+                            );
                         }
                     }
                 }

@@ -72,12 +72,14 @@ impl ReorgCoordinator {
             ParentValidation::Valid => {
                 self.window.insert(block_number, block_hash, parent_hash);
                 self.persist_and_maybe_prune(block_number, block_hash, parent_hash).await?;
+                self.flush_finalized_buffers(block_number).await;
                 Ok(None)
             }
             ParentValidation::NoPreviousBlock => {
                 if self.window.is_empty() || block_number == 0 {
                     self.window.insert(block_number, block_hash, parent_hash);
                     self.persist_and_maybe_prune(block_number, block_hash, parent_hash).await?;
+                    self.flush_finalized_buffers(block_number).await;
                     return Ok(None);
                 }
 
@@ -153,10 +155,47 @@ impl ReorgCoordinator {
             ParentValidation::Valid | ParentValidation::NoPreviousBlock => {
                 self.window.insert(block_number, block_hash, parent_hash);
                 self.persist_and_maybe_prune(block_number, block_hash, parent_hash).await?;
+                self.flush_finalized_buffers(block_number).await;
                 Ok(None)
             }
             ParentValidation::Mismatch { expected, got } => {
                 self.handle_mismatch(block_number, expected, got).await
+            }
+        }
+    }
+
+    /// Fan `StreamsClients::flush_finalized` out in parallel across every
+    /// `StreamsClients` on this network, awaiting all results. Errors are
+    /// logged but not propagated — a flush failure must not stop live
+    /// indexing; the next block will retry any still-buffered events.
+    ///
+    /// Fanning out in parallel matches the shape of the `stream_reorg` fanout
+    /// in `handle_reorg`: with N streams configured at ~RTT each, serial
+    /// awaits stack to N*RTT and block the indexing pipeline.
+    async fn flush_finalized_buffers(&self, block_number: u64) {
+        if self.streams_clients.is_empty() {
+            return;
+        }
+        let snapshot: Vec<Arc<Option<StreamsClients>>> =
+            self.streams_clients.iter().map(Arc::clone).collect();
+        let network = self.network.clone();
+        let futures = snapshot.into_iter().filter_map(|clients_arc| {
+            clients_arc.as_ref().as_ref()?;
+            let network = network.clone();
+            Some(async move {
+                let clients = clients_arc.as_ref().as_ref().expect("filter_map above ensures Some");
+                (network.clone(), clients.flush_finalized(&network, block_number).await)
+            })
+        });
+        let results = futures::future::join_all(futures).await;
+        for (network, res) in results {
+            if let Err(e) = res {
+                warn!(
+                    network = %network,
+                    block_number,
+                    error = ?e,
+                    "Finalized buffer flush failed"
+                );
             }
         }
     }
@@ -300,26 +339,28 @@ impl ReorgCoordinator {
         })
     }
 
-    /// Handle reth ExEx notification — fork point provided directly.
-    /// `revert_from_block` is the higher block (detection point),
-    /// `revert_to_block` is the lower block (fork point).
+    /// Handle reth ExEx notification — fork point provided directly. Matches
+    /// reth's `old_range.start()/end()` convention: `revert_from_block` is
+    /// the lowest reverted block (first reorged), `revert_to_block` is the
+    /// highest. Both are inclusive; the reverted span is
+    /// `[revert_from_block, revert_to_block]`.
     pub fn on_exex_reorg(
         &self,
         revert_from_block: u64,
         revert_to_block: u64,
     ) -> anyhow::Result<ReorgTask> {
         anyhow::ensure!(
-            revert_to_block <= revert_from_block,
-            "revert_to_block ({}) must be <= revert_from_block ({})",
-            revert_to_block,
-            revert_from_block
+            revert_from_block <= revert_to_block,
+            "revert_from_block ({}) must be <= revert_to_block ({})",
+            revert_from_block,
+            revert_to_block
         );
         metrics::record_reorg_detection_source(&self.network, "exex");
-        metrics::record_reorg(&self.network, revert_from_block - revert_to_block + 1);
+        metrics::record_reorg(&self.network, revert_to_block - revert_from_block + 1);
         Ok(ReorgTask {
             network: self.network.clone(),
-            fork_point: revert_to_block,
-            detection_point: revert_from_block,
+            fork_point: revert_from_block,
+            detection_point: revert_to_block,
             event_tables: self.event_tables.clone(),
             derived_tables: self.derived_tables.clone(),
             canonical_blocks: vec![],
@@ -384,6 +425,24 @@ impl ReorgCoordinator {
             }
             if let Some(trace_registry) = ctx.trace_registry {
                 trace_registry.fire_on_reorg(notification).await;
+            }
+        }
+
+        // Discard any finalized-delivery events buffered for the invalidated
+        // range BEFORE publishing the reorg notification. If we reversed the
+        // order, a concurrent `flush_finalized` from a subsequent
+        // `on_new_block` could drain invalidated events between the notify and
+        // the discard. `handle_reorg` runs serially inside the coordinator, so
+        // this block also fences any later flush until we return.
+        for clients_arc in &self.streams_clients {
+            if let Some(clients) = clients_arc.as_ref().as_ref() {
+                clients
+                    .discard_finalized(
+                        &reorg_task.network,
+                        reorg_task.fork_point,
+                        reorg_task.detection_point,
+                    )
+                    .await;
             }
         }
 
@@ -762,7 +821,7 @@ mod tests {
         };
 
         // on_exex_reorg creates a task — verify derived_tables are included
-        let task = coordinator.on_exex_reorg(12, 10).unwrap();
+        let task = coordinator.on_exex_reorg(10, 12).unwrap();
         assert_eq!(task.derived_tables.len(), 2);
         assert_eq!(task.derived_tables[0].full_table_name, "schema.balances");
         assert!(!task.derived_tables[0].cross_chain);
@@ -818,10 +877,172 @@ mod tests {
             blocks_since_flush: 0,
         };
 
-        let task = coordinator.on_exex_reorg(110, 100).unwrap();
+        let task = coordinator.on_exex_reorg(101, 110).unwrap();
         assert_eq!(task.network, "test");
-        assert_eq!(task.fork_point, 100);
+        assert_eq!(task.fork_point, 101);
         assert_eq!(task.detection_point, 110);
         assert_eq!(task.event_tables.len(), 1);
+    }
+
+    // ======================================================================
+    // End-to-end: reth reorg notification → coordinator → FinalizedBuffer
+    //
+    // Locks in the post-fix invariant that a reth-shaped reorg notification
+    // (`revert_from < revert_to`) drives `discard_finalized` across the
+    // exact span of reverted blocks. Before the fix the chain collapsed to a
+    // single-block discard, leaking reverted events to downstream consumers.
+    // ======================================================================
+
+    fn make_coordinator_with_streams(
+        window: BlockChainWindow,
+        streams_clients: Vec<Arc<Option<StreamsClients>>>,
+    ) -> ReorgCoordinator {
+        let persistence = Arc::new(ReorgBlockHashPersistence::new(None, None));
+        ReorgCoordinator {
+            network: "ethereum".to_string(),
+            window,
+            persistence,
+            provider: None,
+            event_tables: vec![],
+            derived_tables: vec![],
+            streams_clients,
+            blocks_since_flush: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_discards_exact_reverted_span_from_buffer() {
+        // Seed the finalized buffer with blocks 95..=115. A reth reorg of
+        // blocks 101..=110 (inclusive on both ends) must leave exactly
+        // [95..=100] ∪ [111..=115] in the buffer.
+        let clients = StreamsClients::empty_for_test();
+        let blocks: Vec<u64> = (95..=115).collect();
+        clients.test_seed_finalized_buffer("ethereum", "Transfer", &blocks, 10).await;
+        let streams = vec![Arc::new(Some(clients))];
+
+        let window = make_window_with_blocks(&[(99, 99, 98), (100, 100, 99)]);
+        let mut coordinator = make_coordinator_with_streams(window, streams.clone());
+
+        let task = coordinator.on_exex_reorg(101, 110).unwrap();
+        let ctx =
+            ReorgContext { postgres: None, clickhouse: None, registry: None, trace_registry: None };
+        coordinator.handle_reorg(task, &ctx).await.unwrap();
+
+        let remaining =
+            streams[0].as_ref().as_ref().unwrap().test_buffered_blocks("ethereum").await;
+        let expected: Vec<u64> = (95..=100).chain(111..=115).collect();
+        assert_eq!(
+            remaining, expected,
+            "handle_reorg must discard exactly the [fork_point, detection_point] span"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_full_roundtrip_from_reth_notification() {
+        // Drives the full chain: ChainStateNotification::Reorged (as reth
+        // emits it) → handle_chain_notification → ReorgInfo → the arithmetic
+        // applied by `fetch_logs.rs` (fork_block + depth - 1 = last_reverted)
+        // → on_exex_reorg → handle_reorg → FinalizedBuffer::discard_range.
+        //
+        // This is the one test that would have caught the original
+        // inverted-semantic bug end-to-end. Pre-fix: depth saturated to 0
+        // and fork_block pointed at the highest reverted block, so the
+        // discard collapsed to a single block and 101..=109 leaked.
+        use crate::indexer::reorg::handle_chain_notification;
+        use crate::notifications::ChainStateNotification;
+        use alloy::primitives::B256;
+
+        let clients = StreamsClients::empty_for_test();
+        let blocks: Vec<u64> = (95..=115).collect();
+        clients.test_seed_finalized_buffer("ethereum", "Transfer", &blocks, 10).await;
+        let streams = vec![Arc::new(Some(clients))];
+        let mut coordinator = make_coordinator_with_streams(
+            make_window_with_blocks(&[(99, 99, 98), (100, 100, 99)]),
+            streams.clone(),
+        );
+
+        // Reth's native range form: start=lowest, end=highest (both inclusive).
+        let notification = ChainStateNotification::Reorged {
+            revert_from_block: 101,
+            revert_to_block: 110,
+            new_from_block: 101,
+            new_to_block: 112,
+            new_tip_hash: B256::from([0xab; 32]),
+        };
+
+        let reorg_info =
+            handle_chain_notification(notification, "roundtrip", "ethereum").expect("reorg");
+        assert_eq!(reorg_info.fork_block.to::<u64>(), 101);
+        assert_eq!(reorg_info.depth, 10);
+
+        // The same arithmetic the `fetch_logs` reth consumer applies.
+        let fork_block = reorg_info.fork_block.to::<u64>();
+        let last_reverted = fork_block + reorg_info.depth.saturating_sub(1);
+        assert_eq!(last_reverted, 110);
+
+        let task = coordinator.on_exex_reorg(fork_block, last_reverted).unwrap();
+        assert_eq!(task.fork_point, 101);
+        assert_eq!(task.detection_point, 110);
+
+        let ctx =
+            ReorgContext { postgres: None, clickhouse: None, registry: None, trace_registry: None };
+        coordinator.handle_reorg(task, &ctx).await.unwrap();
+
+        let remaining =
+            streams[0].as_ref().as_ref().unwrap().test_buffered_blocks("ethereum").await;
+        let expected: Vec<u64> = (95..=100).chain(111..=115).collect();
+        assert_eq!(remaining, expected);
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_single_block_depth_discards_only_that_block() {
+        // Minimum-depth reorg (`revert_from == revert_to`). fetch_logs'
+        // `depth.saturating_sub(1)` must produce `last_reverted == fork`,
+        // so the discard range is [n, n].
+        let clients = StreamsClients::empty_for_test();
+        clients.test_seed_finalized_buffer("ethereum", "Transfer", &[99, 100, 101], 10).await;
+        let streams = vec![Arc::new(Some(clients))];
+        let mut coordinator = make_coordinator_with_streams(
+            make_window_with_blocks(&[(99, 99, 98), (100, 100, 99)]),
+            streams.clone(),
+        );
+
+        let task = coordinator.on_exex_reorg(100, 100).unwrap();
+        let ctx =
+            ReorgContext { postgres: None, clickhouse: None, registry: None, trace_registry: None };
+        coordinator.handle_reorg(task, &ctx).await.unwrap();
+
+        let remaining =
+            streams[0].as_ref().as_ref().unwrap().test_buffered_blocks("ethereum").await;
+        assert_eq!(remaining, vec![99, 101]);
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_fans_out_across_all_streams_on_network() {
+        // Reorg-discard fanout: two independent StreamsClients (e.g. the
+        // contract-events and native-transfers pipelines) on the same
+        // network must both see the discard. Verifies the coordinator
+        // iterates `streams_clients` rather than touching only the first.
+        let a = StreamsClients::empty_for_test();
+        let b = StreamsClients::empty_for_test();
+        a.test_seed_finalized_buffer("ethereum", "Transfer", &[100, 101, 102], 10).await;
+        b.test_seed_finalized_buffer("ethereum", "Transfer", &[100, 101, 102], 10).await;
+        let streams = vec![Arc::new(Some(a)), Arc::new(Some(b))];
+        let mut coordinator = make_coordinator_with_streams(
+            make_window_with_blocks(&[(99, 99, 98), (100, 100, 99)]),
+            streams.clone(),
+        );
+
+        let task = coordinator.on_exex_reorg(101, 102).unwrap();
+        let ctx =
+            ReorgContext { postgres: None, clickhouse: None, registry: None, trace_registry: None };
+        coordinator.handle_reorg(task, &ctx).await.unwrap();
+
+        for s in &streams {
+            assert_eq!(
+                s.as_ref().as_ref().unwrap().test_buffered_blocks("ethereum").await,
+                vec![100]
+            );
+        }
     }
 }

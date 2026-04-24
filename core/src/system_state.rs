@@ -37,6 +37,15 @@ pub fn is_running() -> bool {
     IS_RUNNING.load(Ordering::SeqCst)
 }
 
+/// Test-only: restore `IS_RUNNING` to `true` between iterations of an
+/// integration test that runs `start_rindexer_no_code` multiple times in
+/// one process. Production code must not call this; the shutdown flag is
+/// intentionally one-way in live operation.
+#[doc(hidden)]
+pub fn _test_reset_shutdown_flag() {
+    IS_RUNNING.store(true, Ordering::SeqCst);
+}
+
 // --- Hot-reload state ---
 
 /// Tracks the current reload state for the health endpoint and orchestrator.

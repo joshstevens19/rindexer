@@ -2,7 +2,10 @@
 
 use std::time::Instant;
 
-use super::definitions::{STREAM_MESSAGES_TOTAL, STREAM_MESSAGE_DURATION};
+use super::definitions::{
+    STREAM_FINALIZED_BUFFER_OVERFLOW_TOTAL, STREAM_MESSAGES_TOTAL, STREAM_MESSAGE_DURATION,
+    STREAM_PUBLISH_DROPPED_TOTAL,
+};
 
 /// Stream type labels for metrics.
 pub mod stream_type {
@@ -26,6 +29,19 @@ pub fn record_stream_error(stream_type: &str, duration_secs: f64) {
     STREAM_MESSAGES_TOTAL.with_label_values(&[stream_type, "error"]).inc();
 
     STREAM_MESSAGE_DURATION.with_label_values(&[stream_type]).observe(duration_secs);
+}
+
+/// Record that a finalized-delivery buffer exceeded its soft cap for a given
+/// `(stream_type, network)` pair. Callers log alongside this for operator
+/// visibility.
+pub fn record_finalized_buffer_overflow(stream_type: &str, network: &str) {
+    STREAM_FINALIZED_BUFFER_OVERFLOW_TOTAL.with_label_values(&[stream_type, network]).inc();
+}
+
+/// Record a terminal publish failure — retries were exhausted and the message
+/// is being dropped. For Instant delivery this is a lost event.
+pub fn record_publish_dropped(stream_type: &str, target: &str) {
+    STREAM_PUBLISH_DROPPED_TOTAL.with_label_values(&[stream_type, target]).inc();
 }
 
 /// Record a stream operation with automatic success/error handling.

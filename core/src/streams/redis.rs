@@ -9,6 +9,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::manifest::stream::RedisStreamConfig;
+use crate::streams::publish_with_retry;
 
 #[derive(Error, Debug)]
 pub enum RedisError {
@@ -50,6 +51,18 @@ impl Redis {
     }
 
     pub async fn publish(
+        &self,
+        message_id: &str,
+        stream_name: &str,
+        message: &Value,
+    ) -> Result<(), RedisError> {
+        publish_with_retry("redis", stream_name, || {
+            self.publish_once(message_id, stream_name, message)
+        })
+        .await
+    }
+
+    async fn publish_once(
         &self,
         message_id: &str,
         stream_name: &str,
