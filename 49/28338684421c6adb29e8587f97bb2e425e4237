@@ -1,0 +1,25 @@
+core/src/indexer/native_transfer.rs
+  9997a21dbd197c7a 739,788,820
+core/src/indexer/start.rs
+  9997a21dbd197c7a 1416-1417,1420
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "4928338684421c6adb29e8587f97bb2e425e4237",
+  "prompts": {
+    "9997a21dbd197c7a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10073143-9b1a-4068-ac5e-f34cd46e3dff",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 6,
+      "total_deletions": 5,
+      "accepted_lines": 6,
+      "overriden_lines": 0
+    }
+  }
+}
