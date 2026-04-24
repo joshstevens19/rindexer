@@ -9,6 +9,7 @@ use alloy::{
 };
 use chrono::Utc;
 use futures::future::BoxFuture;
+use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::{any::Any, sync::Arc, time::Duration};
@@ -253,9 +254,7 @@ impl EventCallbackRegistry {
     }
 
     pub async fn fire_on_reorg(&self, notification: ReorgNotification) {
-        for callback in &self.on_reorg {
-            callback(notification.clone()).await;
-        }
+        fire_on_reorg_isolated(&self.on_reorg, notification, "EventCallbackRegistry").await;
     }
 
     pub async fn trigger_event(&self, id: &String, data: Vec<EventResult>) -> Result<(), String> {
@@ -475,9 +474,7 @@ impl TraceCallbackRegistry {
     }
 
     pub async fn fire_on_reorg(&self, notification: ReorgNotification) {
-        for callback in &self.on_reorg {
-            callback(notification.clone()).await;
-        }
+        fire_on_reorg_isolated(&self.on_reorg, notification, "TraceCallbackRegistry").await;
     }
 
     pub async fn trigger_event(&self, id: &String, data: Vec<TraceResult>) -> Result<(), String> {
@@ -499,6 +496,27 @@ impl TraceCallbackRegistry {
 
     pub fn complete(&self) -> Arc<Self> {
         Arc::new(self.clone())
+    }
+}
+
+// A panicking user callback must not kill the reorg-handling loop or prevent
+// other registered callbacks from firing, so each invocation is isolated with
+// `catch_unwind`.
+async fn fire_on_reorg_isolated(
+    callbacks: &[OnReorgCallback],
+    notification: ReorgNotification,
+    registry_name: &'static str,
+) {
+    for (idx, callback) in callbacks.iter().enumerate() {
+        let fut = std::panic::AssertUnwindSafe(callback(notification.clone()));
+        if let Err(panic) = fut.catch_unwind().await {
+            let msg = panic
+                .downcast_ref::<&'static str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "<non-string panic payload>".to_string());
+            error!("{registry_name}: on_reorg callback #{idx} panicked and was isolated: {msg}");
+        }
     }
 }
 
@@ -762,6 +780,78 @@ mod tests {
         trace_registry.fire_on_reorg(sample_notification()).await;
         assert_eq!(*event_counter.lock().unwrap(), 1);
         assert_eq!(*trace_counter.lock().unwrap(), 1);
+    }
+
+    // ======================================================================
+    // Panic isolation: a panicking user callback must not prevent sibling
+    // callbacks from firing, nor propagate the panic up to the coordinator
+    // (which would kill the reorg-handling loop for the affected network).
+    // ======================================================================
+
+    #[tokio::test]
+    async fn test_event_callback_registry_fire_on_reorg_isolates_panicking_callback() {
+        let fired: Arc<StdMutex<Vec<u32>>> = Arc::new(StdMutex::new(Vec::new()));
+
+        let mut registry = EventCallbackRegistry::new();
+
+        let f1 = Arc::clone(&fired);
+        registry.register_on_reorg(Arc::new(move |_n| {
+            let f1 = Arc::clone(&f1);
+            Box::pin(async move {
+                f1.lock().unwrap().push(1);
+            })
+        }));
+
+        registry.register_on_reorg(Arc::new(move |_n| {
+            Box::pin(async move {
+                panic!("user callback bug");
+            })
+        }));
+
+        let f3 = Arc::clone(&fired);
+        registry.register_on_reorg(Arc::new(move |_n| {
+            let f3 = Arc::clone(&f3);
+            Box::pin(async move {
+                f3.lock().unwrap().push(3);
+            })
+        }));
+
+        registry.fire_on_reorg(sample_notification()).await;
+
+        assert_eq!(*fired.lock().unwrap(), vec![1, 3]);
+    }
+
+    #[tokio::test]
+    async fn test_trace_callback_registry_fire_on_reorg_isolates_panicking_callback() {
+        let fired: Arc<StdMutex<Vec<u32>>> = Arc::new(StdMutex::new(Vec::new()));
+
+        let mut registry = TraceCallbackRegistry::new();
+
+        let f1 = Arc::clone(&fired);
+        registry.register_on_reorg(Arc::new(move |_n| {
+            let f1 = Arc::clone(&f1);
+            Box::pin(async move {
+                f1.lock().unwrap().push(1);
+            })
+        }));
+
+        registry.register_on_reorg(Arc::new(move |_n| {
+            Box::pin(async move {
+                panic!("user callback bug");
+            })
+        }));
+
+        let f3 = Arc::clone(&fired);
+        registry.register_on_reorg(Arc::new(move |_n| {
+            let f3 = Arc::clone(&f3);
+            Box::pin(async move {
+                f3.lock().unwrap().push(3);
+            })
+        }));
+
+        registry.fire_on_reorg(sample_notification()).await;
+
+        assert_eq!(*fired.lock().unwrap(), vec![1, 3]);
     }
 
     fn test_tx_information(network: &str) -> TxInformation {
