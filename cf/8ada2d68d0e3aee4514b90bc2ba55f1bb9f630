@@ -1,0 +1,39 @@
+examples/rust_clickhouse/Cargo.toml
+  fe8ee08cb2266df3 8-9
+cli/Cargo.toml
+  fe8ee08cb2266df3 16-17,19-20,22-25
+examples/rindexer_rust_playground/Cargo.toml
+  fe8ee08cb2266df3 11-12
+examples/clickhouse_factory_indexing/Cargo.toml
+  fe8ee08cb2266df3 11-12
+examples/rindexer_factory_indexing/Cargo.toml
+  fe8ee08cb2266df3 11-12
+Cargo.toml
+  fe8ee08cb2266df3 12-32
+e2e-tests/Cargo.toml
+  fe8ee08cb2266df3 8-19,21-22,24
+xtask/Cargo.toml
+  fe8ee08cb2266df3 7-11
+core/Cargo.toml
+  fe8ee08cb2266df3 15,19-21,25,36,42-43,51-56,59-60,62,65,71,75-76,84,94
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "cf8ada2d68d0e3aee4514b90bc2ba55f1bb9f630",
+  "prompts": {
+    "fe8ee08cb2266df3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "19f69205-4365-4b8c-bc88-1f8725246372",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 103,
+      "total_deletions": 92,
+      "accepted_lines": 78,
+      "overriden_lines": 0
+    }
+  }
+}
