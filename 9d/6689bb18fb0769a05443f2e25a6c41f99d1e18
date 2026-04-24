@@ -1,0 +1,31 @@
+core/src/database/postgres/client.rs
+  71e1f5331ce549d4 10
+core/src/database/clickhouse/client.rs
+  71e1f5331ce549d4 5
+core/src/helpers/mod.rs
+  71e1f5331ce549d4 21
+core/Cargo.toml
+  71e1f5331ce549d4 39
+core/src/helpers/file.rs
+  71e1f5331ce549d4 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "9d6689bb18fb0769a05443f2e25a6c41f99d1e18",
+  "prompts": {
+    "71e1f5331ce549d4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9f80f68e-f933-477d-be1b-f2cbe2f38479",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 5,
+      "total_deletions": 5,
+      "accepted_lines": 9,
+      "overriden_lines": 0
+    }
+  }
+}
