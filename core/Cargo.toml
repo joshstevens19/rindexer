@@ -57,7 +57,6 @@ serenity = { version = "0.12", features = ["client", "framework"] }
 teloxide = "0.17"
 tempfile = { workspace = true }
 thiserror = { workspace = true }
-thread_local = "1.1"
 tokio = { workspace = true }
 tokio-util = { version = "0.7", features = ["rt"] }
 notify = "8.2"
@@ -100,10 +99,10 @@ reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v2.1.
 reth-tracing = { git = "https://github.com/paradigmxyz/reth", tag = "v2.1.0", optional = true }
 
 [target.'cfg(not(windows))'.dependencies]
-rdkafka = { version = "0.38.0", features = ["tokio", "ssl"], optional = true }
+rdkafka = { version = "0.39.0", features = ["tokio", "ssl"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
-rdkafka = { version = "0.38.0", features = ["tokio", "cmake-build", "ssl"], optional = true }
+rdkafka = { version = "0.39.0", features = ["tokio", "cmake-build", "ssl"], optional = true }
 
 [profile.release]
 lto = "fat"
