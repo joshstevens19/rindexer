@@ -1,0 +1,39 @@
+e2e-tests/src/tests/reorg_e2e.rs
+  babcd1c453882c13 100-113,1669-1869,1871-1895,1897-1985,1987-2027,2029-2081
+  a04a6a73b4be9012 114-120,2082-2087,2093-2095,2105-2187,2189-2191,2193-2203,2209,2211,2222-2227,2230-2231,2239-2244,2248-2253,2214
+  22d09adda86e8756 1870,1896,1986,2028
+  3748d9f6e616c3cc 2088-2092,2096-2104,2204-2208,2210,2212-2213,2215,2217-2221,2228-2229,2232-2238
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "f8c1df5dbc3b7f355ad095d555bc08ab66dc2681",
+  "prompts": {
+    "3748d9f6e616c3cc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "37a44a6e-c740-4535-a675-881baebca513",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 37,
+      "overriden_lines": 0
+    },
+    "a04a6a73b4be9012": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7a75fa5a-3eb1-4785-aaa9-b184960ab8e8",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 92,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    }
+  }
+}
