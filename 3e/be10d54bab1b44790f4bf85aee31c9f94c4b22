@@ -1,0 +1,25 @@
+Cargo.toml
+  fe8ee08cb2266df3 15
+.github/workflows/ci.yml
+  fe8ee08cb2266df3 36
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "3ebe10d54bab1b44790f4bf85aee31c9f94c4b22",
+  "prompts": {
+    "fe8ee08cb2266df3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "19f69205-4365-4b8c-bc88-1f8725246372",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 3,
+      "total_deletions": 3,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    }
+  }
+}
