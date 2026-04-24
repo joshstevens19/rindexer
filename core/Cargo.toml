@@ -36,7 +36,7 @@ csv = { workspace = true }
 clickhouse = { version = "0.13.3", features = ["rustls-tls"] }
 deadpool = { version = "0.12", features = ["rt_tokio_1"] }
 deadpool-lapin = "0.13"
-dotenv = "0.15.0"
+dotenvy = "0.15"
 futures = "0.3.31"
 hex = { workspace = true }
 lapin = "3.7.2"

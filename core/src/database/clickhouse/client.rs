@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::{env, time::Instant};
 
 use clickhouse::{Client, Row};
-use dotenv::dotenv;
+use dotenvy::dotenv;
 use serde::Deserialize;
 use tracing::info;
 
