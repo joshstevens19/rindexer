@@ -11,17 +11,16 @@ use tracing::{debug, warn};
 
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::postgres::client::PostgresClient;
-use crate::event::callback_registry::EventCallbackRegistry;
+use crate::event::callback_registry::{EventCallbackRegistry, TraceCallbackRegistry};
 use crate::indexer::fetch_logs::ReorgInfo;
 use crate::metrics::indexing as metrics;
 use crate::notifications::ChainStateNotification;
-use crate::streams::StreamsClients;
 
 pub use coordinator::ReorgCoordinator;
 pub use persistence::ReorgBlockHashPersistence;
 pub use task::{
-    DerivedColumnJournal, DerivedColumnRollback, DerivedTableInfo, DerivedTableRollbackOp,
-    EventTableInfo,
+    AffectedTable, DerivedColumnJournal, DerivedColumnRollback, DerivedTableInfo,
+    DerivedTableRollbackOp, EventTableInfo,
 };
 pub use window::BlockChainWindow;
 
@@ -76,13 +75,15 @@ pub fn validate_sql_value(value: &str, kind: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Bundles the optional DB clients, callback registry, and streams clients
-/// that reorg recovery needs, avoiding parameter sprawl.
+/// Bundles the optional DB clients and callback registries that reorg recovery
+/// needs, avoiding parameter sprawl. Stream-retraction fan-out lives on the
+/// `ReorgCoordinator` itself so a single detection covers every pipeline on
+/// the network.
 pub struct ReorgContext<'a> {
     pub postgres: Option<&'a PostgresClient>,
     pub clickhouse: Option<&'a Arc<ClickhouseClient>>,
     pub registry: Option<&'a EventCallbackRegistry>,
-    pub streams_clients: Option<&'a StreamsClients>,
+    pub trace_registry: Option<&'a TraceCallbackRegistry>,
 }
 
 /// Returns `Some(fork_point)` if a reorg was detected and handled (caller should rewind and `continue`),

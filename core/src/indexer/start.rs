@@ -4,8 +4,8 @@ use alloy::primitives::U64;
 use futures::future::try_join_all;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
+use tokio::sync::Mutex;
 use tokio::{
-    join,
     task::{JoinError, JoinHandle},
     time::Instant,
 };
@@ -190,19 +190,30 @@ async fn start_indexing_traces(
     trace_registry: Arc<TraceCallbackRegistry>,
     cancel_token: CancellationToken,
     progress: Arc<IndexingEventsProgressState>,
+    network_coordinators: &HashMap<String, Arc<Mutex<ReorgCoordinator>>>,
+    no_live_indexing_forced: bool,
 ) -> Result<Vec<JoinHandle<Result<(), ProcessEventError>>>, StartIndexingError> {
     if !manifest.native_transfers.enabled {
         info!("Native transfer indexing disabled!");
         return Ok(vec![]);
     }
 
+    // Historical pass defers to the live pass to avoid double-spawning the NT
+    // pipeline. But when no live pass will follow (e.g. every contract and NT
+    // network has an end_block), this IS NT's only chance to run — so fall
+    // through and spawn it here.
+    if no_live_indexing_forced && manifest.has_any_live_indexing() {
+        info!("Native transfer indexing deferred to live pass to prevent double-spawn");
+        return Ok(vec![]);
+    }
+
     let mut non_blocking_process_events = Vec::new();
 
     // Group events by network to create one pipeline per network
-    let mut network_events: std::collections::HashMap<
+    let mut network_events: HashMap<
         String,
         Vec<&crate::event::callback_registry::TraceCallbackRegistryInformation>,
-    > = std::collections::HashMap::new();
+    > = HashMap::new();
 
     for event in trace_registry.events.iter() {
         for network in event.trace_information.details.iter() {
@@ -255,6 +266,7 @@ async fn start_indexing_traces(
         // Create a shared registry for this network's events
         let network_registry = Arc::new(TraceCallbackRegistry {
             events: events.iter().map(|e| (*e).clone()).collect(),
+            on_reorg: trace_registry.on_reorg.clone(),
         });
 
         let config = Arc::new(TraceProcessingConfig {
@@ -276,6 +288,8 @@ async fn start_indexing_traces(
             cancel_token: cancel_token.clone(),
         });
 
+        let reorg_coordinator = network_coordinators.get(&network_name).cloned();
+
         let block_fetch_handle = tokio::spawn(native_transfer_block_fetch(
             network_details.cached_provider.clone(),
             block_tx,
@@ -286,6 +300,9 @@ async fn start_indexing_traces(
             cancel_token.clone(),
             postgres.clone(),
             first_event.indexer_name.clone(),
+            reorg_coordinator,
+            clickhouse.clone(),
+            trace_registry.clone(),
         ));
 
         non_blocking_process_events.push(block_fetch_handle);
@@ -302,6 +319,166 @@ async fn start_indexing_traces(
     Ok(non_blocking_process_events)
 }
 
+/// Find a provider for a network in the trace registry. Used as a fallback when
+/// the primary lookup (either `registry.events` or `dependency_event_processing_configs`)
+/// has no entry for the network — native-transfer-only networks live only in the
+/// trace registry.
+fn find_provider_in_trace_registry(
+    trace_registry: &TraceCallbackRegistry,
+    network_name: &str,
+) -> Option<Arc<dyn ChainProvider>> {
+    trace_registry
+        .events
+        .iter()
+        .flat_map(|e| e.trace_information.details.iter())
+        .find(|nd| nd.network == network_name)
+        .map(|nd| nd.cached_provider.clone())
+}
+
+/// Collect every distinct `Arc<Option<StreamsClients>>` configured on the given
+/// network across contract events and native-transfer trace events. Dedup is
+/// by `Arc::as_ptr` pointer identity so two pipelines sharing the same instance
+/// only publish once. Entries whose inner `Option` is `None` are skipped.
+fn collect_streams_clients_for_network(
+    registry: &EventCallbackRegistry,
+    trace_registry: &TraceCallbackRegistry,
+    network_name: &str,
+) -> Vec<Arc<Option<crate::streams::StreamsClients>>> {
+    let mut out: Vec<Arc<Option<crate::streams::StreamsClients>>> = Vec::new();
+
+    let mut push = |arc_outer: &Arc<Option<crate::streams::StreamsClients>>| {
+        if arc_outer.as_ref().is_none() {
+            return;
+        }
+        let ptr = Arc::as_ptr(arc_outer);
+        if out.iter().any(|existing| Arc::as_ptr(existing) == ptr) {
+            return;
+        }
+        out.push(Arc::clone(arc_outer));
+    };
+
+    for event in &registry.events {
+        if event.contract.details.iter().any(|d| d.network == network_name) {
+            push(&event.streams_clients);
+        }
+    }
+    for trace_event in &trace_registry.events {
+        if trace_event.trace_information.details.iter().any(|d| d.network == network_name) {
+            push(&trace_event.streams_clients);
+        }
+    }
+
+    out
+}
+
+/// Build derived-table rollback + journal entries for an event's tables and merge
+/// them into `accumulator` keyed by `network`. Shared between contract events and
+/// native-transfer trace events so both sources contribute to reorg rollback.
+fn build_derived_tables_for_event(
+    event_name: &str,
+    indexer_name: &str,
+    contract_name: &str,
+    network: &str,
+    tables: &[crate::indexer::tables::TableRuntime],
+    accumulator: &mut HashMap<String, Vec<DerivedTableInfo>>,
+) -> anyhow::Result<()> {
+    let schema = generate_indexer_contract_schema_name(indexer_name, contract_name);
+    let event_table_full = format!("{}.{}", schema, camel_to_snake(event_name));
+
+    for tr in tables.iter() {
+        let derived = accumulator.entry(network.to_string()).or_default();
+
+        let event_table_name = event_table_full.clone();
+        let mut rollback_ops: Vec<DerivedTableRollbackOp> = Vec::new();
+        let mut journal_columns: Vec<DerivedColumnJournal> = Vec::new();
+
+        for table_event in &tr.table.events {
+            if table_event.event != event_name {
+                continue;
+            }
+            for operation in &table_event.operations {
+                use crate::manifest::contract::OperationType;
+                if !matches!(
+                    operation.operation_type,
+                    OperationType::Upsert | OperationType::Update
+                ) {
+                    continue;
+                }
+
+                let mut where_columns: Vec<(String, String)> = operation
+                    .where_clause
+                    .iter()
+                    .filter_map(|(col, val)| {
+                        val.strip_prefix('$').map(|field| (col.clone(), camel_to_snake(field)))
+                    })
+                    .collect();
+                where_columns.sort_by(|a, b| a.0.cmp(&b.0));
+
+                let where_col_names: Vec<String> =
+                    where_columns.iter().map(|(col, _)| col.clone()).collect();
+
+                let columns: Vec<DerivedColumnRollback> = operation
+                    .set
+                    .iter()
+                    .filter(|set_col| {
+                        set_col.action.reverse().is_some() && set_col.event_field_name().is_some()
+                    })
+                    .map(|set_col| {
+                        DerivedColumnRollback::try_new(
+                            set_col.column.clone(),
+                            camel_to_snake(set_col.event_field_name().unwrap()),
+                            set_col.action.clone(),
+                        )
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+
+                // Collect non-reversible columns for journal-based recalculation
+                for set_col in &operation.set {
+                    if set_col.action.reverse().is_some() {
+                        continue; // handled by rollback_ops
+                    }
+                    if !journal_columns.iter().any(|jc| jc.derived_column == set_col.column) {
+                        journal_columns.push(DerivedColumnJournal::try_new(
+                            set_col.column.clone(),
+                            set_col.action.clone(),
+                            where_col_names.clone(),
+                        )?);
+                    }
+                }
+
+                if !columns.is_empty() {
+                    rollback_ops.push(DerivedTableRollbackOp::try_new(
+                        event_table_name.clone(),
+                        where_columns,
+                        columns,
+                        operation.condition().map(String::from),
+                    )?);
+                }
+            }
+        }
+
+        // Merge into existing entry or create a new one
+        if let Some(existing) = derived.iter_mut().find(|d| d.full_table_name == tr.full_table_name)
+        {
+            existing.rollback_ops.extend(rollback_ops);
+            for jc in journal_columns {
+                if !existing.journal_columns.iter().any(|e| e.derived_column == jc.derived_column) {
+                    existing.journal_columns.push(jc);
+                }
+            }
+        } else {
+            derived.push(DerivedTableInfo::try_new(
+                tr.full_table_name.clone(),
+                tr.table.cross_chain,
+                rollback_ops,
+                journal_columns,
+            )?);
+        }
+    }
+
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn start_indexing_contract_events(
     manifest: &Manifest,
@@ -310,6 +487,7 @@ async fn start_indexing_contract_events(
     clickhouse: Option<Arc<ClickhouseClient>>,
     indexer: &Indexer,
     registry: Arc<EventCallbackRegistry>,
+    trace_registry: Arc<TraceCallbackRegistry>,
     dependencies: &[ContractEventDependencies],
     no_live_indexing_forced: bool,
     cancel_token: CancellationToken,
@@ -320,6 +498,7 @@ async fn start_indexing_contract_events(
         Vec<ProcessedNetworkContract>,
         Vec<(String, Arc<EventProcessingConfig>)>,
         Vec<ContractEventsDependenciesConfig>,
+        HashMap<String, Arc<Mutex<ReorgCoordinator>>>,
     ),
     StartIndexingError,
 > {
@@ -420,113 +599,26 @@ async fn start_indexing_contract_events(
             let schema =
                 generate_indexer_contract_schema_name(&event.indexer_name, &event.contract.name);
             let table_name = camel_to_snake(&event.event_name);
-            let event_table_full = format!("{}.{}", schema, table_name);
             let checkpoint_table = generate_internal_event_table_name(&schema, &event.event_name);
-            network_event_tables
-                .entry(network_contract.network.clone())
-                .or_default()
-                .push(EventTableInfo::try_new(schema, table_name, checkpoint_table)?);
+            network_event_tables.entry(network_contract.network.clone()).or_default().push(
+                EventTableInfo::try_new(
+                    schema,
+                    table_name,
+                    checkpoint_table,
+                    event.indexer_name.clone(),
+                    event.contract.name.clone(),
+                    event.event_name.clone(),
+                )?,
+            );
 
-            for tr in event.tables.iter() {
-                let derived =
-                    network_derived_tables.entry(network_contract.network.clone()).or_default();
-
-                // Build rollback_ops from table event mappings that reference this event
-                let event_table_name = event_table_full.clone();
-                let mut rollback_ops: Vec<DerivedTableRollbackOp> = Vec::new();
-                let mut journal_columns: Vec<DerivedColumnJournal> = Vec::new();
-
-                for table_event in &tr.table.events {
-                    if table_event.event != event.event_name {
-                        continue;
-                    }
-                    for operation in &table_event.operations {
-                        use crate::manifest::contract::OperationType;
-                        if !matches!(
-                            operation.operation_type,
-                            OperationType::Upsert | OperationType::Update
-                        ) {
-                            continue;
-                        }
-
-                        let mut where_columns: Vec<(String, String)> = operation
-                            .where_clause
-                            .iter()
-                            .filter_map(|(col, val)| {
-                                val.strip_prefix('$')
-                                    .map(|field| (col.clone(), camel_to_snake(field)))
-                            })
-                            .collect();
-                        where_columns.sort_by(|a, b| a.0.cmp(&b.0));
-
-                        let where_col_names: Vec<String> =
-                            where_columns.iter().map(|(col, _)| col.clone()).collect();
-
-                        let columns: Vec<DerivedColumnRollback> = operation
-                            .set
-                            .iter()
-                            .filter(|set_col| {
-                                set_col.action.reverse().is_some()
-                                    && set_col.event_field_name().is_some()
-                            })
-                            .map(|set_col| {
-                                DerivedColumnRollback::try_new(
-                                    set_col.column.clone(),
-                                    camel_to_snake(set_col.event_field_name().unwrap()),
-                                    set_col.action.clone(),
-                                )
-                            })
-                            .collect::<anyhow::Result<Vec<_>>>()?;
-
-                        // Collect non-reversible columns for journal-based recalculation
-                        for set_col in &operation.set {
-                            if set_col.action.reverse().is_some() {
-                                continue; // handled by rollback_ops
-                            }
-                            if !journal_columns.iter().any(|jc| jc.derived_column == set_col.column)
-                            {
-                                journal_columns.push(DerivedColumnJournal::try_new(
-                                    set_col.column.clone(),
-                                    set_col.action.clone(),
-                                    where_col_names.clone(),
-                                )?);
-                            }
-                        }
-
-                        if !columns.is_empty() {
-                            rollback_ops.push(DerivedTableRollbackOp::try_new(
-                                event_table_name.clone(),
-                                where_columns,
-                                columns,
-                                operation.condition().map(String::from),
-                            )?);
-                        }
-                    }
-                }
-
-                // Merge into existing entry or create a new one
-                if let Some(existing) =
-                    derived.iter_mut().find(|d| d.full_table_name == tr.full_table_name)
-                {
-                    existing.rollback_ops.extend(rollback_ops);
-                    for jc in journal_columns {
-                        if !existing
-                            .journal_columns
-                            .iter()
-                            .any(|e| e.derived_column == jc.derived_column)
-                        {
-                            existing.journal_columns.push(jc);
-                        }
-                    }
-                } else {
-                    derived.push(DerivedTableInfo::try_new(
-                        tr.full_table_name.clone(),
-                        tr.table.cross_chain,
-                        rollback_ops,
-                        journal_columns,
-                    )?);
-                }
-            }
+            build_derived_tables_for_event(
+                &event.event_name,
+                &event.indexer_name,
+                &event.contract.name,
+                &network_contract.network,
+                &event.tables,
+                &mut network_derived_tables,
+            )?;
         }
     }
 
@@ -542,10 +634,31 @@ async fn start_indexing_contract_events(
                 let table_name = camel_to_snake("NativeTransfer");
                 let checkpoint_table =
                     generate_internal_event_table_name(&schema, "NativeTransfer");
-                network_event_tables
-                    .entry(nt_detail.network.clone())
-                    .or_default()
-                    .push(EventTableInfo::try_new(schema, table_name, checkpoint_table)?);
+                network_event_tables.entry(nt_detail.network.clone()).or_default().push(
+                    EventTableInfo::try_new(
+                        schema,
+                        table_name,
+                        checkpoint_table,
+                        manifest.name.clone(),
+                        NATIVE_TRANSFER_CONTRACT_NAME.to_string(),
+                        "NativeTransfer".to_string(),
+                    )?,
+                );
+            }
+        }
+
+        // Mirror the contract-events pass for native-transfer derived tables: every
+        // trace event contributes rollback ops for each configured network.
+        for trace_event in trace_registry.events.iter() {
+            for network_detail in trace_event.trace_information.details.iter() {
+                build_derived_tables_for_event(
+                    &trace_event.event_name,
+                    &trace_event.indexer_name,
+                    &trace_event.contract_name,
+                    &network_detail.network,
+                    &trace_event.tables,
+                    &mut network_derived_tables,
+                )?;
             }
         }
     }
@@ -561,7 +674,7 @@ async fn start_indexing_contract_events(
     // historical phase — so that stale checkpoints are corrected before events are
     // fetched.  Coordinators are only kept for live indexing; when we are in the
     // historical-only pass they are dropped after validation.
-    let mut network_coordinators: HashMap<String, ReorgCoordinator> = HashMap::new();
+    let mut network_coordinators: HashMap<String, Arc<Mutex<ReorgCoordinator>>> = HashMap::new();
     for (network_name, (reorg_config, chain_id)) in &reorg_configs {
         let window_size = reorg_config
             .window_size
@@ -586,17 +699,22 @@ async fn start_indexing_contract_events(
             }
         };
 
-        // Get a provider for this network from any registry event targeting it
+        // Get a provider for this network from any registry event targeting it.
+        // Native-transfer-only networks have no entry in `registry.events`, so fall back
+        // to the trace registry for those providers.
         let provider = registry
             .events
             .iter()
             .flat_map(|e| e.contract.details.iter())
-            .find(|nc| nc.network == *network_name)
-            .map(|nc| nc.cached_provider.clone());
+            .find(|nc| &nc.network == network_name)
+            .map(|nc| nc.cached_provider.clone())
+            .or_else(|| find_provider_in_trace_registry(&trace_registry, network_name));
 
         if let Some(provider) = provider {
             let derived_tables =
                 network_derived_tables.get(network_name).cloned().unwrap_or_default();
+            let streams_clients =
+                collect_streams_clients_for_network(&registry, &trace_registry, network_name);
             let mut coordinator = ReorgCoordinator::new(
                 network_name.clone(),
                 window,
@@ -604,14 +722,8 @@ async fn start_indexing_contract_events(
                 provider,
                 event_tables,
                 derived_tables,
+                streams_clients,
             )?;
-
-            // Get streams_clients for this network (if any event has one)
-            let startup_streams_clients = registry
-                .events
-                .iter()
-                .find(|e| e.contract.details.iter().any(|d| d.network == *network_name))
-                .map(|e| e.streams_clients.clone());
 
             // Run startup validation
             match coordinator.validate_on_startup().await {
@@ -626,9 +738,7 @@ async fn start_indexing_contract_events(
                         postgres: postgres.as_deref(),
                         clickhouse: clickhouse.as_ref(),
                         registry: Some(&registry),
-                        streams_clients: startup_streams_clients
-                            .as_ref()
-                            .and_then(|a| a.as_ref().as_ref()),
+                        trace_registry: Some(&trace_registry),
                     };
                     if let Err(e) = coordinator.handle_reorg(startup_task, &reorg_ctx).await {
                         error!(
@@ -646,10 +756,13 @@ async fn start_indexing_contract_events(
                 }
             }
 
-            // Only keep coordinators for live indexing; in the historical-only pass
-            // they served their purpose (startup validation) and can be dropped.
+            // Keep the coordinator in the map so non-blocking tasks (contract events
+            // and native-transfer fetchers) can share it during live indexing. In a
+            // pure historical pass the coordinator served its purpose (startup
+            // validation) and can be dropped.
             if !no_live_indexing_forced {
-                network_coordinators.insert(network_name.clone(), coordinator);
+                network_coordinators
+                    .insert(network_name.clone(), Arc::new(Mutex::new(coordinator)));
             }
         }
     }
@@ -813,16 +926,16 @@ async fn start_indexing_contract_events(
                 &dependencies,
             );
         } else {
-            // DESIGN: One ReorgCoordinator per network, owned by the first non-blocking event
-            // spawned on that network. The coordinator holds ALL event tables for the network,
-            // so reorg rollbacks cover every table regardless of which event task drives
-            // detection. Subsequent events on the same network receive None. This means if
-            // the owning task exits or errors, reorg detection stops for the network. A
-            // future improvement could wrap the coordinator in Arc<Mutex<>> for redundancy.
+            // DESIGN: One ReorgCoordinator per network, shared via Arc<Mutex<_>> across
+            // all tasks that can observe a new block for that network (contract-event
+            // pipelines and the native-transfer block fetcher). The coordinator holds
+            // ALL event tables for the network, so reorg rollbacks cover every table
+            // regardless of which task drives detection. The Mutex serializes
+            // `on_new_block`/`handle_reorg` calls so concurrent detection is idempotent.
             let reorg_coordinator =
                 if event_processing_config.live_indexing() && !no_live_indexing_forced {
                     let network_name = event_processing_config.network_contract().network.clone();
-                    network_coordinators.remove(&network_name)
+                    network_coordinators.get(&network_name).cloned()
                 } else {
                     None
                 };
@@ -830,6 +943,7 @@ async fn start_indexing_contract_events(
             let process_event = tokio::spawn(process_non_blocking_event(
                 event_processing_config,
                 reorg_coordinator,
+                Some(trace_registry.clone()),
             ));
             non_blocking_process_events.push(process_event);
         }
@@ -851,10 +965,10 @@ async fn start_indexing_contract_events(
             .collect();
 
         // Build coordinators for networks that weren't already consumed
-        let mut dep_coordinators: HashMap<String, ReorgCoordinator> = HashMap::new();
+        let mut dep_coordinators: HashMap<String, Arc<Mutex<ReorgCoordinator>>> = HashMap::new();
         for network_name in &dep_networks {
-            // Try to take a leftover from the non-blocking build
-            if let Some(coord) = network_coordinators.remove(network_name) {
+            // Share the network's coordinator if one already exists
+            if let Some(coord) = network_coordinators.get(network_name).cloned() {
                 dep_coordinators.insert(network_name.clone(), coord);
                 continue;
             }
@@ -885,16 +999,24 @@ async fn start_indexing_contract_events(
                     }
                 };
 
-                // Get a provider from any dependency event config for this network
+                // Get a provider from any dependency event config for this network.
+                // Fall back to the trace registry so native-transfer-only networks still
+                // have a provider available when this branch is reached.
                 let provider = dependency_event_processing_configs
                     .iter()
                     .flat_map(|dep| dep.events_config.iter())
                     .find(|e| e.network_contract().network == *network_name)
-                    .map(|e| e.network_contract().cached_provider.clone());
+                    .map(|e| e.network_contract().cached_provider.clone())
+                    .or_else(|| find_provider_in_trace_registry(&trace_registry, network_name));
 
                 if let Some(provider) = provider {
                     let derived_tables =
                         network_derived_tables.get(network_name).cloned().unwrap_or_default();
+                    let streams_clients = collect_streams_clients_for_network(
+                        &registry,
+                        &trace_registry,
+                        network_name,
+                    );
                     let mut coordinator = ReorgCoordinator::new(
                         network_name.clone(),
                         window,
@@ -902,14 +1024,8 @@ async fn start_indexing_contract_events(
                         provider,
                         event_tables,
                         derived_tables,
+                        streams_clients,
                     )?;
-
-                    // Get streams_clients for this network from dependency events
-                    let dep_streams_clients = dependency_event_processing_configs
-                        .iter()
-                        .flat_map(|dep| dep.events_config.iter())
-                        .find(|e| e.network_contract().network == *network_name)
-                        .map(|e| e.streams_clients());
 
                     match coordinator.validate_on_startup().await {
                         Ok(Some(startup_task)) => {
@@ -923,9 +1039,7 @@ async fn start_indexing_contract_events(
                                 postgres: postgres.as_deref(),
                                 clickhouse: clickhouse.as_ref(),
                                 registry: Some(&registry),
-                                streams_clients: dep_streams_clients
-                                    .as_ref()
-                                    .and_then(|a| a.as_ref().as_ref()),
+                                trace_registry: Some(&trace_registry),
                             };
                             if let Err(e) = coordinator.handle_reorg(startup_task, &reorg_ctx).await
                             {
@@ -944,7 +1058,11 @@ async fn start_indexing_contract_events(
                         }
                     }
 
-                    dep_coordinators.insert(network_name.clone(), coordinator);
+                    let shared = Arc::new(Mutex::new(coordinator));
+                    dep_coordinators.insert(network_name.clone(), shared.clone());
+                    // Also share with the non-blocking network map so any native-transfer
+                    // task running on this network can reach the same coordinator.
+                    network_coordinators.insert(network_name.clone(), shared);
                 }
             }
         }
@@ -971,6 +1089,7 @@ async fn start_indexing_contract_events(
         processed_network_contracts,
         apply_cross_contract_dependency_events_config_after_processing,
         dependency_event_processing_configs,
+        network_coordinators,
     ))
 }
 
@@ -1049,40 +1168,48 @@ async fn start_indexing(
 
     let indexer = manifest.to_indexer();
 
-    // Start the sub-indexers concurrently to ensure fast startup times
-    let (trace_indexer_handles, contract_events_indexer) = join!(
-        start_indexing_traces(
-            manifest,
-            project_path,
-            database.clone(),
-            clickhouse.clone(),
-            &indexer,
-            trace_registry.clone(),
-            cancel_token.clone(),
-            progress.clone(),
-        ),
-        start_indexing_contract_events(
-            manifest,
-            project_path,
-            database.clone(),
-            clickhouse.clone(),
-            &indexer,
-            registry.clone(),
-            dependencies,
-            no_live_indexing_forced,
-            cancel_token.clone(),
-            progress.clone(),
-        )
-    );
+    // Contract events must complete their setup first so the per-network reorg
+    // coordinators exist before native-transfer tasks look them up. The returned
+    // `network_coordinators` map is shared (each entry is Arc<Mutex<_>>), so
+    // both pipelines observe the same coordinator for any given network.
+    let contract_events_indexer = start_indexing_contract_events(
+        manifest,
+        project_path,
+        database.clone(),
+        clickhouse.clone(),
+        &indexer,
+        registry.clone(),
+        trace_registry.clone(),
+        dependencies,
+        no_live_indexing_forced,
+        cancel_token.clone(),
+        progress.clone(),
+    )
+    .await;
 
     let (
         non_blocking_contract_handles,
         processed_network_contracts,
         apply_cross_contract_dependency_events_config_after_processing,
         mut dependency_event_processing_configs,
+        network_coordinators,
     ) = contract_events_indexer?;
 
-    non_blocking_process_events.extend(trace_indexer_handles?);
+    let trace_indexer_handles = start_indexing_traces(
+        manifest,
+        project_path,
+        database.clone(),
+        clickhouse.clone(),
+        &indexer,
+        trace_registry.clone(),
+        cancel_token.clone(),
+        progress.clone(),
+        &network_coordinators,
+        no_live_indexing_forced,
+    )
+    .await?;
+
+    non_blocking_process_events.extend(trace_indexer_handles);
     non_blocking_process_events.extend(non_blocking_contract_handles);
 
     // apply dependency events config after processing to avoid ordering issues
@@ -1098,6 +1225,7 @@ async fn start_indexing(
     let dependency_handle: JoinHandle<Result<(), ProcessContractsEventsWithDependenciesError>> =
         tokio::spawn(process_contracts_events_with_dependencies(
             dependency_event_processing_configs,
+            trace_registry.clone(),
         ));
 
     let mut handles: Vec<JoinHandle<Result<(), CombinedLogEventProcessingError>>> = Vec::new();
@@ -1500,5 +1628,234 @@ mod tests {
         );
         assert_eq!(end, U64::from(1000));
         assert_eq!(distance, U64::ZERO);
+    }
+
+    // --- Provider / streams_clients lookup tests ---
+    //
+    // These cover the fallback from `registry.events` → `trace_registry.events` for
+    // native-transfer-only networks (Task 1, Step 2 verification).
+
+    use crate::event::callback_registry::{
+        EventCallbackRegistry, TraceCallbackRegistry, TraceCallbackRegistryInformation,
+    };
+    use crate::event::contract_setup::{NetworkTrace, TraceInformation};
+    use crate::manifest::native_transfer::TraceProcessingMethod;
+    use crate::provider::ChainProvider;
+    use futures::future::{BoxFuture, FutureExt};
+
+    fn trace_registry_with_network(
+        network: &str,
+        provider: Arc<dyn ChainProvider>,
+    ) -> TraceCallbackRegistry {
+        let noop_callback: Arc<
+            dyn Fn(
+                    Vec<crate::event::callback_registry::TraceResult>,
+                )
+                    -> BoxFuture<'static, crate::event::callback_registry::EventCallbackResult<()>>
+                + Send
+                + Sync,
+        > = Arc::new(|_| async { Ok(()) }.boxed());
+
+        let trace_info = TraceInformation {
+            name: "NativeTransfer".to_string(),
+            details: vec![NetworkTrace {
+                id: "anvil-trace".to_string(),
+                network: network.to_string(),
+                cached_provider: provider,
+                start_block: None,
+                end_block: None,
+                method: TraceProcessingMethod::EthGetBlockByNumber,
+            }],
+            reorg_safe_distance: None,
+        };
+
+        let info = TraceCallbackRegistryInformation {
+            id: "test-id".to_string(),
+            indexer_name: "test_indexer".to_string(),
+            event_name: "NativeTransfer".to_string(),
+            contract_name: "EvmTraces".to_string(),
+            trace_information: trace_info,
+            callback: noop_callback,
+            tables: Arc::new(Vec::new()),
+            streams_clients: Arc::new(None),
+        };
+
+        TraceCallbackRegistry { events: vec![info], on_reorg: vec![] }
+    }
+
+    #[test]
+    fn provider_lookup_falls_back_to_trace_registry() {
+        // Network "anvil" has no contract events but IS present as a native-transfer
+        // target. The trace-registry helper must resolve to the configured provider;
+        // both coordinator loops (primary + dep-events) call this helper as their
+        // fallback, so a single test covers both callsites.
+        let mock_provider: Arc<dyn ChainProvider> =
+            Arc::new(MockChainProvider::new(31337).with_block_number(100));
+        let trace_registry = trace_registry_with_network("anvil", mock_provider.clone());
+
+        let found = find_provider_in_trace_registry(&trace_registry, "anvil");
+
+        assert!(found.is_some(), "expected provider to be found via trace registry fallback");
+        // Identity check: same Arc instance (contract/trace chain provider is the same pointer).
+        assert!(Arc::ptr_eq(&found.unwrap(), &mock_provider));
+    }
+
+    #[test]
+    fn provider_lookup_returns_none_for_unknown_network() {
+        // Network "mainnet" is not present in the trace registry → None.
+        let mock_provider: Arc<dyn ChainProvider> =
+            Arc::new(MockChainProvider::new(31337).with_block_number(100));
+        let trace_registry = trace_registry_with_network("anvil", mock_provider);
+
+        let found = find_provider_in_trace_registry(&trace_registry, "mainnet");
+
+        assert!(found.is_none(), "expected no provider for unknown network");
+    }
+
+    #[test]
+    fn dep_events_provider_fallback_uses_same_helper() {
+        // Regression test for code-review I1: both the primary and dep-events loops
+        // must resolve native-transfer-only networks via `find_provider_in_trace_registry`.
+        // With `dependency_event_processing_configs` empty (i.e. the primary `.iter()`
+        // step returns nothing for this network), the fallback must still find the
+        // trace-registry provider — i.e. the helper is a drop-in replacement for the
+        // previously-inlined `or_else(|| trace_registry.events.iter()...)` closure.
+        let mock_provider: Arc<dyn ChainProvider> =
+            Arc::new(MockChainProvider::new(31337).with_block_number(100));
+        let trace_registry = trace_registry_with_network("anvil", mock_provider.clone());
+
+        // Simulate the dep-events primary lookup yielding None, then the fallback.
+        let primary: Option<Arc<dyn ChainProvider>> = None;
+        let resolved =
+            primary.or_else(|| find_provider_in_trace_registry(&trace_registry, "anvil"));
+
+        assert!(resolved.is_some(), "dep-events fallback must resolve via trace registry");
+        assert!(Arc::ptr_eq(&resolved.unwrap(), &mock_provider));
+    }
+
+    #[test]
+    fn collect_streams_clients_filters_none_entries() {
+        // The trace-registry fixture uses `Arc::new(None)` for `streams_clients`.
+        // `collect_streams_clients_for_network` must skip entries whose inner
+        // Option is None so the coordinator never iterates an absent client.
+        let mock_provider: Arc<dyn ChainProvider> =
+            Arc::new(MockChainProvider::new(31337).with_block_number(100));
+        let trace_registry = trace_registry_with_network("anvil", mock_provider);
+        let registry = EventCallbackRegistry::new();
+
+        let collected = collect_streams_clients_for_network(&registry, &trace_registry, "anvil");
+
+        assert!(collected.is_empty(), "entries with Arc::new(None) must be filtered out");
+    }
+
+    #[test]
+    fn collect_streams_clients_skips_other_networks() {
+        // An event on a different network must not appear in the collected
+        // vector — the network filter is strict.
+        let mock_provider: Arc<dyn ChainProvider> =
+            Arc::new(MockChainProvider::new(31337).with_block_number(100));
+        let trace_registry = trace_registry_with_network("anvil", mock_provider);
+        let registry = EventCallbackRegistry::new();
+
+        let collected = collect_streams_clients_for_network(&registry, &trace_registry, "mainnet");
+
+        assert!(collected.is_empty(), "no entry matches network 'mainnet'");
+    }
+
+    // --- Derived-table rollback build tests ---
+    //
+    // Verifies that `build_derived_tables_for_event` is symmetric for contract
+    // events and native-transfer trace events: both sources populate
+    // `network_derived_tables` with rollback ops that target their respective
+    // source table.
+
+    #[test]
+    fn build_derived_tables_for_native_transfer_populates_accumulator() {
+        use crate::indexer::tables::TableRuntime;
+        use crate::manifest::contract::{
+            OperationType, SetAction, SetColumn, Table, TableColumn, TableEventMapping,
+            TableOperation,
+        };
+
+        // Minimal derived table: one upsert op keyed by `account` that adds
+        // `$value` to `total_sent` when a NativeTransfer event fires.
+        let table = Table {
+            name: "balances".to_string(),
+            global: false,
+            cross_chain: false,
+            columns: vec![
+                TableColumn {
+                    name: "account".to_string(),
+                    column_type: None,
+                    nullable: false,
+                    default: None,
+                },
+                TableColumn {
+                    name: "total_sent".to_string(),
+                    column_type: None,
+                    nullable: false,
+                    default: None,
+                },
+            ],
+            events: vec![TableEventMapping {
+                event: "NativeTransfer".to_string(),
+                iterate: Vec::new(),
+                operations: vec![TableOperation {
+                    operation_type: OperationType::Upsert,
+                    where_clause: {
+                        let mut m = HashMap::new();
+                        m.insert("account".to_string(), "$from".to_string());
+                        m
+                    },
+                    if_condition: None,
+                    filter: None,
+                    set: vec![SetColumn {
+                        column: "total_sent".to_string(),
+                        action: SetAction::Add,
+                        value: Some("$value".to_string()),
+                    }],
+                }],
+            }],
+            cron: None,
+            timestamp: false,
+            database: None,
+        };
+
+        let runtime = TableRuntime::new(table, "test_indexer", NATIVE_TRANSFER_CONTRACT_NAME);
+        let tables = vec![runtime];
+
+        let mut accumulator: HashMap<String, Vec<DerivedTableInfo>> = HashMap::new();
+        build_derived_tables_for_event(
+            "NativeTransfer",
+            "test_indexer",
+            NATIVE_TRANSFER_CONTRACT_NAME,
+            "anvil",
+            &tables,
+            &mut accumulator,
+        )
+        .expect("build_derived_tables_for_event should succeed");
+
+        let anvil_entries =
+            accumulator.get("anvil").expect("accumulator should contain anvil entry");
+        assert_eq!(anvil_entries.len(), 1, "one derived table expected");
+
+        let entry = &anvil_entries[0];
+        assert!(
+            entry.full_table_name.ends_with("balances"),
+            "full_table_name should end with derived table name, got: {}",
+            entry.full_table_name,
+        );
+        assert_eq!(
+            entry.rollback_ops.len(),
+            1,
+            "one rollback op expected for the upsert-with-add column",
+        );
+        let op = &entry.rollback_ops[0];
+        assert!(
+            op.event_table.contains("native_transfer"),
+            "rollback op should target the native_transfer source table, got: {}",
+            op.event_table,
+        );
+        assert!(entry.journal_columns.is_empty(), "no non-reversible columns in this fixture");
     }
 }

@@ -21,8 +21,9 @@ use crate::metrics::indexing as metrics;
 use crate::provider::ChainProvider;
 use crate::{
     event::{
-        callback_registry::EventResult, config::EventProcessingConfig, BuildRindexerFilterError,
-        RindexerEventFilter,
+        callback_registry::{EventResult, TraceCallbackRegistry},
+        config::EventProcessingConfig,
+        BuildRindexerFilterError, RindexerEventFilter,
     },
     indexer::{
         dependency::{ContractEventsDependenciesConfig, EventDependencies},
@@ -52,11 +53,12 @@ pub enum ProcessEventError {
 /// This function returns immediately without waiting for the indexing to complete.
 pub async fn process_non_blocking_event(
     config: EventProcessingConfig,
-    reorg_coordinator: Option<ReorgCoordinator>,
+    reorg_coordinator: Option<Arc<Mutex<ReorgCoordinator>>>,
+    trace_registry: Option<Arc<TraceCallbackRegistry>>,
 ) -> Result<(), ProcessEventError> {
     debug!("{} - Processing non blocking event", config.info_log_name());
 
-    process_event_logs(Arc::new(config), false, false, reorg_coordinator).await?;
+    process_event_logs(Arc::new(config), false, false, reorg_coordinator, trace_registry).await?;
 
     Ok(())
 }
@@ -70,7 +72,7 @@ pub async fn process_blocking_event_historical_data(
 
     // Historical data processing does not use reorg coordinator — reorgs are only
     // handled during live indexing.
-    process_event_logs(config, true, true, None).await?;
+    process_event_logs(config, true, true, None, None).await?;
 
     Ok(())
 }
@@ -82,7 +84,8 @@ async fn process_event_logs(
     config: Arc<EventProcessingConfig>,
     force_no_live_indexing: bool,
     block_until_indexed: bool,
-    reorg_coordinator: Option<ReorgCoordinator>,
+    reorg_coordinator: Option<Arc<Mutex<ReorgCoordinator>>>,
+    trace_registry: Option<Arc<TraceCallbackRegistry>>,
 ) -> Result<(), Box<ProviderError>> {
     // The concurrency with which we can call the trigger. If the indexer is running in-order
     // we can only call one at a time, otherwise we can call multiple in parallel based on what is
@@ -98,8 +101,12 @@ async fn process_event_logs(
 
     let callback_permits = Arc::new(Semaphore::new(callback_concurrency));
 
-    let mut logs_stream =
-        fetch_logs_stream(Arc::clone(&config), force_no_live_indexing, reorg_coordinator);
+    let mut logs_stream = fetch_logs_stream(
+        Arc::clone(&config),
+        force_no_live_indexing,
+        reorg_coordinator,
+        trace_registry,
+    );
     // Drain inline so handles don't accumulate during infinite live indexing.
     let mut in_flight: FuturesUnordered<JoinHandle<()>> = FuturesUnordered::new();
     let mut pending_error: Option<Box<dyn std::error::Error + Send>> = None;
@@ -256,16 +263,19 @@ pub enum ProcessContractsEventsWithDependenciesError {
 
 pub async fn process_contracts_events_with_dependencies(
     contracts_events_config: Vec<ContractEventsDependenciesConfig>,
+    trace_registry: Arc<TraceCallbackRegistry>,
 ) -> Result<(), ProcessContractsEventsWithDependenciesError> {
     let mut handles: Vec<JoinHandle<Result<(), ProcessContractEventsWithDependenciesError>>> =
         Vec::new();
 
     for contract_events in contracts_events_config {
+        let trace_registry = Arc::clone(&trace_registry);
         let handle = tokio::spawn(async move {
             process_contract_events_with_dependencies(
                 contract_events.event_dependencies,
                 Arc::new(contract_events.events_config),
                 contract_events.reorg_coordinators,
+                trace_registry,
             )
             .await
         });
@@ -310,7 +320,8 @@ pub struct OrderedLiveIndexingDetails {
 async fn process_contract_events_with_dependencies(
     dependencies: EventDependencies,
     events_processing_config: Arc<Vec<Arc<EventProcessingConfig>>>,
-    mut reorg_coordinators: HashMap<String, ReorgCoordinator>,
+    mut reorg_coordinators: HashMap<String, Arc<Mutex<ReorgCoordinator>>>,
+    trace_registry: Arc<TraceCallbackRegistry>,
 ) -> Result<(), ProcessContractEventsWithDependenciesError> {
     let mut stack = vec![dependencies.tree];
 
@@ -353,6 +364,7 @@ async fn process_contract_events_with_dependencies(
                                     cached_provider: network_contract.cached_provider.clone(),
                                     events: Vec::new(),
                                     reorg_coordinator: None,
+                                    trace_registry: None,
                                 });
 
                             let rindexer_event_filter =
@@ -406,6 +418,12 @@ async fn process_contract_events_with_dependencies(
         }
     }
 
+    // Share the trace registry so contract-event reorg detection also fires any
+    // `on_reorg` callbacks registered on the trace path.
+    for config in live_indexing_events.values_mut() {
+        config.trace_registry = Some(Arc::clone(&trace_registry));
+    }
+
     let live_indexing_tasks = live_indexing_events
         .drain()
         .map(|(_, config)| tokio::spawn(live_indexing_for_contract_event_dependencies(config)))
@@ -420,7 +438,10 @@ pub struct EventDependenciesIndexingConfig {
     pub network: String,
     pub cached_provider: Arc<dyn ChainProvider>,
     pub events: Vec<(Arc<EventProcessingConfig>, RindexerEventFilter)>,
-    pub reorg_coordinator: Option<ReorgCoordinator>,
+    pub reorg_coordinator: Option<Arc<Mutex<ReorgCoordinator>>>,
+    /// Trace registry so `on_reorg` callbacks registered on the trace path also
+    /// fire when a reorg is detected by the contract-event pipeline.
+    pub trace_registry: Option<Arc<TraceCallbackRegistry>>,
 }
 
 // TODO - this is a similar to live_indexing_stream but has to be a bit different we should merge
@@ -432,6 +453,7 @@ async fn live_indexing_for_contract_event_dependencies(
         events,
         network,
         reorg_coordinator,
+        trace_registry,
     }: EventDependenciesIndexingConfig,
 ) {
     debug!(
@@ -469,14 +491,11 @@ async fn live_indexing_for_contract_event_dependencies(
     // Use the first event's cancel_token -- all events in this generation share the same token.
     let generation_cancel = events.first().map(|(config, _)| config.cancel_token().clone());
 
-    // Reorg coordinator is mutated in-place during the loop
-    let mut reorg_coordinator = reorg_coordinator;
+    let reorg_coordinator = reorg_coordinator;
 
-    let (pg_client, ch_client, streams_clients, event_registry) = events
+    let (pg_client, ch_client, event_registry) = events
         .first()
-        .map(|(config, _)| {
-            (config.postgres(), config.clickhouse(), config.streams_clients(), config.registry())
-        })
+        .map(|(config, _)| (config.postgres(), config.clickhouse(), config.registry()))
         .expect("live_indexing_for_contract_event_dependencies called with no events");
 
     loop {
@@ -513,16 +532,22 @@ async fn live_indexing_for_contract_event_dependencies(
         };
 
         // Reorg detection: validate parent hash via coordinator
-        if let Some(ref mut coordinator) = reorg_coordinator {
+        if let Some(coordinator) = reorg_coordinator.as_ref() {
             let log_prefix = format!("{} - {}", network, IndexingEventProgressStatus::live_log());
             let reorg_ctx = ReorgContext {
                 postgres: pg_client.as_deref(),
                 clickhouse: ch_client.as_ref(),
                 registry: Some(&event_registry),
-                streams_clients: streams_clients.as_ref().as_ref(),
+                trace_registry: trace_registry.as_deref(),
             };
+            // Mutex held across reorg handling (DB rollback, stream publishes
+            // in parallel, user on_reorg callback firing). On a real reorg
+            // this blocks the other indexing path for the duration of
+            // handle_reorg, which is acceptable for isolation. If latency
+            // becomes a concern, move handle_reorg out of the hot path.
+            let mut guard = coordinator.lock().await;
             match detect_and_handle_reorg(
-                coordinator,
+                &mut guard,
                 latest_block.header.number,
                 latest_block.header.hash,
                 latest_block.header.parent_hash,

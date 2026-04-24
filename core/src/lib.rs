@@ -61,6 +61,7 @@ pub mod phantom;
 pub mod provider;
 mod start;
 mod streams;
+pub use streams::StreamsClients;
 mod types;
 
 mod events;

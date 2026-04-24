@@ -13,6 +13,7 @@ use tokio::{
 use crate::{
     event::{filter_event_data_by_conditions, EventMessage},
     indexer::native_transfer::EVENT_NAME,
+    indexer::reorg::AffectedTable,
     manifest::stream::{
         CloudflareQueuesStreamConfig, CloudflareQueuesStreamQueueConfig, RabbitMQStreamConfig,
         RabbitMQStreamQueueConfig, RedisStreamConfig, RedisStreamStreamConfig,
@@ -189,6 +190,20 @@ impl StreamsClients {
             kafka,
             redis,
             cloudflare_queues,
+        }
+    }
+
+    /// Redirects the Cloudflare Queues client to a different base URL. Intended
+    /// solely for integration tests that mock the Cloudflare REST API with
+    /// `mockito` — prefer configuring the real `api_token`/`account_id` in
+    /// production code.
+    #[doc(hidden)]
+    pub fn set_cloudflare_base_url_for_test(&mut self, base_url: &str) {
+        if let Some(cf) = self.cloudflare_queues.as_mut() {
+            cf.client = Arc::new(
+                CloudflareQueues::new(cf.config.api_token.clone(), cf.config.account_id.clone())
+                    .with_base_url(base_url.to_string()),
+            );
         }
     }
 
@@ -833,12 +848,44 @@ impl StreamsClients {
     }
 
     /// Publishes a `__rindexer_reorg` retraction event to all configured streams.
+    ///
+    /// Routing is delegated to the internal `stream_with_mode` path with
+    /// `force_send_network_wide = true`, which bypasses the per-stream
+    /// `events` filter: every destination whose `networks` list contains the
+    /// affected `network` receives the reorg payload regardless of whether
+    /// `__rindexer_reorg` appears in its configured events. Per-stream-type
+    /// routing behaviour:
+    ///
+    /// - **Webhook**: POST to every endpoint whose `networks` matches.
+    ///   Body is the JSON `EventMessage` with `event_name = "__rindexer_reorg"`.
+    /// - **SNS**: publishes to every topic whose `networks` matches. The
+    ///   payload is the JSON-encoded `EventMessage` string; `event_name` is
+    ///   carried inside the payload (no SNS message attributes are set).
+    /// - **Kafka** *(feature-gated)*: publishes to every configured topic
+    ///   whose `networks` matches. The record `key` is the per-topic
+    ///   `key` from config (not derived from `event_name`); the
+    ///   `x-rindexer-id` header carries the generated message id.
+    /// - **RabbitMQ**: publishes to the configured `exchange` with the
+    ///   configured `routing_key`. Fanout exchanges ignore the routing
+    ///   key. Topic and direct exchanges require a non-`None` routing key
+    ///   at manifest-validation time — this is enforced by
+    ///   [`RabbitMQStreamConfig::validate`].
+    /// - **Redis**: `XADD`s to every configured stream whose `networks`
+    ///   matches, under the `payload` field.
+    /// - **CloudflareQueues**: enqueues (via the Cloudflare REST API) to
+    ///   every queue whose `networks` matches.
+    ///
+    /// All types reach publish through the shared `force_send_network_wide`
+    /// path — no destination is silently dropped because its `events` list
+    /// omits `__rindexer_reorg`.
     pub async fn stream_reorg(
         &self,
         network: &str,
         fork_block: u64,
         depth: u64,
+        events_deleted: u64,
         affected_tx_hashes: &[B256],
+        affected_tables: &[AffectedTable],
     ) -> Result<usize, StreamError> {
         if !self.has_any_streams() {
             return Ok(0);
@@ -849,7 +896,16 @@ impl StreamsClients {
             "network": network,
             "fork_block": fork_block,
             "depth": depth,
+            "events_deleted": events_deleted,
             "affected_tx_hashes": affected_tx_hashes.iter().map(|h| format!("{:#x}", h)).collect::<Vec<_>>(),
+            "affected_events": affected_tables.iter().map(|t| json!({
+                "indexer": t.indexer_name,
+                "contract": t.contract_name,
+                "event": t.event_name,
+                "schema": t.schema,
+                "table": t.table_name,
+                "rows_deleted": t.rows_deleted,
+            })).collect::<Vec<_>>(),
         });
 
         let event_message = EventMessage {
@@ -1299,16 +1355,60 @@ mod tests {
 
     // ---- stream_reorg ----
 
+    fn affected_table(
+        schema: &str,
+        table: &str,
+        indexer: &str,
+        contract: &str,
+        event: &str,
+    ) -> AffectedTable {
+        AffectedTable {
+            schema: schema.to_string(),
+            table_name: table.to_string(),
+            rows_deleted: 0,
+            indexer_name: indexer.to_string(),
+            contract_name: contract.to_string(),
+            event_name: event.to_string(),
+        }
+    }
+
     #[tokio::test]
     async fn stream_reorg_returns_zero_without_streams() {
-        let result = empty_clients().stream_reorg("ethereum", 100, 2, &[]).await;
+        // No streams configured — empty `affected_tables` slice is fine.
+        let result = empty_clients().stream_reorg("ethereum", 100, 2, 0, &[], &[]).await;
         assert_eq!(result.unwrap(), 0);
     }
 
     #[tokio::test]
     async fn stream_reorg_publishes_to_webhook() {
+        // Capture the webhook body and assert the enriched payload shape:
+        // the inner `reorg_payload` carried in `event_data[0]` must contain
+        // `affected_events` with the table metadata we pass in.
         let mut server = mockito::Server::new_async().await;
-        let mock = server.mock("POST", "/hook").with_status(200).create_async().await;
+        let mock = server
+            .mock("POST", "/hook")
+            .match_body(mockito::Matcher::PartialJson(json!({
+                "event_name": "__rindexer_reorg",
+                "network": "ethereum",
+                "event_data": [{
+                    "type": "reorg",
+                    "network": "ethereum",
+                    "fork_block": 100,
+                    "depth": 2,
+                    "events_deleted": 42,
+                    "affected_events": [{
+                        "indexer": "my_indexer",
+                        "contract": "USDC",
+                        "event": "Transfer",
+                        "schema": "my_indexer_usdc",
+                        "table": "transfer",
+                        "rows_deleted": 0,
+                    }],
+                }],
+            })))
+            .with_status(200)
+            .create_async()
+            .await;
 
         let config = WebhookStreamConfig {
             endpoint: format!("{}/hook", server.url()),
@@ -1318,8 +1418,94 @@ mod tests {
             delivery: None,
         };
 
+        let tables =
+            vec![affected_table("my_indexer_usdc", "transfer", "my_indexer", "USDC", "Transfer")];
+        let result = webhook_clients(vec![config])
+            .stream_reorg("ethereum", 100, 2, 42, &[B256::ZERO], &tables)
+            .await;
+
+        assert!(result.is_ok());
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn stream_reorg_payload_includes_native_transfer_rows() {
+        // NativeTransfer-sourced rows must appear as a distinct entry in the
+        // `affected_events` array so downstream consumers can detect them.
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/hook")
+            .match_body(mockito::Matcher::PartialJson(json!({
+                "event_data": [{
+                    "affected_events": [{
+                        "indexer": "my_indexer",
+                        "contract": "EvmTraces",
+                        "event": "NativeTransfer",
+                        "schema": "my_indexer_evm_traces",
+                        "table": "native_transfer",
+                    }],
+                }],
+            })))
+            .with_status(200)
+            .create_async()
+            .await;
+
+        let config = WebhookStreamConfig {
+            endpoint: format!("{}/hook", server.url()),
+            shared_secret: "s".to_string(),
+            networks: vec!["ethereum".to_string()],
+            events: vec![stream_event("Transfer")],
+            delivery: None,
+        };
+
+        let tables = vec![affected_table(
+            "my_indexer_evm_traces",
+            "native_transfer",
+            "my_indexer",
+            "EvmTraces",
+            "NativeTransfer",
+        )];
         let result =
-            webhook_clients(vec![config]).stream_reorg("ethereum", 100, 2, &[B256::ZERO]).await;
+            webhook_clients(vec![config]).stream_reorg("ethereum", 500, 1, 0, &[], &tables).await;
+
+        assert!(result.is_ok());
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn stream_reorg_empty_affected_serializes_empty_array() {
+        // Streams configured, but no affected tables and no affected tx hashes.
+        // The payload must still serialize with `affected_events: []` and
+        // `events_deleted: 0` so downstream consumers can rely on their presence.
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/hook")
+            .match_body(mockito::Matcher::PartialJson(json!({
+                "event_name": "__rindexer_reorg",
+                "network": "ethereum",
+                "event_data": [{
+                    "type": "reorg",
+                    "network": "ethereum",
+                    "fork_block": 7,
+                    "depth": 1,
+                    "events_deleted": 0,
+                    "affected_events": [],
+                }],
+            })))
+            .with_status(200)
+            .create_async()
+            .await;
+
+        let config = WebhookStreamConfig {
+            endpoint: format!("{}/hook", server.url()),
+            shared_secret: "s".to_string(),
+            networks: vec!["ethereum".to_string()],
+            events: vec![stream_event("Transfer")],
+            delivery: None,
+        };
+
+        let result =
+            webhook_clients(vec![config]).stream_reorg("ethereum", 7, 1, 0, &[], &[]).await;
 
         assert!(result.is_ok());
         mock.assert_async().await;

@@ -126,7 +126,7 @@ pub async fn handle_add_contract_command(
         let item = &metadata.items[0];
         if item.proxy == 1 {
             if let Some(implementation) = &item.implementation {
-                abi_lookup_address = implementation.to_string().parse().unwrap();
+                abi_lookup_address = implementation.to_string().parse()?;
                 println!(
                     "This contract is a proxy contract. Loading the implementation contract {abi_lookup_address}"
                 );

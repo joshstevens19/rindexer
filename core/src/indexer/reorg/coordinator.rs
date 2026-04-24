@@ -8,6 +8,7 @@ use tracing::{info, warn};
 use crate::event::callback_registry::ReorgNotification;
 use crate::metrics::indexing as metrics;
 use crate::provider::ChainProvider;
+use crate::streams::StreamsClients;
 
 use super::persistence::ReorgBlockHashPersistence;
 use super::task::{DerivedTableInfo, EventTableInfo, ReorgTask};
@@ -25,6 +26,14 @@ pub struct ReorgCoordinator {
     provider: Option<Arc<dyn ChainProvider>>,
     event_tables: Vec<EventTableInfo>,
     derived_tables: Vec<DerivedTableInfo>,
+    /// All `StreamsClients` configured for this network across every indexing
+    /// pipeline (contract events + native transfers). When a reorg is handled
+    /// we fan the retraction notification across all of them so consumers
+    /// receive it regardless of which pipeline detected the reorg first.
+    /// The outer `Arc<Option<...>>` matches the registry-side ownership; only
+    /// entries whose inner `Option` is `Some` are iterated. The caller is
+    /// expected to pre-filter out `None`-valued entries at construction time.
+    streams_clients: Vec<Arc<Option<StreamsClients>>>,
     blocks_since_flush: u64,
 }
 
@@ -36,6 +45,7 @@ impl ReorgCoordinator {
         provider: Arc<dyn ChainProvider>,
         event_tables: Vec<EventTableInfo>,
         derived_tables: Vec<DerivedTableInfo>,
+        streams_clients: Vec<Arc<Option<StreamsClients>>>,
     ) -> anyhow::Result<Self> {
         super::validate_sql_value(&network, "network name")?;
         Ok(Self {
@@ -45,6 +55,7 @@ impl ReorgCoordinator {
             provider: Some(provider),
             event_tables,
             derived_tables,
+            streams_clients,
             blocks_since_flush: 0,
         })
     }
@@ -361,28 +372,60 @@ impl ReorgCoordinator {
         let affected_tx_hashes: Vec<B256> =
             result.affected_tx_hashes.iter().filter_map(|h| B256::from_str(h).ok()).collect();
 
-        if let Some(registry) = ctx.registry {
+        if ctx.registry.is_some() || ctx.trace_registry.is_some() {
             let notification = ReorgNotification {
                 network: reorg_task.network.clone(),
                 fork_block: reorg_task.fork_point,
                 detection_block: reorg_task.detection_point,
                 invalidated_tx_hashes: affected_tx_hashes.clone(),
             };
-            registry.fire_on_reorg(notification).await;
+            if let Some(registry) = ctx.registry {
+                registry.fire_on_reorg(notification.clone()).await;
+            }
+            if let Some(trace_registry) = ctx.trace_registry {
+                trace_registry.fire_on_reorg(notification).await;
+            }
         }
 
-        // Publish reorg retraction through instant-mode streams (fire-and-forget)
-        if let Some(clients) = ctx.streams_clients {
-            let network = reorg_task.network.clone();
-            let fork_point = reorg_task.fork_point;
-            let depth = reorg_task.detection_point.saturating_sub(reorg_task.fork_point) + 1;
-            let tx_hashes = affected_tx_hashes.clone();
+        // Publish reorg retraction through every configured stream on the network
+        // so notifications reach consumers regardless of which indexing pipeline
+        // (contract events vs native transfers) detected the reorg first.
+        //
+        // Fan out in parallel: with N streams configured at ~RTT each, serial
+        // awaits stack to N*RTT of stall blocking both indexing pipelines. Cheap
+        // Arc clones snapshot the stream set so each future owns its inputs.
+        let streams_snapshot: Vec<Arc<Option<StreamsClients>>> =
+            self.streams_clients.iter().map(Arc::clone).collect();
+        let network = reorg_task.network.clone();
+        let fork_point = reorg_task.fork_point;
+        let depth = reorg_task.detection_point.saturating_sub(reorg_task.fork_point) + 1;
+        let events_deleted = result.events_deleted;
+        let affected_tables = result.affected_tables.clone();
 
-            // stream_reorg requires &self so we need a pointer; StreamsClients is not
-            // Clone, but the callers always have it behind Arc<Option<StreamsClients>>.
-            // Since we only have a reference here, we cannot move it into a spawn.
-            // Keep the await inline (the method is fast — it just publishes to queues).
-            if let Err(e) = clients.stream_reorg(&network, fork_point, depth, &tx_hashes).await {
+        let futures = streams_snapshot.into_iter().filter_map(|clients_arc| {
+            // Skip slots whose inner `Option` is `None`.
+            clients_arc.as_ref().as_ref()?;
+            let network = network.clone();
+            let tx_hashes = affected_tx_hashes.clone();
+            let affected_tables = affected_tables.clone();
+            Some(async move {
+                let clients = clients_arc.as_ref().as_ref().expect("filter_map above ensures Some");
+                clients
+                    .stream_reorg(
+                        &network,
+                        fork_point,
+                        depth,
+                        events_deleted,
+                        &tx_hashes,
+                        &affected_tables,
+                    )
+                    .await
+            })
+        });
+
+        let results = futures::future::join_all(futures).await;
+        for res in results {
+            if let Err(e) = res {
                 tracing::error!(
                     network = %network,
                     fork_point,
@@ -461,6 +504,7 @@ mod tests {
             provider: None,
             event_tables: vec![],
             derived_tables: vec![],
+            streams_clients: vec![],
             blocks_since_flush: 0,
         }
     }
@@ -488,6 +532,63 @@ mod tests {
 
         assert!(result.is_none(), "Expected None for NoPreviousBlock");
         assert!(coordinator.window.get(100).is_some(), "Block should be inserted");
+    }
+
+    #[tokio::test]
+    async fn test_on_new_block_idempotent_for_same_hash() {
+        // Simulate two concurrent detectors (contract events + native transfers)
+        // calling on_new_block with identical (number, hash, parent_hash) after the
+        // Mutex serializes them. The second call must be idempotent — the window
+        // already contains the block with a matching hash, so validation passes
+        // and no reorg is reported.
+        let window = make_window_with_blocks(&[(10, 10, 9), (11, 11, 10)]);
+        let mut coordinator = make_coordinator(window);
+
+        // First call inserts block 12.
+        let first = coordinator.on_new_block(12, hash(12), hash(11)).await.unwrap();
+        assert!(first.is_none(), "first insert should be clean");
+        assert!(coordinator.window.get(12).is_some(), "block 12 should be in window");
+
+        // Second call with the SAME (number, hash, parent_hash) must not panic or
+        // fabricate a reorg. The window's `validate_parent` sees matching parent
+        // hash on block 11 and the insert is a no-op overwrite.
+        let second = coordinator.on_new_block(12, hash(12), hash(11)).await.unwrap();
+        assert!(second.is_none(), "second identical insert must be idempotent");
+        assert!(coordinator.window.get(12).is_some(), "block 12 still in window");
+    }
+
+    #[tokio::test]
+    async fn test_on_new_block_concurrent_same_block_through_arc_mutex() {
+        // Regression test for the shared-coordinator wiring (contract events +
+        // native transfers observe the same tip via Arc<Mutex<ReorgCoordinator>>).
+        // Spawn two tokio tasks that both race to call `on_new_block(12, 12, 11)`.
+        // The Mutex must serialize them; the second caller sees the block already
+        // in the window with a matching hash → validation passes → Ok(None).
+        use tokio::sync::Mutex as AsyncMutex;
+
+        let window = make_window_with_blocks(&[(10, 10, 9), (11, 11, 10)]);
+        let coordinator = Arc::new(AsyncMutex::new(make_coordinator(window)));
+
+        let c1 = Arc::clone(&coordinator);
+        let c2 = Arc::clone(&coordinator);
+
+        let h1 = tokio::spawn(async move {
+            let mut guard = c1.lock().await;
+            guard.on_new_block(12, hash(12), hash(11)).await
+        });
+        let h2 = tokio::spawn(async move {
+            let mut guard = c2.lock().await;
+            guard.on_new_block(12, hash(12), hash(11)).await
+        });
+
+        let r1 = h1.await.expect("task 1 panicked").expect("task 1 returned Err");
+        let r2 = h2.await.expect("task 2 panicked").expect("task 2 returned Err");
+
+        assert!(r1.is_none(), "first caller must see no reorg");
+        assert!(r2.is_none(), "second caller must see no reorg (idempotent)");
+
+        let guard = coordinator.lock().await;
+        assert!(guard.window.get(12).is_some(), "block 12 should remain in the window");
     }
 
     #[tokio::test]
@@ -543,7 +644,7 @@ mod tests {
             postgres: None,
             clickhouse: None,
             registry: Some(&registry),
-            streams_clients: None,
+            trace_registry: None,
         };
 
         coordinator.handle_reorg(task, &ctx).await.unwrap();
@@ -554,6 +655,82 @@ mod tests {
         assert_eq!(notification.fork_block, 11);
         assert_eq!(notification.detection_block, 12);
         assert!(notification.invalidated_tx_hashes.is_empty(), "no PG → no affected hashes");
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_fires_on_reorg_callback_on_trace_registry() {
+        use crate::event::callback_registry::{ReorgNotification, TraceCallbackRegistry};
+        use std::sync::Mutex;
+
+        let window = make_window_with_blocks(&[(10, 10, 9), (11, 11, 10), (12, 12, 11)]);
+        let mut coordinator = make_coordinator(window);
+
+        let task = ReorgTask {
+            network: "test".to_string(),
+            fork_point: 11,
+            detection_point: 12,
+            event_tables: vec![],
+            derived_tables: vec![],
+            canonical_blocks: vec![],
+        };
+
+        let captured: Arc<Mutex<Option<ReorgNotification>>> = Arc::new(Mutex::new(None));
+        let captured_clone = Arc::clone(&captured);
+        let mut trace_registry = TraceCallbackRegistry::new();
+        trace_registry.register_on_reorg(Arc::new(move |notification| {
+            let captured = Arc::clone(&captured_clone);
+            Box::pin(async move {
+                *captured.lock().unwrap() = Some(notification);
+            })
+        }));
+
+        let ctx = ReorgContext {
+            postgres: None,
+            clickhouse: None,
+            registry: None,
+            trace_registry: Some(&trace_registry),
+        };
+
+        coordinator.handle_reorg(task, &ctx).await.unwrap();
+
+        let notification = captured
+            .lock()
+            .unwrap()
+            .take()
+            .expect("trace_registry on_reorg callback was not fired");
+        assert_eq!(notification.network, "test");
+        assert_eq!(notification.fork_block, 11);
+        assert_eq!(notification.detection_block, 12);
+        assert!(notification.invalidated_tx_hashes.is_empty(), "no PG → no affected hashes");
+    }
+
+    #[tokio::test]
+    async fn test_trace_registry_fire_on_reorg_direct() {
+        use crate::event::callback_registry::{ReorgNotification, TraceCallbackRegistry};
+        use std::sync::Mutex;
+
+        let captured: Arc<Mutex<Option<ReorgNotification>>> = Arc::new(Mutex::new(None));
+        let captured_clone = Arc::clone(&captured);
+        let mut trace_registry = TraceCallbackRegistry::new();
+        trace_registry.register_on_reorg(Arc::new(move |notification| {
+            let captured = Arc::clone(&captured_clone);
+            Box::pin(async move {
+                *captured.lock().unwrap() = Some(notification);
+            })
+        }));
+
+        let notification = ReorgNotification {
+            network: "test".to_string(),
+            fork_block: 11,
+            detection_block: 12,
+            invalidated_tx_hashes: vec![],
+        };
+        trace_registry.fire_on_reorg(notification).await;
+
+        let observed = captured.lock().unwrap().take().expect("callback was not fired");
+        assert_eq!(observed.network, "test");
+        assert_eq!(observed.fork_block, 11);
+        assert_eq!(observed.detection_block, 12);
     }
 
     #[test]
@@ -580,6 +757,7 @@ mod tests {
                     journal_columns: vec![],
                 },
             ],
+            streams_clients: vec![],
             blocks_since_flush: 0,
         };
 
@@ -608,6 +786,7 @@ mod tests {
                 rollback_ops: vec![],
                 journal_columns: vec![],
             }],
+            streams_clients: vec![],
             blocks_since_flush: 0,
         };
 
@@ -629,9 +808,13 @@ mod tests {
                 "schema".to_string(),
                 "table".to_string(),
                 "schema_table".to_string(),
+                "test_indexer".to_string(),
+                "TestContract".to_string(),
+                "TestEvent".to_string(),
             )
             .unwrap()],
             derived_tables: vec![],
+            streams_clients: vec![],
             blocks_since_flush: 0,
         };
 

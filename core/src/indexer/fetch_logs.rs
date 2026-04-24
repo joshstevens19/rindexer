@@ -1,14 +1,13 @@
 use crate::adaptive_concurrency::{AdaptiveConcurrency, ADAPTIVE_CONCURRENCY};
 use crate::blockclock::BlockClock;
 use crate::database::clickhouse::client::ClickhouseClient;
-use crate::event::callback_registry::EventCallbackRegistry;
+use crate::event::callback_registry::{EventCallbackRegistry, TraceCallbackRegistry};
 use crate::helpers::{halved_block_number, is_relevant_block};
 use crate::indexer::heartbeat::{HeartbeatAction, HeartbeatTracker};
 use crate::indexer::reorg::{
     detect_and_handle_reorg, reorg_safe_distance_for_chain, ReorgContext, ReorgCoordinator,
 };
 use crate::metrics::indexing as metrics;
-use crate::streams::StreamsClients;
 use crate::PostgresClient;
 use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
@@ -27,6 +26,7 @@ use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
+use tokio::sync::Mutex;
 use tokio::{sync::mpsc, time::Instant};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
@@ -61,7 +61,8 @@ pub struct FetchLogsResult {
 pub fn fetch_logs_stream(
     config: Arc<EventProcessingConfig>,
     force_no_live_indexing: bool,
-    reorg_coordinator: Option<ReorgCoordinator>,
+    reorg_coordinator: Option<Arc<Mutex<ReorgCoordinator>>>,
+    trace_registry: Option<Arc<TraceCallbackRegistry>>,
 ) -> impl tokio_stream::Stream<Item = Result<FetchLogsResult, Box<dyn Error + Send>>> + Send + Unpin
 {
     // If the sink is slower than the producer it can lead to unbounded memory growth and
@@ -241,8 +242,8 @@ pub fn fetch_logs_stream(
                         reorg_coordinator,
                         config.postgres(),
                         config.clickhouse(),
-                        config.streams_clients(),
                         &registry,
+                        trace_registry.as_deref(),
                     )
                     .await;
                 }
@@ -346,8 +347,8 @@ pub fn fetch_logs_stream(
                 reorg_coordinator,
                 config.postgres(),
                 config.clickhouse(),
-                config.streams_clients(),
                 &registry,
+                trace_registry.as_deref(),
             )
             .await;
         }
@@ -1107,11 +1108,11 @@ async fn live_indexing_stream(
     disable_logs_bloom_checks: bool,
     original_max_limit: Option<U64>,
     cancel_token: CancellationToken,
-    mut reorg_coordinator: Option<ReorgCoordinator>,
+    reorg_coordinator: Option<Arc<Mutex<ReorgCoordinator>>>,
     postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickhouseClient>>,
-    streams_clients: Arc<Option<StreamsClients>>,
     registry: &EventCallbackRegistry,
+    trace_registry: Option<&TraceCallbackRegistry>,
 ) {
     let mut last_seen_block_number = last_seen_block_number;
     let mut log_response_to_large_to_block: Option<U64> = None;
@@ -1165,17 +1166,24 @@ async fn live_indexing_stream(
 
             // Route through coordinator for full recovery (event deletion, checkpoint
             // rewind, derived table rollback, window update) when available.
-            if let Some(ref mut coordinator) = reorg_coordinator {
+            if let Some(coordinator) = reorg_coordinator.as_ref() {
                 let detection_point = fork_block + reth_reorg.depth;
-                match coordinator.on_exex_reorg(detection_point, fork_block) {
+                // Mutex held across reorg handling (DB rollback, stream
+                // publishes in parallel, user on_reorg callback firing). On a
+                // real reorg this blocks the other indexing path for the
+                // duration of handle_reorg, which is acceptable for isolation.
+                // If latency becomes a concern, move handle_reorg out of the
+                // hot path.
+                let mut guard = coordinator.lock().await;
+                match guard.on_exex_reorg(detection_point, fork_block) {
                     Ok(task) => {
                         let reorg_ctx = ReorgContext {
                             postgres: postgres.as_deref(),
                             clickhouse: clickhouse.as_ref(),
                             registry: Some(registry),
-                            streams_clients: streams_clients.as_ref().as_ref(),
+                            trace_registry,
                         };
-                        if let Err(e) = coordinator.handle_reorg(task, &reorg_ctx).await {
+                        if let Err(e) = guard.handle_reorg(task, &reorg_ctx).await {
                             error!("{} - Failed to handle ExEx reorg: {:?}", info_log_name, e);
                         }
                     }
@@ -1236,7 +1244,7 @@ async fn live_indexing_stream(
                     }
 
                     // Reorg detection via coordinator (parent hash validation)
-                    if let Some(ref mut coordinator) = reorg_coordinator {
+                    if let Some(coordinator) = reorg_coordinator.as_ref() {
                         let log_prefix = format!(
                             "{} - {}",
                             info_log_name,
@@ -1246,10 +1254,18 @@ async fn live_indexing_stream(
                             postgres: postgres.as_deref(),
                             clickhouse: clickhouse.as_ref(),
                             registry: Some(registry),
-                            streams_clients: streams_clients.as_ref().as_ref(),
+                            trace_registry,
                         };
+                        // Mutex held across reorg handling (DB rollback,
+                        // stream publishes in parallel, user on_reorg callback
+                        // firing). On a real reorg this blocks the other
+                        // indexing path for the duration of handle_reorg,
+                        // which is acceptable for isolation. If latency
+                        // becomes a concern, move handle_reorg out of the hot
+                        // path.
+                        let mut guard = coordinator.lock().await;
                         match detect_and_handle_reorg(
-                            coordinator,
+                            &mut guard,
                             latest_block.header.number,
                             latest_block.header.hash,
                             latest_block.header.parent_hash,
@@ -1430,22 +1446,27 @@ async fn live_indexing_stream(
                                             // (event deletion, checkpoint rewind, window update).
                                             // Fall back to sending ReorgInfo through the stream when
                                             // the coordinator is not configured.
-                                            if let Some(ref mut coordinator) = reorg_coordinator {
-                                                match coordinator
-                                                    .try_create_reorg_task_for_block_range(
-                                                        min_removed_block,
-                                                        to_block.to::<u64>(),
-                                                    ) {
+                                            if let Some(coordinator) = reorg_coordinator.as_ref() {
+                                                // Mutex held across reorg handling (DB rollback,
+                                                // stream publishes in parallel, user on_reorg
+                                                // callback firing). On a real reorg this blocks
+                                                // the other indexing path for the duration of
+                                                // handle_reorg, which is acceptable for
+                                                // isolation. If latency becomes a concern, move
+                                                // handle_reorg out of the hot path.
+                                                let mut guard = coordinator.lock().await;
+                                                match guard.try_create_reorg_task_for_block_range(
+                                                    min_removed_block,
+                                                    to_block.to::<u64>(),
+                                                ) {
                                                     Ok(task) => {
                                                         let reorg_ctx = ReorgContext {
                                                             postgres: postgres.as_deref(),
                                                             clickhouse: clickhouse.as_ref(),
                                                             registry: Some(registry),
-                                                            streams_clients: streams_clients
-                                                                .as_ref()
-                                                                .as_ref(),
+                                                            trace_registry,
                                                         };
-                                                        if let Err(e) = coordinator
+                                                        if let Err(e) = guard
                                                             .handle_reorg(task, &reorg_ctx)
                                                             .await
                                                         {

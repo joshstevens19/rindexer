@@ -125,15 +125,14 @@ fn write_indexer_events(
         let abi_string = contract.parse_abi(project_path)?;
 
         let code = format!(
-            r##"
-            use alloy::sol;
+            r##"use alloy::sol;
 
-            sol!(
-                #[sol(rpc, all_derives)]
-                {contract_name},
-                r#"{contract_path}"#
-            );
-            "##,
+sol!(
+    #[sol(rpc, all_derives)]
+    {contract_name},
+    r#"{contract_path}"#
+);
+"##,
             contract_name = abigen_contract_name(&contract),
             contract_path = abi_string,
         );
@@ -174,15 +173,14 @@ fn write_indexer_events(
         let abigen_contract_name = format!("Rindexer{NATIVE_TRANSFER_CONTRACT_NAME}Gen");
 
         let code = format!(
-            r##"
-            use alloy::sol;
+            r##"use alloy::sol;
 
-            sol!(
-                #[sol(rpc, all_derives)]
-                {abigen_contract_name},
-                r#"{abi_string}"#
-            );
-            "##,
+sol!(
+    #[sol(rpc, all_derives)]
+    {abigen_contract_name},
+    r#"{abi_string}"#
+);
+"##,
         );
         let code = Code::new(code);
 
@@ -567,7 +565,10 @@ serde = {{ version = "1.0", features = ["derive"] }}
                             indexing_details: if enable_indexer {
                                 Some(IndexingDetails {
                                     registry: register_all_handlers(&manifest_path).await,
-                                    trace_registry: TraceCallbackRegistry { events: vec![] },
+                                    trace_registry: TraceCallbackRegistry {
+                                        events: vec![],
+                                        on_reorg: vec![],
+                                    },
                                     event_stream: None,
                                 })
                             } else {

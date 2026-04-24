@@ -213,13 +213,10 @@ impl ChatClients {
                 if let Some(expression) = &event_for.filter_expression {
                     let result = filter_by_expression(expression, event_data);
 
-                    return match result {
-                        Ok(res) => res,
-                        Err(e) => {
-                            tracing::error!("Error evaluating filter expression: {}", e);
-                            false
-                        }
-                    };
+                    return result.unwrap_or_else(|e| {
+                        tracing::error!("Error evaluating filter expression: {}", e);
+                        false
+                    });
                 }
                 if let Some(conditions) = &event_for.conditions {
                     return filter_event_data_by_conditions(event_data, conditions);
@@ -255,13 +252,10 @@ impl ChatClients {
                 if let Some(expression) = &event_for.filter_expression {
                     let result = filter_by_expression(expression, event_data);
 
-                    return match result {
-                        Ok(res) => res,
-                        Err(e) => {
-                            tracing::error!("Error evaluating filter expression: {}", e);
-                            false
-                        }
-                    };
+                    return result.unwrap_or_else(|e| {
+                        tracing::error!("Error evaluating filter expression: {}", e);
+                        false
+                    });
                 }
                 if let Some(conditions) = &event_for.conditions {
                     return filter_event_data_by_conditions(event_data, conditions);
@@ -297,13 +291,10 @@ impl ChatClients {
                 if let Some(expression) = &event_for.filter_expression {
                     let result = filter_by_expression(expression, event_data);
 
-                    return match result {
-                        Ok(res) => res,
-                        Err(e) => {
-                            tracing::error!("Error evaluating filter expression: {}", e);
-                            false
-                        }
-                    };
+                    return result.unwrap_or_else(|e| {
+                        tracing::error!("Error evaluating filter expression: {}", e);
+                        false
+                    });
                 }
                 if let Some(conditions) = &event_for.conditions {
                     return filter_event_data_by_conditions(event_data, conditions);
@@ -336,13 +327,10 @@ impl ChatClients {
                 if let Some(expression) = &event_for.filter_expression {
                     let result = filter_by_expression(expression, event_data);
 
-                    return match result {
-                        Ok(res) => res,
-                        Err(e) => {
-                            tracing::error!("Error evaluating filter expression: {}", e);
-                            false
-                        }
-                    };
+                    return result.unwrap_or_else(|e| {
+                        tracing::error!("Error evaluating filter expression: {}", e);
+                        false
+                    });
                 }
                 if let Some(conditions) = &event_for.conditions {
                     return filter_event_data_by_conditions(event_data, conditions);
@@ -375,13 +363,10 @@ impl ChatClients {
                 if let Some(expression) = &event_for.filter_expression {
                     let result = filter_by_expression(expression, event_data);
 
-                    return match result {
-                        Ok(res) => res,
-                        Err(e) => {
-                            tracing::error!("Error evaluating filter expression: {}", e);
-                            false
-                        }
-                    };
+                    return result.unwrap_or_else(|e| {
+                        tracing::error!("Error evaluating filter expression: {}", e);
+                        false
+                    });
                 }
                 if let Some(conditions) = &event_for.conditions {
                     return filter_event_data_by_conditions(event_data, conditions);
@@ -413,13 +398,10 @@ impl ChatClients {
                 if let Some(expression) = &event_for.filter_expression {
                     let result = filter_by_expression(expression, event_data);
 
-                    return match result {
-                        Ok(res) => res,
-                        Err(e) => {
-                            tracing::error!("Error evaluating filter expression: {}", e);
-                            false
-                        }
-                    };
+                    return result.unwrap_or_else(|e| {
+                        tracing::error!("Error evaluating filter expression: {}", e);
+                        false
+                    });
                 }
                 if let Some(conditions) = &event_for.conditions {
                     return filter_event_data_by_conditions(event_data, conditions);

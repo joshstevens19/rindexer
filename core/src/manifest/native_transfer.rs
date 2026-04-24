@@ -4,7 +4,7 @@ use alloy::primitives::U64;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::core::serialize_option_u64_as_string;
-use crate::manifest::{chat::ChatConfig, stream::StreamsConfig};
+use crate::manifest::{chat::ChatConfig, contract::Table, stream::StreamsConfig};
 
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
@@ -96,6 +96,11 @@ pub struct NativeTransfers {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reorg_safe_distance: Option<super::contract::ReorgSafeDistance>,
+
+    /// Optional derived/custom tables populated from native-transfer events.
+    /// Mirrors `Contract.tables`; allows reorg rollback to target NT-sourced tables.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tables: Option<Vec<Table>>,
 }
 
 /// The config to enable native transfers. This can be either a "simple" opinionated enable-all, or
@@ -128,6 +133,7 @@ where
             chat: None,
             generate_csv: None,
             reorg_safe_distance: None,
+            tables: None,
         },
         NativeTransferFullOrSimple::Full(transfers) => transfers,
     };

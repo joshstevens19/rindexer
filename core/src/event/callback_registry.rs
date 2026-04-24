@@ -437,6 +437,12 @@ pub struct TraceCallbackRegistryInformation {
     pub contract_name: String,
     pub trace_information: TraceInformation,
     pub callback: TraceCallbackType,
+    /// Derived/custom tables for this trace event (for reorg cleanup).
+    pub tables: Arc<Vec<TableRuntime>>,
+    /// Streams clients for reorg retraction. Shared with the callback params so the
+    /// reorg coordinator can publish rollback notifications to the same stream the
+    /// native-transfer pipeline writes to.
+    pub streams_clients: Arc<Option<StreamsClients>>,
 }
 
 impl TraceCallbackRegistryInformation {
@@ -448,11 +454,12 @@ impl TraceCallbackRegistryInformation {
 #[derive(Clone, Default)]
 pub struct TraceCallbackRegistry {
     pub events: Vec<TraceCallbackRegistryInformation>,
+    pub on_reorg: Vec<OnReorgCallback>,
 }
 
 impl TraceCallbackRegistry {
     pub fn new() -> Self {
-        TraceCallbackRegistry { events: Vec::new() }
+        TraceCallbackRegistry { events: Vec::new(), on_reorg: Vec::new() }
     }
 
     pub fn find_event(&self, id: &String) -> Option<&TraceCallbackRegistryInformation> {
@@ -461,6 +468,16 @@ impl TraceCallbackRegistry {
 
     pub fn register_event(&mut self, event: TraceCallbackRegistryInformation) {
         self.events.push(event);
+    }
+
+    pub fn register_on_reorg(&mut self, callback: OnReorgCallback) {
+        self.on_reorg.push(callback);
+    }
+
+    pub async fn fire_on_reorg(&self, notification: ReorgNotification) {
+        for callback in &self.on_reorg {
+            callback(notification.clone()).await;
+        }
     }
 
     pub async fn trigger_event(&self, id: &String, data: Vec<TraceResult>) -> Result<(), String> {
@@ -538,6 +555,214 @@ where
 mod tests {
     use super::*;
     use alloy::network::AnyRpcBlock;
+    use std::sync::Mutex as StdMutex;
+
+    fn sample_notification() -> ReorgNotification {
+        ReorgNotification {
+            network: "ethereum".to_string(),
+            fork_block: 100,
+            detection_block: 105,
+            invalidated_tx_hashes: vec![TxHash::from([0xab; 32])],
+        }
+    }
+
+    // ======================================================================
+    // ReorgNotification clone / field equality
+    // ======================================================================
+
+    #[test]
+    fn test_reorg_notification_clone() {
+        let n = sample_notification();
+        let cloned = n.clone();
+        assert_eq!(cloned.network, n.network);
+        assert_eq!(cloned.fork_block, n.fork_block);
+        assert_eq!(cloned.detection_block, n.detection_block);
+        assert_eq!(cloned.invalidated_tx_hashes, n.invalidated_tx_hashes);
+    }
+
+    // ======================================================================
+    // EventCallbackRegistry::new / default
+    // ======================================================================
+
+    #[test]
+    fn test_event_callback_registry_new_is_empty() {
+        let registry = EventCallbackRegistry::new();
+        assert!(registry.events.is_empty());
+        assert!(registry.on_reorg.is_empty());
+    }
+
+    #[test]
+    fn test_event_callback_registry_default_is_empty() {
+        let registry = EventCallbackRegistry::default();
+        assert!(registry.events.is_empty());
+        assert!(registry.on_reorg.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_event_callback_registry_fire_on_reorg_no_callbacks_noop() {
+        let registry = EventCallbackRegistry::new();
+        // No callbacks registered → must complete without panic/error.
+        registry.fire_on_reorg(sample_notification()).await;
+    }
+
+    #[tokio::test]
+    async fn test_event_callback_registry_fire_on_reorg_single_callback() {
+        let captured: Arc<StdMutex<Option<ReorgNotification>>> = Arc::new(StdMutex::new(None));
+        let captured_clone = Arc::clone(&captured);
+
+        let mut registry = EventCallbackRegistry::new();
+        registry.register_on_reorg(Arc::new(move |notification| {
+            let captured = Arc::clone(&captured_clone);
+            Box::pin(async move {
+                *captured.lock().unwrap() = Some(notification);
+            })
+        }));
+        assert_eq!(registry.on_reorg.len(), 1);
+
+        registry.fire_on_reorg(sample_notification()).await;
+
+        let observed = captured.lock().unwrap().take().expect("callback should have fired");
+        assert_eq!(observed.network, "ethereum");
+        assert_eq!(observed.fork_block, 100);
+        assert_eq!(observed.detection_block, 105);
+        assert_eq!(observed.invalidated_tx_hashes.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_event_callback_registry_fire_on_reorg_multiple_callbacks() {
+        let counter: Arc<StdMutex<u32>> = Arc::new(StdMutex::new(0));
+        let last_network: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
+
+        let mut registry = EventCallbackRegistry::new();
+        for _ in 0..3 {
+            let counter = Arc::clone(&counter);
+            let last_network = Arc::clone(&last_network);
+            registry.register_on_reorg(Arc::new(move |n| {
+                let counter = Arc::clone(&counter);
+                let last_network = Arc::clone(&last_network);
+                Box::pin(async move {
+                    *counter.lock().unwrap() += 1;
+                    *last_network.lock().unwrap() = Some(n.network);
+                })
+            }));
+        }
+        assert_eq!(registry.on_reorg.len(), 3);
+
+        registry.fire_on_reorg(sample_notification()).await;
+
+        assert_eq!(*counter.lock().unwrap(), 3, "all three callbacks must fire");
+        assert_eq!(last_network.lock().unwrap().as_deref(), Some("ethereum"));
+    }
+
+    // ======================================================================
+    // TraceCallbackRegistry::new / default
+    // ======================================================================
+
+    #[test]
+    fn test_trace_callback_registry_new_is_empty() {
+        let registry = TraceCallbackRegistry::new();
+        assert!(registry.events.is_empty());
+        assert!(registry.on_reorg.is_empty());
+    }
+
+    #[test]
+    fn test_trace_callback_registry_default_is_empty() {
+        let registry = TraceCallbackRegistry::default();
+        assert!(registry.events.is_empty());
+        assert!(registry.on_reorg.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_trace_callback_registry_fire_on_reorg_no_callbacks_noop() {
+        let registry = TraceCallbackRegistry::new();
+        registry.fire_on_reorg(sample_notification()).await;
+    }
+
+    #[tokio::test]
+    async fn test_trace_callback_registry_fire_on_reorg_single_callback() {
+        let captured: Arc<StdMutex<Option<ReorgNotification>>> = Arc::new(StdMutex::new(None));
+        let captured_clone = Arc::clone(&captured);
+
+        let mut registry = TraceCallbackRegistry::new();
+        registry.register_on_reorg(Arc::new(move |notification| {
+            let captured = Arc::clone(&captured_clone);
+            Box::pin(async move {
+                *captured.lock().unwrap() = Some(notification);
+            })
+        }));
+        assert_eq!(registry.on_reorg.len(), 1);
+
+        registry.fire_on_reorg(sample_notification()).await;
+
+        let observed = captured.lock().unwrap().take().expect("callback should have fired");
+        assert_eq!(observed.network, "ethereum");
+        assert_eq!(observed.fork_block, 100);
+        assert_eq!(observed.detection_block, 105);
+    }
+
+    #[tokio::test]
+    async fn test_trace_callback_registry_fire_on_reorg_multiple_callbacks() {
+        let counter: Arc<StdMutex<u32>> = Arc::new(StdMutex::new(0));
+
+        let mut registry = TraceCallbackRegistry::new();
+        for _ in 0..3 {
+            let counter = Arc::clone(&counter);
+            registry.register_on_reorg(Arc::new(move |_n| {
+                let counter = Arc::clone(&counter);
+                Box::pin(async move {
+                    *counter.lock().unwrap() += 1;
+                })
+            }));
+        }
+        assert_eq!(registry.on_reorg.len(), 3);
+
+        registry.fire_on_reorg(sample_notification()).await;
+
+        assert_eq!(*counter.lock().unwrap(), 3, "all three callbacks must fire");
+    }
+
+    // ======================================================================
+    // Independence: EventCallbackRegistry and TraceCallbackRegistry have
+    // separate on_reorg lists.
+    // ======================================================================
+
+    #[tokio::test]
+    async fn test_event_and_trace_registries_have_independent_on_reorg() {
+        let event_counter: Arc<StdMutex<u32>> = Arc::new(StdMutex::new(0));
+        let trace_counter: Arc<StdMutex<u32>> = Arc::new(StdMutex::new(0));
+
+        let mut event_registry = EventCallbackRegistry::new();
+        {
+            let c = Arc::clone(&event_counter);
+            event_registry.register_on_reorg(Arc::new(move |_n| {
+                let c = Arc::clone(&c);
+                Box::pin(async move {
+                    *c.lock().unwrap() += 1;
+                })
+            }));
+        }
+
+        let mut trace_registry = TraceCallbackRegistry::new();
+        {
+            let c = Arc::clone(&trace_counter);
+            trace_registry.register_on_reorg(Arc::new(move |_n| {
+                let c = Arc::clone(&c);
+                Box::pin(async move {
+                    *c.lock().unwrap() += 1;
+                })
+            }));
+        }
+
+        // Firing on the event registry must NOT trigger trace callbacks.
+        event_registry.fire_on_reorg(sample_notification()).await;
+        assert_eq!(*event_counter.lock().unwrap(), 1);
+        assert_eq!(*trace_counter.lock().unwrap(), 0);
+
+        // And vice versa.
+        trace_registry.fire_on_reorg(sample_notification()).await;
+        assert_eq!(*event_counter.lock().unwrap(), 1);
+        assert_eq!(*trace_counter.lock().unwrap(), 1);
+    }
 
     fn test_tx_information(network: &str) -> TxInformation {
         TxInformation {

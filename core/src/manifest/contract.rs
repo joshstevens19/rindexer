@@ -470,7 +470,7 @@ impl Table {
     /// Ok(()) if all `$null` usages are valid, Err with description otherwise.
     pub fn validate_null_values(&self) -> Result<(), String> {
         // Build a set of nullable column names for quick lookup
-        let nullable_columns: std::collections::HashSet<&str> =
+        let nullable_columns: HashSet<&str> =
             self.columns.iter().filter(|c| c.nullable).map(|c| c.name.as_str()).collect();
 
         // Check all operations for $null values
@@ -515,7 +515,7 @@ impl Table {
     /// Ok(()) if all required columns are set, Err with description otherwise.
     pub fn validate_required_columns(&self) -> Result<(), String> {
         // Auto-generated columns that don't need to be set
-        let auto_columns: std::collections::HashSet<&str> = [
+        let auto_columns: HashSet<&str> = [
             "rindexer_sequence_id",
             "network",
             "rindexer_block_number",
@@ -530,7 +530,7 @@ impl Table {
         .collect();
 
         // Columns that have defaults or are nullable don't need to be set
-        let optional_columns: std::collections::HashSet<&str> = self
+        let optional_columns: HashSet<&str> = self
             .columns
             .iter()
             .filter(|c| c.nullable || c.default.is_some())
@@ -541,7 +541,7 @@ impl Table {
         for event_mapping in &self.events {
             for operation in &event_mapping.operations {
                 if operation.operation_type == OperationType::Insert {
-                    let set_columns: std::collections::HashSet<&str> =
+                    let set_columns: HashSet<&str> =
                         operation.set.iter().map(|s| s.column.as_str()).collect();
 
                     for column in &self.columns {
@@ -766,7 +766,7 @@ impl<'de> serde::Deserialize<'de> for ColumnType {
     where
         D: serde::Deserializer<'de>,
     {
-        let s = std::string::String::deserialize(deserializer)?;
+        let s = String::deserialize(deserializer)?;
         ColumnType::from_type_string(&s)
             .ok_or_else(|| serde::de::Error::custom(format!("Unknown column type: {}", s)))
     }
@@ -1453,7 +1453,7 @@ impl Contract {
                 tables
                     .iter()
                     .flat_map(|table| table.events.iter().map(|e| e.event.clone()))
-                    .collect::<std::collections::HashSet<_>>()
+                    .collect::<HashSet<_>>()
                     .into_iter()
                     .collect()
             })

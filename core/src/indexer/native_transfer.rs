@@ -8,17 +8,20 @@ use alloy::{
 };
 use futures::future::try_join_all;
 use serde::Serialize;
+use tokio::sync::Mutex;
 use tokio::{sync::mpsc, time::sleep};
 use tracing::{debug, error, info, warn};
 
 use tokio_util::sync::CancellationToken;
 
+use crate::database::clickhouse::client::ClickhouseClient;
+use crate::indexer::reorg::{detect_and_handle_reorg, ReorgContext, ReorgCoordinator};
 use crate::is_running;
 use crate::provider::RECOMMENDED_RPC_CHUNK_SIZE;
 use crate::PostgresClient;
 use crate::{
     event::{
-        callback_registry::{TraceResult, TxInformation},
+        callback_registry::{TraceCallbackRegistry, TraceResult, TxInformation},
         config::TraceProcessingConfig,
     },
     indexer::{
@@ -99,6 +102,121 @@ async fn push_range(block_tx: &mpsc::Sender<U64>, last: U64, latest: U64) {
     }
 }
 
+/// Result of a reorg check over a pending block range.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum NativeTransferReorgOutcome {
+    /// No coordinator configured; range can be emitted as-is.
+    NoCoordinator,
+    /// All blocks in the range are canonical. Safe to emit.
+    Canonical,
+    /// A reorg was handled. `rewind_to` is the first canonical block to re-fetch
+    /// (inclusive) — the caller rewinds `last_seen_block` to `rewind_to - 1` so
+    /// the next iteration's `from_block` equals `rewind_to`.
+    Rewound { rewind_to: u64 },
+    /// Detection or rollback failed. Caller should back off and retry.
+    Failed,
+}
+
+/// Walk the next contiguous block range `from..=to` against the coordinator,
+/// feeding each canonical block's `(number, hash, parent_hash)` through
+/// `detect_and_handle_reorg`. The first reorg detected rewinds the cursor.
+///
+/// Extracted from `native_transfer_block_fetch` to keep the hot loop readable
+/// and to provide a unit-testable seam for reorg rewind behaviour.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn native_transfer_detect_reorg_in_range(
+    provider: &dyn ChainProvider,
+    coordinator: Option<&Arc<Mutex<ReorgCoordinator>>>,
+    postgres: Option<&PostgresClient>,
+    clickhouse: Option<&Arc<ClickhouseClient>>,
+    trace_registry: Option<&TraceCallbackRegistry>,
+    network: &str,
+    from_block: u64,
+    to_block: u64,
+) -> NativeTransferReorgOutcome {
+    let Some(coordinator) = coordinator else {
+        return NativeTransferReorgOutcome::NoCoordinator;
+    };
+
+    let block_numbers: Vec<U64> = (from_block..=to_block).map(U64::from).collect();
+    let blocks = match provider.get_block_by_number_batch(&block_numbers, false).await {
+        Ok(b) => b,
+        Err(e) => {
+            error!(
+                network,
+                from_block,
+                to_block,
+                error = %e,
+                "Native transfer reorg pre-check: block header fetch failed",
+            );
+            return NativeTransferReorgOutcome::Failed;
+        }
+    };
+
+    // Guard against short reads (RPC lag, chain-tip reorg). Advancing the caller's
+    // cursor on a partial batch would leave a silent gap: blocks requested but not
+    // returned would never be fed to the coordinator, and their native-transfer
+    // rows would never be emitted. Treat as a transient failure so the caller
+    // backs off and retries the same range.
+    if blocks.len() != block_numbers.len() {
+        warn!(
+            network,
+            from_block,
+            to_block,
+            requested = block_numbers.len(),
+            received = blocks.len(),
+            "Native transfer reorg pre-check: short read from provider, retrying",
+        );
+        return NativeTransferReorgOutcome::Failed;
+    }
+
+    // Mutex held across reorg handling (DB rollback, stream publishes in
+    // parallel, user on_reorg callback firing). On a real reorg this blocks
+    // the other indexing path for the duration of handle_reorg, which is
+    // acceptable for isolation. If latency becomes a concern, move
+    // handle_reorg out of the hot path.
+    let mut guard = coordinator.lock().await;
+    let ctx = ReorgContext { postgres, clickhouse, registry: None, trace_registry };
+
+    for block in blocks {
+        let number = block.header.number;
+        let hash = block.header.hash;
+        let parent_hash = block.header.parent_hash;
+        match detect_and_handle_reorg(
+            &mut guard,
+            number,
+            hash,
+            parent_hash,
+            "NativeTransfers",
+            &ctx,
+        )
+        .await
+        {
+            Ok(Some(fork_point)) => {
+                warn!(
+                    network,
+                    fork_point,
+                    detection_block = number,
+                    "Rewinding native transfer fetch to fork point",
+                );
+                return NativeTransferReorgOutcome::Rewound { rewind_to: fork_point };
+            }
+            Ok(None) => {}
+            Err(e) => {
+                error!(
+                    network,
+                    block = number,
+                    error = ?e,
+                    "Native transfer reorg detection failed",
+                );
+                return NativeTransferReorgOutcome::Failed;
+            }
+        }
+    }
+
+    NativeTransferReorgOutcome::Canonical
+}
+
 /// Block publisher.
 ///
 /// This is a long-running process designed to accept a [`Sender`] handle and publish blocks
@@ -115,15 +233,13 @@ pub async fn native_transfer_block_fetch(
     indexing_distance_from_head: U64,
     network: String,
     cancel_token: CancellationToken,
-    _postgres: Option<Arc<PostgresClient>>,
+    postgres: Option<Arc<PostgresClient>>,
     _indexer_name: String,
+    reorg_coordinator: Option<Arc<Mutex<ReorgCoordinator>>>,
+    clickhouse: Option<Arc<ClickhouseClient>>,
+    trace_registry: Arc<TraceCallbackRegistry>,
 ) -> Result<(), ProcessEventError> {
     let mut last_seen_block = start_block;
-
-    // TODO: Native transfer tables are registered in the network's ReorgCoordinator (start.rs)
-    // for rollback during reorg recovery. Detection is driven by the contract event
-    // coordinator on the same network. Standalone native-transfer reorg detection is
-    // not yet implemented.
 
     loop {
         if !is_running() || cancel_token.is_cancelled() {
@@ -131,10 +247,65 @@ pub async fn native_transfer_block_fetch(
             break Ok(());
         }
 
+        // Pace the poll loop so the per-poll tip reorg check below doesn't spin
+        // the CPU when the chain tip is idle. Mirrors the
+        // `target_iteration_duration` used in the contract-event fetch loop.
+        sleep(Duration::from_millis(200)).await;
+
         let latest_block = publisher.get_latest_block().await;
 
         match latest_block {
             Ok(Some(latest_block)) => {
+                // Per-poll tip reorg check: mirrors the contract-event path in
+                // `fetch_logs.rs`. Runs on every iteration — even when no blocks
+                // advanced — so we catch reorgs that rewrite the tip without
+                // moving the block number (e.g. Anvil `anvil_reorg(depth)` that
+                // keeps or lowers the tip height).
+                if let Some(coordinator) = reorg_coordinator.as_ref() {
+                    let tip_number = latest_block.header.number;
+                    let tip_hash = latest_block.header.hash;
+                    let tip_parent = latest_block.header.parent_hash;
+                    let mut guard = coordinator.lock().await;
+                    let ctx = ReorgContext {
+                        postgres: postgres.as_deref(),
+                        clickhouse: clickhouse.as_ref(),
+                        registry: None,
+                        trace_registry: Some(trace_registry.as_ref()),
+                    };
+                    match detect_and_handle_reorg(
+                        &mut guard,
+                        tip_number,
+                        tip_hash,
+                        tip_parent,
+                        "NativeTransfers",
+                        &ctx,
+                    )
+                    .await
+                    {
+                        Ok(Some(fork_point)) => {
+                            drop(guard);
+                            warn!(
+                                network = %network,
+                                fork_point,
+                                "Native transfer tip reorg - rewinding fetch cursor",
+                            );
+                            last_seen_block = U64::from(fork_point.saturating_sub(1));
+                            continue;
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            drop(guard);
+                            error!(
+                                network = %network,
+                                error = ?e,
+                                "Native transfer tip reorg detection failed",
+                            );
+                            sleep(Duration::from_secs(2)).await;
+                            continue;
+                        }
+                    }
+                }
+
                 let block = U64::from(latest_block.header.number);
 
                 // Always trim back to the safe indexing threshold (which is zero if disabled)
@@ -144,10 +315,43 @@ pub async fn native_transfer_block_fetch(
                     let to_block = end_block.map(|end| block.min(end)).unwrap_or(block);
                     let from_block = block.min(last_seen_block + U64::from(1));
 
-                    debug!("Pushing trace blocks {} - {}", from_block, to_block);
+                    // Reorg detection runs on the fetch side so every block - even those
+                    // with zero native transfers - feeds the coordinator's window, keeping
+                    // it contiguous.
+                    let outcome = native_transfer_detect_reorg_in_range(
+                        publisher.as_ref(),
+                        reorg_coordinator.as_ref(),
+                        postgres.as_deref(),
+                        clickhouse.as_ref(),
+                        Some(trace_registry.as_ref()),
+                        &network,
+                        from_block.to::<u64>(),
+                        to_block.to::<u64>(),
+                    )
+                    .await;
 
-                    push_range(&block_tx, from_block, to_block).await;
-                    last_seen_block = to_block;
+                    match outcome {
+                        NativeTransferReorgOutcome::Canonical
+                        | NativeTransferReorgOutcome::NoCoordinator => {
+                            debug!("Pushing trace blocks {} - {}", from_block, to_block);
+                            push_range(&block_tx, from_block, to_block).await;
+                            last_seen_block = to_block;
+                        }
+                        NativeTransferReorgOutcome::Rewound { rewind_to } => {
+                            // `rewind_to` is the first canonical block to re-fetch (inclusive).
+                            // Subtract 1 from the cursor so the next iteration computes
+                            // `from_block = last_seen_block + 1 = rewind_to`, matching the
+                            // coordinator's rollback which deletes rows with
+                            // `block_number >= fork_point`.
+                            last_seen_block = U64::from(rewind_to.saturating_sub(1));
+                            continue;
+                        }
+                        NativeTransferReorgOutcome::Failed => {
+                            // Mirror contract-event backoff: pause before retrying.
+                            sleep(Duration::from_secs(2)).await;
+                            continue;
+                        }
+                    }
                 }
 
                 if end_block.is_some() && block > end_block.expect("must have block") {
@@ -616,7 +820,7 @@ mod tests {
             postgres: None,
             csv_details: None,
             registry: Arc::new(TraceCallbackRegistry::new()),
-            method: crate::manifest::native_transfer::TraceProcessingMethod::TraceBlock,
+            method: TraceProcessingMethod::TraceBlock,
             stream_last_synced_block_file_path: None,
             cancel_token: CancellationToken::new(),
         })
@@ -645,7 +849,7 @@ mod tests {
             gas_limit: 21_000,
             to: TxKind::Call(to),
             value,
-            input: alloy::primitives::Bytes::new(),
+            input: Bytes::new(),
         };
 
         // Dummy sig and hash — we only need the fields, not cryptographic validity.
@@ -732,5 +936,203 @@ mod tests {
         assert_eq!(contracts.len(), 13);
         // 0x8007 is intentionally missing (not a system contract used in transfers)
         assert!(!contracts.contains(&"0x0000000000000000000000000000000000008007".parse().unwrap()));
+    }
+
+    // ----------------------------------------------------------------------
+    // Reorg rewind behaviour
+    // ----------------------------------------------------------------------
+
+    /// Build a block with a fixed parent hash (no transactions). Used to simulate
+    /// canonical vs. reorged chains for the coordinator.
+    fn make_block_with_parent(
+        block_number: u64,
+        block_hash: alloy::primitives::B256,
+        parent_hash: alloy::primitives::B256,
+    ) -> alloy::network::AnyRpcBlock {
+        use alloy::network::{AnyHeader, AnyRpcHeader};
+        use alloy::rpc::types::{Block, BlockTransactions};
+
+        alloy::network::AnyRpcBlock::new(
+            Block::new(
+                AnyRpcHeader::from_sealed(
+                    AnyHeader { number: block_number, parent_hash, ..Default::default() }
+                        .seal(block_hash),
+                ),
+                BlockTransactions::Full(vec![]),
+            )
+            .into(),
+        )
+    }
+
+    fn b256(n: u8) -> alloy::primitives::B256 {
+        let mut bytes = [0u8; 32];
+        bytes[31] = n;
+        alloy::primitives::B256::from(bytes)
+    }
+
+    fn make_test_coordinator(
+        network: &str,
+        window_blocks: &[(u64, u8, u8)],
+        provider: Arc<dyn ChainProvider>,
+    ) -> Arc<Mutex<ReorgCoordinator>> {
+        use crate::indexer::reorg::{BlockChainWindow, ReorgBlockHashPersistence};
+
+        let mut window = BlockChainWindow::try_new(100).unwrap();
+        for &(num, h, p) in window_blocks {
+            window.insert(num, b256(h), b256(p));
+        }
+
+        let persistence = Arc::new(ReorgBlockHashPersistence::new(None, None));
+        let coord = ReorgCoordinator::new(
+            network.to_string(),
+            window,
+            persistence,
+            provider,
+            vec![],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        Arc::new(Mutex::new(coord))
+    }
+
+    #[tokio::test]
+    async fn native_transfer_detects_no_reorg_on_canonical_chain() {
+        // Window has blocks 10, 11. Provider returns canonical 12, 13 whose
+        // parent_hashes chain back to the window. Expect `Canonical`.
+        let canonical_12 = make_block_with_parent(12, b256(12), b256(11));
+        let canonical_13 = make_block_with_parent(13, b256(13), b256(12));
+        let provider: Arc<dyn ChainProvider> =
+            Arc::new(MockChainProvider::new(1).with_blocks(vec![canonical_12, canonical_13]));
+
+        let coordinator =
+            make_test_coordinator("ethereum", &[(10, 10, 9), (11, 11, 10)], provider.clone());
+
+        let outcome = native_transfer_detect_reorg_in_range(
+            provider.as_ref(),
+            Some(&coordinator),
+            None,
+            None,
+            None,
+            "ethereum",
+            12,
+            13,
+        )
+        .await;
+
+        assert_eq!(outcome, NativeTransferReorgOutcome::Canonical);
+    }
+
+    #[tokio::test]
+    async fn native_transfer_rewinds_to_fork_point_on_reorg() {
+        // Window has block 11 with hash=11, parent=10 (pre-reorg state).
+        // Canonical chain now says block 11 has hash=0xFE / parent=10 (reorged).
+        // Fetch range 12..=12 with canonical block 12 whose parent_hash=0xFE
+        // does NOT match the window's stored hash of block 11 → reorg.
+        //
+        // The coordinator then fetches missing blocks from the provider to locate
+        // the fork point; we expose canonical 11 so find_fork_point can succeed.
+        let canonical_11 = make_block_with_parent(11, b256(0xFE), b256(10));
+        let canonical_12 = make_block_with_parent(12, b256(12), b256(0xFE));
+        let provider: Arc<dyn ChainProvider> =
+            Arc::new(MockChainProvider::new(1).with_blocks(vec![canonical_11, canonical_12]));
+
+        let coordinator =
+            make_test_coordinator("ethereum", &[(10, 10, 9), (11, 11, 10)], provider.clone());
+
+        let outcome = native_transfer_detect_reorg_in_range(
+            provider.as_ref(),
+            Some(&coordinator),
+            None,
+            None,
+            None,
+            "ethereum",
+            12,
+            12,
+        )
+        .await;
+
+        // Coordinator's find_fork_point compares the window's entries against
+        // canonical hashes. With window blocks [10, 11] and canonical [11@0xFE, 12@12],
+        // no canonical hash matches any window entry → fork_point falls back to the
+        // oldest window block (10).
+        //
+        // Helper contract: `rewind_to` IS the first canonical block to re-fetch
+        // (inclusive) — equal to `fork_point`.
+        let rewind_to = match outcome {
+            NativeTransferReorgOutcome::Rewound { rewind_to } => rewind_to,
+            other => panic!("expected Rewound, got {other:?}"),
+        };
+        assert_eq!(
+            rewind_to, 10,
+            "helper must return rewind_to == fork_point (the first canonical block to re-fetch)"
+        );
+
+        // Caller contract: applying `last_seen_block = rewind_to - 1` makes the
+        // next iteration's `from_block = last_seen_block + 1 = rewind_to = fork_point`,
+        // so block `fork_point` is NOT skipped. This mirrors the contract-event
+        // path at fetch_logs.rs where `last_seen_block_number = fork_point - 1`.
+        let last_seen_block_after_rewind = U64::from(rewind_to.saturating_sub(1));
+        let next_from_block = last_seen_block_after_rewind + U64::from(1);
+        assert_eq!(
+            next_from_block,
+            U64::from(rewind_to),
+            "caller rewind must set next from_block to fork_point (inclusive)"
+        );
+    }
+
+    #[tokio::test]
+    async fn native_transfer_short_read_returns_failed() {
+        // Provider registered with blocks [10, 11] but caller requests [10, 11, 12].
+        // The helper must detect the short read and return Failed, so the caller
+        // backs off and retries the same range instead of silently advancing
+        // `last_seen_block` past block 12.
+        let canonical_10 = make_block_with_parent(10, b256(10), b256(9));
+        let canonical_11 = make_block_with_parent(11, b256(11), b256(10));
+        let provider: Arc<dyn ChainProvider> =
+            Arc::new(MockChainProvider::new(1).with_blocks(vec![canonical_10, canonical_11]));
+
+        // Coordinator with an empty window so validation would otherwise succeed
+        // — we want to isolate the short-read check.
+        let coordinator = make_test_coordinator("ethereum", &[], provider.clone());
+
+        let outcome = native_transfer_detect_reorg_in_range(
+            provider.as_ref(),
+            Some(&coordinator),
+            None,
+            None,
+            None,
+            "ethereum",
+            10,
+            12,
+        )
+        .await;
+
+        assert_eq!(
+            outcome,
+            NativeTransferReorgOutcome::Failed,
+            "short read (2 blocks returned when 3 requested) must yield Failed",
+        );
+    }
+
+    #[tokio::test]
+    async fn native_transfer_no_coordinator_short_circuits() {
+        // Without a coordinator configured, the helper must return NoCoordinator
+        // so the caller emits the range as-is.
+        let provider: Arc<dyn ChainProvider> = Arc::new(MockChainProvider::new(1));
+
+        let outcome = native_transfer_detect_reorg_in_range(
+            provider.as_ref(),
+            None,
+            None,
+            None,
+            None,
+            "ethereum",
+            12,
+            13,
+        )
+        .await;
+
+        assert_eq!(outcome, NativeTransferReorgOutcome::NoCoordinator);
     }
 }

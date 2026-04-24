@@ -53,7 +53,7 @@ async fn main() {
                 indexing_details: if enable_indexer {
                     Some(IndexingDetails {
                         registry: register_all_handlers(&manifest_path).await,
-                        trace_registry: TraceCallbackRegistry { events: vec![] },
+                        trace_registry: TraceCallbackRegistry { events: vec![], on_reorg: vec![] },
                         event_stream: None,
                     })
                 } else {

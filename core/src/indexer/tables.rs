@@ -208,14 +208,9 @@ impl ProgressCheckpointConfig {
                 "UPDATE rindexer_internal.{table_name} SET last_synced_block = {block_number} WHERE network = '{network}' AND {block_number} > last_synced_block"
             );
             if let Err(e) = postgres.batch_execute(&query).await {
-                tracing::warn!("Failed to checkpoint progress at block {}: {:?}", block_number, e);
+                warn!("Failed to checkpoint progress at block {}: {:?}", block_number, e);
             } else {
-                tracing::info!(
-                    "Checkpointed {}::{} at block {}",
-                    self.event_name,
-                    network,
-                    block_number
-                );
+                info!("Checkpointed {}::{} at block {}", self.event_name, network, block_number);
             }
         }
     }
@@ -363,19 +358,16 @@ async fn get_events_processed(event_name: &str, network: &str) -> usize {
 const DEFAULT_MAX_CONCURRENT_VIEW_CALLS: usize = 10;
 
 /// Semaphore to limit concurrent individual view calls.
-static VIEW_CALL_SEMAPHORE: Lazy<RwLock<std::sync::Arc<tokio::sync::Semaphore>>> =
-    Lazy::new(|| {
-        RwLock::new(std::sync::Arc::new(tokio::sync::Semaphore::new(
-            DEFAULT_MAX_CONCURRENT_VIEW_CALLS,
-        )))
-    });
+static VIEW_CALL_SEMAPHORE: Lazy<RwLock<Arc<tokio::sync::Semaphore>>> = Lazy::new(|| {
+    RwLock::new(Arc::new(tokio::sync::Semaphore::new(DEFAULT_MAX_CONCURRENT_VIEW_CALLS)))
+});
 
 /// Configure the maximum number of concurrent view calls.
 /// Should be called once at startup before any view calls are made.
 /// If not called, defaults to 10 concurrent calls.
 pub async fn configure_view_call_limit(limit: usize) {
     let mut semaphore = VIEW_CALL_SEMAPHORE.write().await;
-    *semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(limit));
+    *semaphore = Arc::new(tokio::sync::Semaphore::new(limit));
     info!("View call concurrency limit set to {}", limit);
 }
 
@@ -425,9 +417,9 @@ async fn prefetch_view_calls(
     tables: &[TableRuntime],
     event_name: &str,
     events_data: &[(Vec<LogParam>, String, TxMetadata)],
-    providers: &std::collections::HashMap<String, Arc<dyn ChainProvider>>,
+    providers: &HashMap<String, Arc<dyn ChainProvider>>,
     constants: &Constants,
-    multicall_addresses: &std::collections::HashMap<String, Option<String>>,
+    multicall_addresses: &HashMap<String, Option<String>>,
 ) {
     use std::collections::HashSet;
 
@@ -615,8 +607,7 @@ async fn prefetch_view_calls(
     let networks_without_multicall = NETWORKS_WITHOUT_MULTICALL3.read().await;
 
     // Group calls by (network, block_number) for batching
-    let mut grouped: std::collections::HashMap<(String, u64), Vec<PendingViewCall>> =
-        std::collections::HashMap::new();
+    let mut grouped: HashMap<(String, u64), Vec<PendingViewCall>> = HashMap::new();
     for call in &pending_calls {
         grouped.entry((call.network.clone(), call.block_number)).or_default().push(call.clone());
     }
@@ -837,8 +828,8 @@ async fn prefetch_view_calls(
 /// Results are stored in STATIC_CALL_CACHE.
 async fn prefetch_static_calls_via_multicall(
     pending_calls: Vec<PendingViewCall>,
-    providers: &std::collections::HashMap<String, Arc<dyn ChainProvider>>,
-    multicall_addresses: &std::collections::HashMap<String, Option<String>>,
+    providers: &HashMap<String, Arc<dyn ChainProvider>>,
+    multicall_addresses: &HashMap<String, Option<String>>,
 ) {
     if pending_calls.is_empty() {
         return;
@@ -848,8 +839,7 @@ async fn prefetch_static_calls_via_multicall(
     let networks_without_multicall = NETWORKS_WITHOUT_MULTICALL3.read().await;
 
     // Group ALL calls by network only (not by block - static calls use latest)
-    let mut grouped: std::collections::HashMap<String, Vec<PendingViewCall>> =
-        std::collections::HashMap::new();
+    let mut grouped: HashMap<String, Vec<PendingViewCall>> = HashMap::new();
     for call in pending_calls {
         grouped.entry(call.network.clone()).or_default().push(call);
     }
@@ -1254,7 +1244,7 @@ async fn execute_multicall3_batch(
 /// Results are stored in the global BLOCK_TIMESTAMP_CACHE.
 async fn prefetch_block_timestamps(
     events_data: &[(Vec<LogParam>, String, TxMetadata)],
-    providers: &std::collections::HashMap<String, Arc<dyn ChainProvider>>,
+    providers: &HashMap<String, Arc<dyn ChainProvider>>,
     needs_timestamp: bool,
 ) {
     if !needs_timestamp {
@@ -2327,10 +2317,7 @@ async fn resolve_calls_in_arithmetic_expression(
             DynSolValue::Int(val, _) => val.to_string(),
             DynSolValue::Bool(b) => if b { "1" } else { "0" }.to_string(),
             _ => {
-                tracing::warn!(
-                    "View call in arithmetic returned non-numeric value: {:?}",
-                    call_result
-                );
+                warn!("View call in arithmetic returned non-numeric value: {:?}", call_result);
                 return None;
             }
         };
@@ -2644,10 +2631,9 @@ async fn extract_value_from_event_async(
             },
             Ok(ComputedValue::String(s)) => Some(EthereumSqlTypeWrapper::String(s)),
             Err(e) => {
-                tracing::debug!(
+                debug!(
                     "Arithmetic expression with calls evaluation failed: {}. Expression: {}",
-                    e,
-                    resolved_expr
+                    e, resolved_expr
                 );
                 None
             }
@@ -2679,11 +2665,10 @@ async fn extract_value_from_event_async(
                 _ => EthereumSqlTypeWrapper::U256Numeric(U256::from(epoch)),
             });
         }
-        tracing::warn!(
+        warn!(
             "block_timestamp unavailable for block {} on {} — RPC may not include \
              blockTimestamp in eth_getLogs and BlockClock cache miss",
-            tx_metadata.block_number,
-            network,
+            tx_metadata.block_number, network,
         );
     }
 
@@ -2871,40 +2856,30 @@ fn extract_value_from_event(
 
     // Check for conditional expression: $if(condition, trueValue, falseValue)
     if is_conditional_value(value_ref) {
-        match parse_conditional_value(value_ref) {
+        return match parse_conditional_value(value_ref) {
             Ok((condition, true_value, false_value)) => {
                 // Evaluate the condition against event data
                 let json_data = log_params_to_json(log_params);
                 match filter_by_expression(&condition, &json_data) {
                     Ok(true) => {
                         // Condition is true, evaluate true_value
-                        return extract_value_from_event(
-                            &true_value,
-                            log_params,
-                            tx_metadata,
-                            column_type,
-                        );
+                        extract_value_from_event(&true_value, log_params, tx_metadata, column_type)
                     }
                     Ok(false) => {
                         // Condition is false, evaluate false_value
-                        return extract_value_from_event(
-                            &false_value,
-                            log_params,
-                            tx_metadata,
-                            column_type,
-                        );
+                        extract_value_from_event(&false_value, log_params, tx_metadata, column_type)
                     }
                     Err(e) => {
                         debug!("$if condition evaluation failed: {}. Condition: {}", e, condition);
-                        return None;
+                        None
                     }
                 }
             }
             Err(e) => {
                 debug!("Failed to parse $if expression: {}. Expression: {}", e, value_ref);
-                return None;
+                None
             }
-        }
+        };
     }
 
     // Check for arithmetic expression first (e.g., "$value * 2", "$amount + $fee")
@@ -3051,11 +3026,9 @@ fn dyn_sol_value_to_wrapper(
         }
         (DynSolValue::FixedBytes(bytes, _), ColumnType::Bytes32) => {
             if bytes.len() == 32 {
-                EthereumSqlTypeWrapper::B256(alloy::primitives::B256::from_slice(bytes.as_slice()))
+                EthereumSqlTypeWrapper::B256(B256::from_slice(bytes.as_slice()))
             } else {
-                EthereumSqlTypeWrapper::Bytes(alloy::primitives::Bytes::copy_from_slice(
-                    bytes.as_slice(),
-                ))
+                EthereumSqlTypeWrapper::Bytes(Bytes::copy_from_slice(bytes.as_slice()))
             }
         }
         (DynSolValue::Uint(val, _), ColumnType::Timestamp) => {
@@ -3233,7 +3206,7 @@ fn literal_to_wrapper(value: &str, column_type: &ColumnType) -> EthereumSqlTypeW
             }
         }
         ColumnType::Uint128 | ColumnType::Uint256 => {
-            if let Ok(num) = value.parse::<alloy::primitives::U256>() {
+            if let Ok(num) = value.parse::<U256>() {
                 EthereumSqlTypeWrapper::U256Numeric(num)
             } else {
                 EthereumSqlTypeWrapper::String(value.to_string())
@@ -3282,21 +3255,21 @@ fn literal_to_wrapper(value: &str, column_type: &ColumnType) -> EthereumSqlTypeW
             EthereumSqlTypeWrapper::Bool(b)
         }
         ColumnType::Address => {
-            if let Ok(addr) = value.parse::<alloy::primitives::Address>() {
+            if let Ok(addr) = value.parse::<Address>() {
                 EthereumSqlTypeWrapper::Address(addr)
             } else {
                 EthereumSqlTypeWrapper::String(value.to_string())
             }
         }
         ColumnType::Bytes => {
-            if let Ok(bytes) = value.parse::<alloy::primitives::Bytes>() {
+            if let Ok(bytes) = value.parse::<Bytes>() {
                 EthereumSqlTypeWrapper::Bytes(bytes)
             } else {
                 EthereumSqlTypeWrapper::String(value.to_string())
             }
         }
         ColumnType::Bytes32 => {
-            if let Ok(bytes) = value.parse::<alloy::primitives::B256>() {
+            if let Ok(bytes) = value.parse::<B256>() {
                 EthereumSqlTypeWrapper::B256(bytes)
             } else {
                 EthereumSqlTypeWrapper::String(value.to_string())
@@ -3499,9 +3472,9 @@ pub async fn process_table_operations(
     events_data: &[(Vec<LogParam>, String, TxMetadata)], // (log_params, network, tx_metadata)
     postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickhouseClient>>,
-    providers: Arc<std::collections::HashMap<String, Arc<dyn crate::provider::ChainProvider>>>,
+    providers: Arc<HashMap<String, Arc<dyn ChainProvider>>>,
     constants: &Constants,
-    multicall_addresses: &std::collections::HashMap<String, Option<String>>,
+    multicall_addresses: &HashMap<String, Option<String>>,
     checkpoint_config: Option<&ProgressCheckpointConfig>,
 ) -> Result<(), String> {
     // Exit early if shutdown requested before we start - no progress to save
@@ -4452,15 +4425,15 @@ fn resolve_cron_arg_value(
     expected_type: &DynSolType,
 ) -> Option<DynSolValue> {
     if let Some(field_name) = arg_str.strip_prefix('$') {
-        match field_name {
+        return match field_name {
             "contract" | "rindexer_contract_address" => {
-                return Some(DynSolValue::Address(*contract_address));
+                Some(DynSolValue::Address(*contract_address))
             }
             _ => {
                 warn!("Unknown cron argument reference: {}", arg_str);
-                return None;
+                None
             }
-        }
+        };
     }
 
     // Parse literal value
@@ -4679,10 +4652,7 @@ mod tests {
 
     #[test]
     fn test_evaluate_filter_equals() {
-        let params = vec![LogParam::new(
-            "from".to_string(),
-            DynSolValue::Address(alloy::primitives::Address::ZERO),
-        )];
+        let params = vec![LogParam::new("from".to_string(), DynSolValue::Address(Address::ZERO))];
 
         assert!(evaluate_filter(
             "from == 0x0000000000000000000000000000000000000000",
@@ -4698,10 +4668,7 @@ mod tests {
 
     #[test]
     fn test_evaluate_filter_not_equals() {
-        let params = vec![LogParam::new(
-            "to".to_string(),
-            DynSolValue::Address(alloy::primitives::Address::ZERO),
-        )];
+        let params = vec![LogParam::new("to".to_string(), DynSolValue::Address(Address::ZERO))];
 
         assert!(!evaluate_filter(
             "to != 0x0000000000000000000000000000000000000000",
@@ -4714,10 +4681,7 @@ mod tests {
     #[test]
     fn test_evaluate_filter_complex() {
         let params = vec![
-            LogParam::new(
-                "from".to_string(),
-                DynSolValue::Address(alloy::primitives::Address::ZERO),
-            ),
+            LogParam::new("from".to_string(), DynSolValue::Address(Address::ZERO)),
             LogParam::new("value".to_string(), DynSolValue::Uint(U256::from(1000u64), 256)),
         ];
 
@@ -4752,9 +4716,9 @@ mod tests {
         let meta = TxMetadata {
             block_number: 80114147,
             block_timestamp: Some(U256::from(1700000000u64)),
-            tx_hash: alloy::primitives::B256::ZERO,
-            block_hash: alloy::primitives::B256::ZERO,
-            contract_address: alloy::primitives::Address::ZERO,
+            tx_hash: B256::ZERO,
+            block_hash: B256::ZERO,
+            contract_address: Address::ZERO,
             log_index: U256::from(5u64),
             tx_index: 3,
         };
@@ -4771,9 +4735,9 @@ mod tests {
         let meta = TxMetadata {
             block_number: 100,
             block_timestamp: None,
-            tx_hash: alloy::primitives::B256::ZERO,
-            block_hash: alloy::primitives::B256::ZERO,
-            contract_address: alloy::primitives::Address::ZERO,
+            tx_hash: B256::ZERO,
+            block_hash: B256::ZERO,
+            contract_address: Address::ZERO,
             log_index: U256::from(5u64),
             tx_index: 3,
         };
@@ -4793,9 +4757,9 @@ mod tests {
         let meta = TxMetadata {
             block_number: 80114147,
             block_timestamp: None,
-            tx_hash: alloy::primitives::B256::ZERO,
-            block_hash: alloy::primitives::B256::ZERO,
-            contract_address: alloy::primitives::Address::ZERO,
+            tx_hash: B256::ZERO,
+            block_hash: B256::ZERO,
+            contract_address: Address::ZERO,
             log_index: U256::from(0u64),
             tx_index: 0,
         };
@@ -5090,7 +5054,7 @@ mod tests {
         let result = try_decode_return_value(&uint_bytes);
         assert!(result.is_some());
         if let Some(DynSolValue::Uint(val, 256)) = result {
-            assert_eq!(val, alloy::primitives::U256::from(42));
+            assert_eq!(val, U256::from(42));
         } else {
             panic!("Expected Uint(256)");
         }
