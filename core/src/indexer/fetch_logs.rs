@@ -461,38 +461,35 @@ async fn fetch_historic_logs_stream<P: ChainProvider>(
 
             if logs_empty {
                 let next_from_block = to_block + U64::from(1);
-                return if next_from_block > snapshot_to_block {
-                    None
+                let new_to_block = if next_from_block > snapshot_to_block {
+                    // Termination sentinel: the outer loop's
+                    // `while current_filter.from_block() <= snapshot_to_block`
+                    // check exits because `next_from_block > snapshot_to_block`.
+                    // We still need to return `Some` so the caller applies the
+                    // advanced `from_block` — otherwise
+                    // `live_indexing_stream` inherits the stale filter and
+                    // re-fetches the last historical block, double-dispatching
+                    // its events through the callback pipeline.
+                    next_from_block
                 } else {
-                    let new_to_block = calculate_process_historic_log_to_block(
+                    calculate_process_historic_log_to_block(
                         &next_from_block,
                         &snapshot_to_block,
                         &max_block_range_limitation,
-                    );
-
-                    debug!(
-                        "{} - No events between {} - {}. Searching next {} blocks.",
-                        info_log_name,
-                        from_block,
-                        to_block,
-                        new_to_block - next_from_block
-                    );
-
-                    debug!(
-                        "{} - {} - new_from_block {:?} new_to_block {:?}",
-                        info_log_name,
-                        IndexingEventProgressStatus::syncing_log(),
-                        next_from_block,
-                        new_to_block
-                    );
-
-                    Some(ProcessHistoricLogsStreamResult {
-                        next: current_filter
-                            .set_from_block(next_from_block)
-                            .set_to_block(new_to_block),
-                        max_block_range_limitation,
-                    })
+                    )
                 };
+
+                debug!(
+                    "{} - No events between {} - {}. Advancing from_block to {}.",
+                    info_log_name, from_block, to_block, next_from_block
+                );
+
+                return Some(ProcessHistoricLogsStreamResult {
+                    next: current_filter
+                        .set_from_block(next_from_block)
+                        .set_to_block(new_to_block),
+                    max_block_range_limitation,
+                });
             }
 
             if let Some(last_log) = last_log {
@@ -506,30 +503,26 @@ async fn fetch_historic_logs_stream<P: ChainProvider>(
                     IndexingEventProgressStatus::syncing_log(),
                     next_from_block
                 );
-                return if next_from_block > snapshot_to_block {
-                    None
+                let new_to_block = if next_from_block > snapshot_to_block {
+                    // See comment on the `logs_empty` branch above — we must
+                    // return `Some` so the caller advances `from_block` past
+                    // the last processed block before handing off to live
+                    // indexing.
+                    next_from_block
                 } else {
-                    let new_to_block = calculate_process_historic_log_to_block(
+                    calculate_process_historic_log_to_block(
                         &next_from_block,
                         &snapshot_to_block,
                         &max_block_range_limitation,
-                    );
-
-                    debug!(
-                        "{} - {} - new_from_block {:?} new_to_block {:?}",
-                        info_log_name,
-                        IndexingEventProgressStatus::syncing_log(),
-                        next_from_block,
-                        new_to_block
-                    );
-
-                    Some(ProcessHistoricLogsStreamResult {
-                        next: current_filter
-                            .set_from_block(next_from_block)
-                            .set_to_block(new_to_block),
-                        max_block_range_limitation,
-                    })
+                    )
                 };
+
+                return Some(ProcessHistoricLogsStreamResult {
+                    next: current_filter
+                        .set_from_block(next_from_block)
+                        .set_to_block(new_to_block),
+                    max_block_range_limitation,
+                });
             }
         }
         Err(err) => {
@@ -2155,10 +2148,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn historic_empty_logs_past_snapshot_returns_none() {
+    async fn historic_empty_logs_past_snapshot_advances_filter_past_snapshot() {
         let mock = MockChainProvider::new(1);
         let (tx, _rx) = mpsc::channel(4);
-        // from=500, to=500, snapshot=500 → after processing, next would be 501 > 500
+        // from=500, to=500, snapshot=500 → after processing, next_from is 501 which
+        // is past the snapshot. MUST still return `Some` so the caller advances
+        // `current_filter.from_block` to 501 before handing off to
+        // `live_indexing_stream` — otherwise live re-fetches block 500 and
+        // double-dispatches any events there.
         let filter = RindexerEventFilter::empty_for_test()
             .set_from_block(U64::from(500))
             .set_to_block(U64::from(500));
@@ -2176,7 +2173,54 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_none(), "should signal completion when past snapshot");
+        let next = result.expect("termination must still return Some so caller advances from_block");
+        assert_eq!(
+            next.next.from_block(),
+            U64::from(501),
+            "from_block must advance to to_block+1 so the outer while-loop \
+             (`from_block <= snapshot_to_block`) exits AND the filter handed to \
+             live_indexing_stream starts on the next block",
+        );
+    }
+
+    #[tokio::test]
+    async fn historic_with_logs_at_snapshot_boundary_advances_filter_past_last_log() {
+        // Regression test for the historical→live handoff stale-filter bug.
+        //
+        // Scenario: phase 2's historical sub-phase fetches a single batch
+        // that contains an event at the snapshot_to_block itself, e.g.
+        // from=7, to=7, snapshot=7, and block 7 has 1 matching log. Pre-fix,
+        // this returned None, leaving `current_filter.from_block = 7` stale.
+        // `live_indexing_stream` then re-fetched block 7 and the event was
+        // dispatched twice (visible in the failing e2e harness as
+        // "Found 1 duplicate tx_hash entries").
+        let log = make_log_at_block(7);
+        let mock = MockChainProvider::new(1).with_logs(vec![log]);
+        let (tx, _rx) = mpsc::channel(4);
+        let filter = RindexerEventFilter::empty_for_test()
+            .set_from_block(U64::from(7))
+            .set_to_block(U64::from(7));
+
+        let result = fetch_historic_logs_stream(
+            false,
+            BlockClock::new(None, None, Arc::new(MockChainProvider::new(1))),
+            &mock,
+            &tx,
+            &B256::ZERO,
+            filter,
+            None,
+            U64::from(7),
+            "test",
+        )
+        .await;
+
+        let next = result.expect("final-batch completion must return Some to advance the filter");
+        assert_eq!(
+            next.next.from_block(),
+            U64::from(8),
+            "from_block must advance past the last-logged block so \
+             live_indexing_stream does not re-fetch block 7"
+        );
     }
 
     #[tokio::test]
