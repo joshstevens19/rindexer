@@ -1339,6 +1339,11 @@ async fn prefetch_block_timestamps(
                             return Some((network_clone, blocks));
                         }
                         Err(e) => {
+                            // ADAPTIVE_CONCURRENCY records every attempt's signal so
+                            // global concurrency adapts to transient noise. The metric
+                            // counter only fires once we exhaust the retry budget,
+                            // preserving the "permanent failure" semantic operators
+                            // alert on.
                             let err_str = e.to_string().to_lowercase();
                             let is_rate_limited = err_str.contains("429")
                                 || err_str.contains("rate limit")
@@ -1348,11 +1353,11 @@ async fn prefetch_block_timestamps(
                             } else {
                                 ADAPTIVE_CONCURRENCY.record_error();
                             }
-                            crate::metrics::definitions::BLOCK_TIMESTAMP_FETCH_FAILURES_TOTAL
-                                .with_label_values(&[&network_clone])
-                                .inc();
 
                             if attempt >= MAX_RETRIES {
+                                crate::metrics::definitions::BLOCK_TIMESTAMP_FETCH_FAILURES_TOTAL
+                                    .with_label_values(&[&network_clone])
+                                    .inc();
                                 tracing::error!(
                                     "Block timestamp fetch failed after {} retries for {} ({} blocks): {} — downstream writes will refuse to emit",
                                     MAX_RETRIES, network_clone, block_numbers_u64.len(), e
@@ -1361,7 +1366,7 @@ async fn prefetch_block_timestamps(
                             }
 
                             let backoff = backoffs[attempt as usize];
-                            tracing::warn!(
+                            tracing::debug!(
                                 "Block timestamp fetch attempt {}/{} failed for {} ({} blocks): {} — retrying in {:?}",
                                 attempt + 1, MAX_RETRIES, network_clone, block_numbers_u64.len(), e, backoff,
                             );
@@ -3970,10 +3975,12 @@ async fn execute_postgres_operation(
                 // column, corrupting downstream partition routing. Halt the
                 // batch so the outer retry loop re-attempts.
                 if column.name == "block_timestamp" || column.name == "rindexer_block_timestamp" {
+                    // Try the canonical injected key first (rindexer_block_number per
+                    // injected_columns::BLOCK_NUMBER), fall back to user-aliased.
                     let block_num_hint = row
                         .columns
-                        .get("block_number")
-                        .or_else(|| row.columns.get("rindexer_block_number"))
+                        .get("rindexer_block_number")
+                        .or_else(|| row.columns.get("block_number"))
                         .map(|v| format!("{:?}", v))
                         .unwrap_or_else(|| "<unknown>".to_string());
                     return Err(format!(
@@ -4150,10 +4157,12 @@ async fn execute_clickhouse_operation(
                 // column, corrupting downstream partition routing. Halt the
                 // batch so the outer retry loop re-attempts.
                 if column.name == "block_timestamp" || column.name == "rindexer_block_timestamp" {
+                    // Try the canonical injected key first (rindexer_block_number per
+                    // injected_columns::BLOCK_NUMBER), fall back to user-aliased.
                     let block_num_hint = row
                         .columns
-                        .get("block_number")
-                        .or_else(|| row.columns.get("rindexer_block_number"))
+                        .get("rindexer_block_number")
+                        .or_else(|| row.columns.get("block_number"))
                         .map(|v| format!("{:?}", v))
                         .unwrap_or_else(|| "<unknown>".to_string());
                     return Err(format!(
@@ -5402,6 +5411,16 @@ mod tests {
         column_name == "block_timestamp" || column_name == "rindexer_block_timestamp"
     }
 
+    /// Extracts a debug-formatted block-number hint from a row's columns,
+    /// preferring the canonical injected `rindexer_block_number` key.
+    fn extract_block_num_hint(columns: &HashMap<String, EthereumSqlTypeWrapper>) -> String {
+        columns
+            .get("rindexer_block_number")
+            .or_else(|| columns.get("block_number"))
+            .map(|v| format!("{:?}", v))
+            .unwrap_or_else(|| "<unknown>".to_string())
+    }
+
     #[test]
     fn test_block_ts_guard_trips_on_missing_block_timestamp() {
         assert!(block_ts_guard_trips("block_timestamp", None, false));
@@ -5429,6 +5448,32 @@ mod tests {
         // optional enrichment).
         assert!(!block_ts_guard_trips("some_view_call_result", None, false));
         assert!(!block_ts_guard_trips("title", None, false));
+    }
+
+    #[test]
+    fn test_extract_block_num_hint_prefers_rindexer_canonical_key() {
+        let mut cols: HashMap<String, EthereumSqlTypeWrapper> = HashMap::new();
+        cols.insert(
+            "rindexer_block_number".to_string(),
+            EthereumSqlTypeWrapper::U64BigInt(61_407_661),
+        );
+        cols.insert("block_number".to_string(), EthereumSqlTypeWrapper::U64BigInt(99_999_999));
+        let hint = extract_block_num_hint(&cols);
+        assert!(hint.contains("61407661"), "should prefer rindexer_block_number; got: {}", hint);
+    }
+
+    #[test]
+    fn test_extract_block_num_hint_falls_back_to_block_number() {
+        let mut cols: HashMap<String, EthereumSqlTypeWrapper> = HashMap::new();
+        cols.insert("block_number".to_string(), EthereumSqlTypeWrapper::U64BigInt(61_407_661));
+        let hint = extract_block_num_hint(&cols);
+        assert!(hint.contains("61407661"), "fallback path failed; got: {}", hint);
+    }
+
+    #[test]
+    fn test_extract_block_num_hint_unknown_when_absent() {
+        let cols: HashMap<String, EthereumSqlTypeWrapper> = HashMap::new();
+        assert_eq!(extract_block_num_hint(&cols), "<unknown>");
     }
 
     // =========================================================================
