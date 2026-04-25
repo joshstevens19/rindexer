@@ -1430,6 +1430,33 @@ async fn get_cached_block_timestamp(network: &str, block_number: u64) -> Option<
     cache.get(&(network.to_string(), block_number)).copied()
 }
 
+/// Predicate: would the column-write path silently emit Null for a critical
+/// block_timestamp column? True when the row is missing the value AND no DDL
+/// default is configured. Narrow scope — only `block_timestamp` /
+/// `rindexer_block_timestamp`; other columns retain Null-fallback for legitimate
+/// optional-value cases (failed view calls, optional enrichment).
+fn block_ts_guard_trips(
+    column_name: &str,
+    column_default: Option<&String>,
+    row_has_value: bool,
+) -> bool {
+    if row_has_value || column_default.is_some() {
+        return false;
+    }
+    column_name == "block_timestamp" || column_name == "rindexer_block_timestamp"
+}
+
+/// Best-effort block-number hint for guard-trip error messages. Prefers the
+/// canonical `rindexer_block_number` injected key, falls back to user-aliased
+/// `block_number`, returns `<unknown>` when neither is present.
+fn extract_block_num_hint(columns: &HashMap<String, EthereumSqlTypeWrapper>) -> String {
+    columns
+        .get("rindexer_block_number")
+        .or_else(|| columns.get("block_number"))
+        .map(|v| format!("{:?}", v))
+        .unwrap_or_else(|| "<unknown>".to_string())
+}
+
 /// Transaction metadata available for table value references.
 #[derive(Clone, Debug)]
 pub struct TxMetadata {
@@ -3974,19 +4001,13 @@ async fn execute_postgres_operation(
                 // wrapper would surface as block_timestamp=0 on a NOT NULL
                 // column, corrupting downstream partition routing. Halt the
                 // batch so the outer retry loop re-attempts.
-                if column.name == "block_timestamp" || column.name == "rindexer_block_timestamp" {
-                    // Try the canonical injected key first (rindexer_block_number per
-                    // injected_columns::BLOCK_NUMBER), fall back to user-aliased.
-                    let block_num_hint = row
-                        .columns
-                        .get("rindexer_block_number")
-                        .or_else(|| row.columns.get("block_number"))
-                        .map(|v| format!("{:?}", v))
-                        .unwrap_or_else(|| "<unknown>".to_string());
+                if block_ts_guard_trips(&column.name, column.default.as_ref(), false) {
                     return Err(format!(
                         "refusing to write {}=NULL for block {} on table {} \
                          (RPC block-header resolution failed; batch will retry)",
-                        column.name, block_num_hint, table_name
+                        column.name,
+                        extract_block_num_hint(&row.columns),
+                        table_name
                     ));
                 }
                 // No value and no default - use NULL
@@ -4156,19 +4177,13 @@ async fn execute_clickhouse_operation(
                 // wrapper would surface as block_timestamp=0 on a NOT NULL
                 // column, corrupting downstream partition routing. Halt the
                 // batch so the outer retry loop re-attempts.
-                if column.name == "block_timestamp" || column.name == "rindexer_block_timestamp" {
-                    // Try the canonical injected key first (rindexer_block_number per
-                    // injected_columns::BLOCK_NUMBER), fall back to user-aliased.
-                    let block_num_hint = row
-                        .columns
-                        .get("rindexer_block_number")
-                        .or_else(|| row.columns.get("block_number"))
-                        .map(|v| format!("{:?}", v))
-                        .unwrap_or_else(|| "<unknown>".to_string());
+                if block_ts_guard_trips(&column.name, column.default.as_ref(), false) {
                     return Err(format!(
                         "refusing to write {}=NULL for block {} on table {} \
                          (RPC block-header resolution failed; batch will retry)",
-                        column.name, block_num_hint, table_name
+                        column.name,
+                        extract_block_num_hint(&row.columns),
+                        table_name
                     ));
                 }
                 // No value and no default - use NULL
@@ -5395,31 +5410,153 @@ mod tests {
     }
 
     // =========================================================================
+    // prefetch_block_timestamps retry path — Layer 1 of the block_timestamp
+    // silent-write fix. Uses MockChainProvider's failure-injection to simulate
+    // transient RPC errors and asserts the retry loop populates the cache
+    // correctly within the budget (3 attempts).
+    // =========================================================================
+
+    fn make_prefetch_block(number: u64, timestamp: u64) -> alloy::network::AnyRpcBlock {
+        use alloy::network::{AnyHeader, AnyRpcBlock, AnyRpcHeader};
+        use alloy::primitives::B256;
+        use alloy::rpc::types::{Block, BlockTransactions};
+        AnyRpcBlock::new(
+            Block::new(
+                AnyRpcHeader::from_sealed(
+                    AnyHeader { number, timestamp, ..Default::default() }.seal(B256::ZERO),
+                ),
+                BlockTransactions::Full(vec![]),
+            )
+            .into(),
+        )
+    }
+
+    fn make_prefetch_tx_metadata(block_number: u64) -> TxMetadata {
+        TxMetadata {
+            block_number,
+            block_timestamp: None,
+            tx_hash: B256::ZERO,
+            block_hash: B256::ZERO,
+            contract_address: Address::ZERO,
+            log_index: U256::from(0u64),
+            tx_index: 0,
+        }
+    }
+
+    /// Layer 1 retry: 2 transient failures, succeeds on attempt 3.
+    /// Cache must be populated after the retry budget consumes the failures.
+    #[tokio::test]
+    async fn test_prefetch_retries_then_succeeds() {
+        use crate::provider::mock::MockChainProvider;
+        use crate::provider::ChainProvider;
+
+        // Clear any leftover cache from prior tests on this block.
+        {
+            let mut cache = BLOCK_TIMESTAMP_CACHE.write().await;
+            cache.remove(&("anvil-retry-1".to_string(), 12345));
+        }
+
+        let mock = MockChainProvider::new(31337)
+            .with_blocks(vec![make_prefetch_block(12345, 1_700_000_000)])
+            .with_block_fetch_failures(2); // fail twice, succeed on 3rd
+
+        let provider: Arc<dyn ChainProvider> = Arc::new(mock);
+        let mut providers: HashMap<String, Arc<dyn ChainProvider>> = HashMap::new();
+        providers.insert("anvil-retry-1".to_string(), Arc::clone(&provider));
+
+        let events_data = vec![(
+            Vec::<LogParam>::new(),
+            "anvil-retry-1".to_string(),
+            make_prefetch_tx_metadata(12345),
+        )];
+
+        prefetch_block_timestamps(&events_data, &providers, true).await;
+
+        let cached = get_cached_block_timestamp("anvil-retry-1", 12345).await;
+        assert_eq!(
+            cached,
+            Some(1_700_000_000),
+            "cache must be populated after retry budget exhausts the injected failures"
+        );
+
+        // Cleanup
+        let mut cache = BLOCK_TIMESTAMP_CACHE.write().await;
+        cache.remove(&("anvil-retry-1".to_string(), 12345));
+    }
+
+    /// Layer 1 exhaustion: more transient failures than the retry budget. The
+    /// task gives up; cache stays empty for that (network, block); downstream
+    /// guard will then refuse to emit. Must NOT panic / hang.
+    #[tokio::test]
+    async fn test_prefetch_exhausts_budget_leaves_cache_empty() {
+        use crate::provider::mock::MockChainProvider;
+        use crate::provider::ChainProvider;
+
+        {
+            let mut cache = BLOCK_TIMESTAMP_CACHE.write().await;
+            cache.remove(&("anvil-retry-2".to_string(), 67890));
+        }
+
+        // 4 failures > MAX_RETRIES (3). The task exhausts the budget on every
+        // attempt and gives up.
+        let mock = MockChainProvider::new(31337)
+            .with_blocks(vec![make_prefetch_block(67890, 1_700_000_001)])
+            .with_block_fetch_failures(4);
+
+        let provider: Arc<dyn ChainProvider> = Arc::new(mock);
+        let mut providers: HashMap<String, Arc<dyn ChainProvider>> = HashMap::new();
+        providers.insert("anvil-retry-2".to_string(), Arc::clone(&provider));
+
+        let events_data = vec![(
+            Vec::<LogParam>::new(),
+            "anvil-retry-2".to_string(),
+            make_prefetch_tx_metadata(67890),
+        )];
+
+        prefetch_block_timestamps(&events_data, &providers, true).await;
+
+        let cached = get_cached_block_timestamp("anvil-retry-2", 67890).await;
+        assert_eq!(cached, None, "cache must remain empty when retry budget is exhausted");
+    }
+
+    /// Layer 1 short-circuit: when needs_timestamp=false, no RPC calls happen.
+    /// The injected failure budget should NOT be consumed.
+    #[tokio::test]
+    async fn test_prefetch_skips_when_not_needed() {
+        use crate::provider::mock::MockChainProvider;
+        use crate::provider::ChainProvider;
+
+        let mock = MockChainProvider::new(31337)
+            .with_blocks(vec![make_prefetch_block(99999, 1_700_000_002)])
+            .with_block_fetch_failures(1);
+        let budget_arc = mock.block_fetch_failures_remaining();
+        assert_eq!(budget_arc, 1, "budget should be 1 before prefetch");
+
+        let provider: Arc<dyn ChainProvider> = Arc::new(mock);
+        let mut providers: HashMap<String, Arc<dyn ChainProvider>> = HashMap::new();
+        providers.insert("anvil-retry-3".to_string(), provider);
+
+        let events_data = vec![(
+            Vec::<LogParam>::new(),
+            "anvil-retry-3".to_string(),
+            make_prefetch_tx_metadata(99999),
+        )];
+
+        // needs_timestamp=false → early return, no RPC calls
+        prefetch_block_timestamps(&events_data, &providers, false).await;
+
+        // Cache stays empty because no fetch happened.
+        let cached = get_cached_block_timestamp("anvil-retry-3", 99999).await;
+        assert_eq!(cached, None);
+    }
+
+    // =========================================================================
     // block_timestamp NULL-write guard
     // =========================================================================
 
-    /// Predicate: does the column-write path refuse this row?
-    /// True when block_timestamp / rindexer_block_timestamp would land as Null.
-    fn block_ts_guard_trips(
-        column_name: &str,
-        column_default: Option<&String>,
-        row_has_value: bool,
-    ) -> bool {
-        if row_has_value || column_default.is_some() {
-            return false;
-        }
-        column_name == "block_timestamp" || column_name == "rindexer_block_timestamp"
-    }
-
-    /// Extracts a debug-formatted block-number hint from a row's columns,
-    /// preferring the canonical injected `rindexer_block_number` key.
-    fn extract_block_num_hint(columns: &HashMap<String, EthereumSqlTypeWrapper>) -> String {
-        columns
-            .get("rindexer_block_number")
-            .or_else(|| columns.get("block_number"))
-            .map(|v| format!("{:?}", v))
-            .unwrap_or_else(|| "<unknown>".to_string())
-    }
+    // block_ts_guard_trips + extract_block_num_hint live in the parent module
+    // (production helpers used by execute_postgres_operation +
+    // execute_clickhouse_operation). Tests below exercise them directly.
 
     #[test]
     fn test_block_ts_guard_trips_on_missing_block_timestamp() {
