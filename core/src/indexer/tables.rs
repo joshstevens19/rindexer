@@ -1314,36 +1314,60 @@ async fn prefetch_block_timestamps(
                 // Wait for backoff if rate limited (for free nodes)
                 ADAPTIVE_CONCURRENCY.wait_for_backoff().await;
 
-                match provider_clone
-                    .get_block_by_number_batch_with_size(
-                        &block_numbers_u64,
-                        false,
-                        Some(rpc_batch_size),
-                    )
-                    .await
-                {
-                    Ok(blocks) => {
-                        ADAPTIVE_CONCURRENCY.record_success();
-                        Some((network_clone, blocks))
-                    }
-                    Err(e) => {
-                        let err_str = e.to_string().to_lowercase();
-                        if err_str.contains("429")
-                            || err_str.contains("rate limit")
-                            || err_str.contains("too many")
-                        {
-                            ADAPTIVE_CONCURRENCY.record_rate_limit();
-                        } else {
-                            ADAPTIVE_CONCURRENCY.record_error();
+                // Retry-with-backoff: 3 attempts (100ms / 500ms / 2s) before
+                // giving up. Without retry, transient RPC failures leave the
+                // cache un-populated and downstream writes silently fall back
+                // to block_timestamp=0.
+                const MAX_RETRIES: u32 = 3;
+                let backoffs = [
+                    std::time::Duration::from_millis(100),
+                    std::time::Duration::from_millis(500),
+                    std::time::Duration::from_secs(2),
+                ];
+                let mut attempt: u32 = 0;
+                loop {
+                    match provider_clone
+                        .get_block_by_number_batch_with_size(
+                            &block_numbers_u64,
+                            false,
+                            Some(rpc_batch_size),
+                        )
+                        .await
+                    {
+                        Ok(blocks) => {
+                            ADAPTIVE_CONCURRENCY.record_success();
+                            return Some((network_clone, blocks));
                         }
-                        crate::metrics::definitions::BLOCK_TIMESTAMP_FETCH_FAILURES_TOTAL
-                            .with_label_values(&[&network_clone])
-                            .inc();
-                        tracing::error!(
-                            "Failed to batch fetch block timestamps for {}: {} — downstream writes will retry",
-                            network_clone, e
-                        );
-                        None
+                        Err(e) => {
+                            let err_str = e.to_string().to_lowercase();
+                            let is_rate_limited = err_str.contains("429")
+                                || err_str.contains("rate limit")
+                                || err_str.contains("too many");
+                            if is_rate_limited {
+                                ADAPTIVE_CONCURRENCY.record_rate_limit();
+                            } else {
+                                ADAPTIVE_CONCURRENCY.record_error();
+                            }
+                            crate::metrics::definitions::BLOCK_TIMESTAMP_FETCH_FAILURES_TOTAL
+                                .with_label_values(&[&network_clone])
+                                .inc();
+
+                            if attempt >= MAX_RETRIES {
+                                tracing::error!(
+                                    "Block timestamp fetch failed after {} retries for {} ({} blocks): {} — downstream writes will refuse to emit",
+                                    MAX_RETRIES, network_clone, block_numbers_u64.len(), e
+                                );
+                                return None;
+                            }
+
+                            let backoff = backoffs[attempt as usize];
+                            tracing::warn!(
+                                "Block timestamp fetch attempt {}/{} failed for {} ({} blocks): {} — retrying in {:?}",
+                                attempt + 1, MAX_RETRIES, network_clone, block_numbers_u64.len(), e, backoff,
+                            );
+                            tokio::time::sleep(backoff).await;
+                            attempt += 1;
+                        }
                     }
                 }
             }));
@@ -3941,6 +3965,23 @@ async fn execute_postgres_operation(
             } else if let Some(default) = &column.default {
                 literal_to_wrapper(default, column_type)
             } else {
+                // Refuse to silently emit NULL for block_timestamp. The Null
+                // wrapper would surface as block_timestamp=0 on a NOT NULL
+                // column, corrupting downstream partition routing. Halt the
+                // batch so the outer retry loop re-attempts.
+                if column.name == "block_timestamp" || column.name == "rindexer_block_timestamp" {
+                    let block_num_hint = row
+                        .columns
+                        .get("block_number")
+                        .or_else(|| row.columns.get("rindexer_block_number"))
+                        .map(|v| format!("{:?}", v))
+                        .unwrap_or_else(|| "<unknown>".to_string());
+                    return Err(format!(
+                        "refusing to write {}=NULL for block {} on table {} \
+                         (RPC block-header resolution failed; batch will retry)",
+                        column.name, block_num_hint, table_name
+                    ));
+                }
                 // No value and no default - use NULL
                 // This handles cases like failed view calls where we don't have a value
                 EthereumSqlTypeWrapper::Null
@@ -4104,6 +4145,23 @@ async fn execute_clickhouse_operation(
             } else if let Some(default) = &column.default {
                 literal_to_wrapper(default, column_type)
             } else {
+                // Refuse to silently emit NULL for block_timestamp. The Null
+                // wrapper would surface as block_timestamp=0 on a NOT NULL
+                // column, corrupting downstream partition routing. Halt the
+                // batch so the outer retry loop re-attempts.
+                if column.name == "block_timestamp" || column.name == "rindexer_block_timestamp" {
+                    let block_num_hint = row
+                        .columns
+                        .get("block_number")
+                        .or_else(|| row.columns.get("rindexer_block_number"))
+                        .map(|v| format!("{:?}", v))
+                        .unwrap_or_else(|| "<unknown>".to_string());
+                    return Err(format!(
+                        "refusing to write {}=NULL for block {} on table {} \
+                         (RPC block-header resolution failed; batch will retry)",
+                        column.name, block_num_hint, table_name
+                    ));
+                }
                 // No value and no default - use NULL
                 // This handles cases like failed view calls where we don't have a value
                 EthereumSqlTypeWrapper::Null
@@ -5325,6 +5383,52 @@ mod tests {
             let mut cache = BLOCK_TIMESTAMP_CACHE.write().await;
             cache.remove(&("polygon".to_string(), 77777777));
         }
+    }
+
+    // =========================================================================
+    // block_timestamp NULL-write guard
+    // =========================================================================
+
+    /// Predicate: does the column-write path refuse this row?
+    /// True when block_timestamp / rindexer_block_timestamp would land as Null.
+    fn block_ts_guard_trips(
+        column_name: &str,
+        column_default: Option<&String>,
+        row_has_value: bool,
+    ) -> bool {
+        if row_has_value || column_default.is_some() {
+            return false;
+        }
+        column_name == "block_timestamp" || column_name == "rindexer_block_timestamp"
+    }
+
+    #[test]
+    fn test_block_ts_guard_trips_on_missing_block_timestamp() {
+        assert!(block_ts_guard_trips("block_timestamp", None, false));
+    }
+
+    #[test]
+    fn test_block_ts_guard_trips_on_missing_rindexer_block_timestamp() {
+        assert!(block_ts_guard_trips("rindexer_block_timestamp", None, false));
+    }
+
+    #[test]
+    fn test_block_ts_guard_passes_when_value_present() {
+        assert!(!block_ts_guard_trips("block_timestamp", None, true));
+    }
+
+    #[test]
+    fn test_block_ts_guard_passes_when_column_has_default() {
+        let default = "0".to_string();
+        assert!(!block_ts_guard_trips("block_timestamp", Some(&default), false));
+    }
+
+    #[test]
+    fn test_block_ts_guard_does_not_apply_to_other_columns() {
+        // Non-block_timestamp columns retain Null-fallback (failed view calls,
+        // optional enrichment).
+        assert!(!block_ts_guard_trips("some_view_call_result", None, false));
+        assert!(!block_ts_guard_trips("title", None, false));
     }
 
     // =========================================================================

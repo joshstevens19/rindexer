@@ -249,6 +249,9 @@ async fn update_last_synced_block_number_for_file(
         if let Some(last_block_value) = last_block { to_block > last_block_value } else { true };
 
     if last_block.is_none() || to_block_higher_then_last_block {
+        if let Some(parent) = Path::new(&file_path).parent() {
+            fs::create_dir_all(parent).await?;
+        }
         let temp_file_path = format!("{file_path}.tmp");
 
         let mut file = File::create(&temp_file_path).await?;
