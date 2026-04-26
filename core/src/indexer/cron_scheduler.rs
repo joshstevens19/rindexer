@@ -13,6 +13,8 @@ use alloy::primitives::{Address, B256, U256};
 use chrono::{DateTime, Utc};
 use tracing::{debug, error, info, warn};
 
+use crate::database::clickhouse::client::ClickhouseClient;
+use crate::database::postgres::client::PostgresClient;
 use crate::database::sql_type_wrapper::EthereumSqlTypeWrapper;
 use crate::database::{BoxedBackendOp, DatabaseBackends};
 use crate::event::{
@@ -589,7 +591,7 @@ fn build_cron_dispatch_ops(
         let operation = operation.clone();
         let rows = Arc::clone(&rows);
         ops.push((
-            "postgres",
+            PostgresClient::BACKEND_NAME,
             Box::pin(async move {
                 super::tables::execute_postgres_operation_internal(
                     &postgres, &full_table, &table, &operation, &rows, None,
@@ -604,7 +606,7 @@ fn build_cron_dispatch_ops(
         let operation = operation.clone();
         let rows = Arc::clone(&rows);
         ops.push((
-            "clickhouse",
+            ClickhouseClient::BACKEND_NAME,
             Box::pin(async move {
                 super::tables::execute_clickhouse_operation_internal(
                     &clickhouse, &full_table, &table, &operation, &rows,

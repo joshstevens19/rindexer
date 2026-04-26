@@ -102,6 +102,10 @@ pub struct PostgresClient {
 }
 
 impl PostgresClient {
+    /// Stable identifier exposed to circuit breakers, metrics, and routing.
+    /// Renaming this string is a breaking API change.
+    pub const BACKEND_NAME: &'static str = "postgres";
+
     pub async fn new() -> Result<Self, PostgresConnectionError> {
         async fn _new(disable_ssl: bool) -> Result<PostgresClient, PostgresConnectionError> {
             let connection_str = connection_string()?;
@@ -581,6 +585,6 @@ impl crate::database::Database for PostgresClient {
     }
 
     fn backend_name(&self) -> &'static str {
-        "postgres"
+        Self::BACKEND_NAME
     }
 }
