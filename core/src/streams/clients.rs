@@ -1352,13 +1352,30 @@ impl StreamsClients {
             all_tasks.extend(tasks);
         }
 
+        // Mirrors `flush_finalized`'s cross-key continue-on-error: tasks in
+        // `join_all` already executed in parallel by the time we iterate, so
+        // a per-task `return Err` would short-circuit the count rather than
+        // the work. Accumulate `total_sent` across every successful task and
+        // surface the first observed error after the loop.
         let mut total_sent = 0;
+        let mut first_err: Option<StreamError> = None;
         for result in join_all(all_tasks).await {
             match result {
                 Ok(Ok(n)) => total_sent += n,
-                Ok(Err(e)) => return Err(e),
-                Err(e) => return Err(StreamError::JoinError(e)),
+                Ok(Err(e)) => {
+                    if first_err.is_none() {
+                        first_err = Some(e);
+                    }
+                }
+                Err(e) => {
+                    if first_err.is_none() {
+                        first_err = Some(StreamError::JoinError(e));
+                    }
+                }
             }
+        }
+        if let Some(e) = first_err {
+            return Err(e);
         }
         Ok(total_sent)
     }
@@ -1840,7 +1857,11 @@ mod tests {
     #[tokio::test]
     async fn stream_trace_event_with_finalized_delivery_buffers_instead_of_sending() {
         let mut server = mockito::Server::new_async().await;
-        let mock = server.mock("POST", "/hook").expect(0).create_async().await;
+        // Expect exactly one POST after the deferred flush, and zero before
+        // it — the buffered_blocks assertion below proves the pre-flush
+        // count is zero, so a passing mock.assert_async() at the end is
+        // strictly the post-flush hit.
+        let mock = server.mock("POST", "/hook").with_status(200).expect(1).create_async().await;
 
         let config = WebhookStreamConfig {
             endpoint: format!("{}/hook", server.url()),
@@ -1864,12 +1885,23 @@ mod tests {
         let sent = clients.stream("id".to_string(), &msg, false, true).await.unwrap();
 
         assert_eq!(sent, 0, "finalized trace event must not dispatch instantly");
-        mock.assert_async().await;
         assert_eq!(
             buffered_blocks(&clients, "ethereum").await,
             vec![100],
             "event must be parked in the finalized buffer for later flush"
         );
+
+        // Drive a flush so the event traverses the dispatch path. Catches
+        // regressions in `filter_chunk_event_data_by_conditions`'s
+        // EVENT_NAME passthrough — without it, the flushed dispatch would
+        // panic via the `expect("Failed to find stream event ...")`.
+        let flushed = clients.flush_finalized("ethereum", 200).await.unwrap();
+        assert_eq!(flushed, 1, "buffered native-transfer event must flush once safe");
+        assert!(
+            buffered_blocks(&clients, "ethereum").await.is_empty(),
+            "buffer must drain after flush"
+        );
+        mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -2439,6 +2471,40 @@ mod tests {
             buffered_blocks(&clients, "ethereum").await,
             vec![100],
             "block 100 must remain buffered under the re-registered distance of 50"
+        );
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn flush_finalized_respects_re_registered_smaller_distance() {
+        // Symmetric to the larger-distance regression: a distance re-registered
+        // SMALLER must also take effect — otherwise a buffer seeded with a
+        // generous distance would keep events parked even when the user has
+        // since reduced the safe window. Catches a regression that re-cached
+        // the distance only in one direction.
+        let mut server = mockito::Server::new_async().await;
+        let mock = server.mock("POST", "/hook").with_status(200).expect(1).create_async().await;
+
+        let config = WebhookStreamConfig {
+            endpoint: format!("{}/hook", server.url()),
+            shared_secret: "s".to_string(),
+            networks: vec!["ethereum".to_string()],
+            events: vec![stream_event("Transfer")],
+            delivery: None,
+        };
+        let clients = webhook_clients(vec![config]);
+
+        // Seed under distance=50 (so block 100 would NOT be ready at head 110:
+        // 110 - 50 = 60 < 100). Pre-fix: distance pinned at 50 forever.
+        seed_buffer(&clients, "ethereum", "Transfer", &[100], 50).await;
+        // Re-register smaller; head=110 - 5 = 105 >= 100, so 100 must flush.
+        clients.register_network_reorg_distance("ethereum".to_string(), 5);
+        let sent = clients.flush_finalized("ethereum", 110).await.unwrap();
+
+        assert_eq!(sent, 1, "flush must honor the newly-registered smaller distance");
+        assert!(
+            buffered_blocks(&clients, "ethereum").await.is_empty(),
+            "block 100 must drain under the re-registered distance of 5"
         );
         mock.assert_async().await;
     }

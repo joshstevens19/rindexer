@@ -282,6 +282,12 @@ pub static STREAM_FINALIZED_BUFFER_OVERFLOW_TOTAL: Lazy<CounterVec> = Lazy::new(
 /// — overflow answers "did the buffer ever breach the soft cap?" while this
 /// gauge answers "is the buffer draining?". Alert if this stays non-zero and
 /// non-decreasing across consecutive scrapes.
+///
+/// The gauge updates when an event leaves the in-memory buffer (post-drain),
+/// not when its downstream publish completes — events in flight after a
+/// flush are not reflected. Pair with `STREAM_PUBLISH_DROPPED_TOTAL` and the
+/// `record_finalized_flush_duration` histogram for the publish-side picture.
+///
 /// Labels: stream_type, network
 pub static STREAM_FINALIZED_BUFFER_DEPTH: Lazy<GaugeVec> = Lazy::new(|| {
     register_gauge_vec!(
