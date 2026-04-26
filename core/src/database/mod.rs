@@ -217,9 +217,11 @@ impl DatabaseBackends {
         max_batch_size: Option<usize>,
     ) -> Self {
         if let Some(policy) = &write_policy {
-            // PrimaryWithShadow needs at least one backend to act as primary.
-            if *policy == WritePolicy::PrimaryWithShadow && self.primary_backend.is_none() {
-                warn!("WritePolicy::PrimaryWithShadow requires at least one backend — falling back to WritePolicy::All");
+            // PrimaryWithShadow needs a primary AND a shadow; with a single backend
+            // it degenerates into All (the only backend must succeed either way), so
+            // fall back to make that explicit rather than silently no-op the policy.
+            if *policy == WritePolicy::PrimaryWithShadow && self.backends.len() < 2 {
+                warn!("WritePolicy::PrimaryWithShadow requires at least two backends — falling back to WritePolicy::All");
                 self.write_policy = WritePolicy::All;
             } else {
                 self.write_policy = policy.clone();
