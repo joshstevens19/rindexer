@@ -1,0 +1,23 @@
+core/src/database/mod.rs
+  9997a21dbd197c7a 220-224
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "00e36546c31b244389d589afb7de3fad89c68155",
+  "prompts": {
+    "9997a21dbd197c7a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10073143-9b1a-4068-ac5e-f34cd46e3dff",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 19,
+      "total_deletions": 7,
+      "accepted_lines": 19,
+      "overriden_lines": 0
+    }
+  }
+}
