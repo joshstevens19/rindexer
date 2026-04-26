@@ -1,0 +1,29 @@
+core/src/indexer/cron_scheduler.rs
+  9997a21dbd197c7a 17,573-576,582,584,589-596,601-608,1209-1210,1513-1514
+core/src/database/clickhouse/client.rs
+  9997a21dbd197c7a 411
+core/src/database/mod.rs
+  9997a21dbd197c7a 22-24,26-27,109,116-123,125-132,136-141,148-151,157-158,167,178-183,198-200,208,217,239-244,246-276,279-280,282-300,302-304,315,322-340,370-380,390,402-407,410-425
+core/src/database/postgres/client.rs
+  9997a21dbd197c7a 584
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "fcb073d828fb1073e269e11d6388c49685463af9",
+  "prompts": {
+    "9997a21dbd197c7a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10073143-9b1a-4068-ac5e-f34cd46e3dff",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 191,
+      "total_deletions": 285,
+      "accepted_lines": 191,
+      "overriden_lines": 0
+    }
+  }
+}
