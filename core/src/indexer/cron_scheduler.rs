@@ -1164,33 +1164,45 @@ async fn execute_cron_operations_batch(
         return Ok(last_successful_block);
     }
 
-    // Step 4: Write all rows to database in batch
+    // Step 4: Write all rows to database in batch, fanning out through the
+    // shared DatabaseBackends dispatch (circuit breaker, write policy, metrics).
     let operation = &task.cron_entry.operations[0];
 
     info!("Tables::{} - {:?} - {} rows", task.table.name, operation.operation_type, all_rows.len());
 
-    if let Some(postgres) = &databases.postgres {
-        super::tables::execute_postgres_operation_internal(
-            postgres,
-            &task.full_table_name,
-            &task.table,
-            operation,
-            &all_rows,
-            None,
-        )
-        .await?;
+    let mut ops: Vec<(&'static str, std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>)> = Vec::new();
+    if let Some(postgres) = databases.postgres.clone() {
+        let full_table = task.full_table_name.clone();
+        let table = task.table.clone();
+        let op = operation.clone();
+        let rows = all_rows.clone();
+        ops.push((
+            "postgres",
+            Box::pin(async move {
+                super::tables::execute_postgres_operation_internal(
+                    &postgres, &full_table, &table, &op, &rows, None,
+                )
+                .await
+            }),
+        ));
+    }
+    if let Some(clickhouse) = databases.clickhouse.clone() {
+        let full_table = task.full_table_name.clone();
+        let table = task.table.clone();
+        let op = operation.clone();
+        let rows = all_rows.clone();
+        ops.push((
+            "clickhouse",
+            Box::pin(async move {
+                super::tables::execute_clickhouse_operation_internal(
+                    &clickhouse, &full_table, &table, &op, &rows,
+                )
+                .await
+            }),
+        ));
     }
 
-    if let Some(clickhouse) = &databases.clickhouse {
-        super::tables::execute_clickhouse_operation_internal(
-            clickhouse,
-            &task.full_table_name,
-            &task.table,
-            operation,
-            &all_rows,
-        )
-        .await?;
-    }
+    databases.dispatch_ops(&format!("cron::{}", task.table.name), ops).await?;
 
     Ok(last_successful_block)
 }
@@ -1493,29 +1505,40 @@ async fn execute_cron_operations(
             continue;
         }
 
-        // Execute the operation for all rows
-        if let Some(postgres) = &databases.postgres {
-            super::tables::execute_postgres_operation_internal(
-                postgres,
-                &task.full_table_name,
-                &task.table,
-                operation,
-                &all_rows,
-                None, // No SQL condition for cron
-            )
-            .await?;
+        // Execute the operation for all rows via the shared dispatch framework.
+        let mut ops: Vec<(&'static str, std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>)> = Vec::new();
+        if let Some(postgres) = databases.postgres.clone() {
+            let full_table = task.full_table_name.clone();
+            let table = task.table.clone();
+            let op = operation.clone();
+            let rows = all_rows.clone();
+            ops.push((
+                "postgres",
+                Box::pin(async move {
+                    super::tables::execute_postgres_operation_internal(
+                        &postgres, &full_table, &table, &op, &rows, None,
+                    )
+                    .await
+                }),
+            ));
+        }
+        if let Some(clickhouse) = databases.clickhouse.clone() {
+            let full_table = task.full_table_name.clone();
+            let table = task.table.clone();
+            let op = operation.clone();
+            let rows = all_rows.clone();
+            ops.push((
+                "clickhouse",
+                Box::pin(async move {
+                    super::tables::execute_clickhouse_operation_internal(
+                        &clickhouse, &full_table, &table, &op, &rows,
+                    )
+                    .await
+                }),
+            ));
         }
 
-        if let Some(clickhouse) = &databases.clickhouse {
-            super::tables::execute_clickhouse_operation_internal(
-                clickhouse,
-                &task.full_table_name,
-                &task.table,
-                operation,
-                &all_rows,
-            )
-            .await?;
-        }
+        databases.dispatch_ops(&format!("cron::{}", task.table.name), ops).await?;
     }
 
     let addr_info = if task.factory_config.is_some() {

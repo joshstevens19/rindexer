@@ -1461,7 +1461,7 @@ impl TableRuntime {
 }
 
 /// Data for a single table row to be processed.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TableRowData {
     /// Column values keyed by column name
     pub columns: HashMap<String, EthereumSqlTypeWrapper>,
