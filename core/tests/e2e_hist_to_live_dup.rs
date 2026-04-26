@@ -413,7 +413,6 @@ async fn run_one_iteration(
     });
 
     let driver = {
-        let env = env;
         let schema = schema.clone();
         async move {
             // The phase 1 → phase 2 handoff is the window of interest. Phase
@@ -492,6 +491,7 @@ async fn historical_to_live_transition_produces_no_duplicates() {
     const N_EVENTS: u64 = 5;
     const SAFE_DISTANCE: u64 = 2;
 
+    #[allow(clippy::type_complexity)]
     let mut failures: Vec<(usize, usize, Vec<(i64, String, String)>)> = Vec::new();
 
     for i in 0..ITERATIONS {
