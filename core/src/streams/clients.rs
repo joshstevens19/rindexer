@@ -1182,9 +1182,26 @@ impl StreamsClients {
             }
         }
 
+        // Continue-on-error across keys: a persistent publish failure on one
+        // stream-type/config must NOT cause the remaining keys' already-drained
+        // events to be dropped. Per-key dispatch already reports drops via
+        // `STREAM_PUBLISH_DROPPED_TOTAL` after the retry budget is exhausted;
+        // here we surface the first error (so callers see something went
+        // wrong) while letting every other key's events reach their backend.
         let mut total_sent = 0;
+        let mut first_err: Option<StreamError> = None;
         for (key, ready) in ready_by_key {
-            total_sent += self.dispatch_flushed(&key, ready).await?;
+            match self.dispatch_flushed(&key, ready).await {
+                Ok(n) => total_sent += n,
+                Err(e) => {
+                    if first_err.is_none() {
+                        first_err = Some(e);
+                    }
+                }
+            }
+        }
+        if let Some(e) = first_err {
+            return Err(e);
         }
         Ok(total_sent)
     }
@@ -2233,5 +2250,97 @@ mod tests {
 
         assert_eq!(sent, 0);
         assert_eq!(buffered_blocks(&clients, "ethereum").await, vec![1, 2, 5]);
+    }
+
+    async fn seed_buffer_for_config(
+        clients: &StreamsClients,
+        stream_type: &'static str,
+        config_index: usize,
+        network: &str,
+        event_name: &str,
+        blocks: &[u64],
+        distance: u64,
+    ) {
+        clients.register_network_reorg_distance(network.to_string(), distance);
+        let key = BufferKey {
+            stream_type,
+            config_index,
+            network: network.to_string(),
+            event_name: event_name.to_string(),
+            event_signature_hash: B256::ZERO,
+        };
+        let mut map = clients.finalized_buffers.lock().await;
+        let buf = map.entry(key).or_insert_with(|| FinalizedBuffer::new(distance));
+        for &b in blocks {
+            buf.add(b, vec![json!({"block": b})]);
+        }
+    }
+
+    #[tokio::test]
+    async fn flush_finalized_healthy_backend_delivers_when_other_backend_fails() {
+        // C1 regression: a persistent publish error on backend A must not
+        // cause backend B's already-drained events to be dropped. Pre-fix,
+        // the `?` in the per-key dispatch loop propagated the first Err and
+        // skipped every subsequent key — silent data loss with no
+        // STREAM_PUBLISH_DROPPED_TOTAL entry for the lost events because
+        // they never reached `publish_with_retry`.
+        let mut server = mockito::Server::new_async().await;
+        let bad =
+            server.mock("POST", "/bad").with_status(500).expect_at_least(1).create_async().await;
+        let good = server.mock("POST", "/good").with_status(200).expect(1).create_async().await;
+
+        let bad_cfg = WebhookStreamConfig {
+            endpoint: format!("{}/bad", server.url()),
+            shared_secret: "s".to_string(),
+            networks: vec!["ethereum".to_string()],
+            events: vec![stream_event("Transfer")],
+            delivery: None,
+        };
+        let good_cfg = WebhookStreamConfig {
+            endpoint: format!("{}/good", server.url()),
+            shared_secret: "s".to_string(),
+            networks: vec!["ethereum".to_string()],
+            events: vec![stream_event("Transfer")],
+            delivery: None,
+        };
+        let clients = webhook_clients(vec![bad_cfg, good_cfg]);
+
+        // Seed both config buckets with the same block so flush produces two
+        // BufferKey entries (differing only in `config_index`).
+        seed_buffer_for_config(
+            &clients,
+            stream_type::WEBHOOK,
+            0,
+            "ethereum",
+            "Transfer",
+            &[100],
+            10,
+        )
+        .await;
+        seed_buffer_for_config(
+            &clients,
+            stream_type::WEBHOOK,
+            1,
+            "ethereum",
+            "Transfer",
+            &[100],
+            10,
+        )
+        .await;
+
+        let result = clients.flush_finalized("ethereum", 110).await;
+
+        // /bad exhausts retries and surfaces a WebhookError — that's expected
+        // and the coordinator warn-logs it. The critical post-fix invariant is
+        // that /good still received its event regardless of HashMap iteration
+        // order: before the fix, if /bad's key iterated first, /good's
+        // already-drained events were silently lost.
+        assert!(
+            matches!(result, Err(StreamError::WebhookCouldNotPublish(_))),
+            "expected webhook err surfaced, got {:?}",
+            result
+        );
+        good.assert_async().await;
+        bad.assert_async().await;
     }
 }
