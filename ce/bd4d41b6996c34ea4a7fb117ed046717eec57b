@@ -1,0 +1,27 @@
+core/Cargo.toml
+  71e1f5331ce549d4 44,46,86
+core/src/blockclock/fixed.rs
+  71e1f5331ce549d4 93
+core/src/helpers/mod.rs
+  71e1f5331ce549d4 26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "cebd4d41b6996c34ea4a7fb117ed046717eec57b",
+  "prompts": {
+    "71e1f5331ce549d4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9f80f68e-f933-477d-be1b-f2cbe2f38479",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 10,
+      "total_deletions": 10,
+      "accepted_lines": 11,
+      "overriden_lines": 0
+    }
+  }
+}
