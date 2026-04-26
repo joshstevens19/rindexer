@@ -5,11 +5,9 @@ pub mod postgres;
 pub mod sql_type_wrapper;
 
 use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures::future::join_all;
 use parking_lot::Mutex;
 use tracing::{error, info, warn};
 
@@ -21,8 +19,12 @@ use self::{
     sql_type_wrapper::EthereumSqlTypeWrapper,
 };
 
+const PG_NAME: &str = "postgres";
+const CH_NAME: &str = "clickhouse";
+
 /// Trait for database backends that support bulk row insertion.
-/// Designed for extensibility — future backends (S3, SQLite, etc.) implement this trait.
+/// Implemented by PostgresClient and ClickhouseClient; provided as an extension
+/// hook for future backends, not used for runtime fan-out (which is typed-pair).
 #[async_trait::async_trait]
 pub trait Database: Send + Sync + 'static {
     async fn insert_bulk(
@@ -100,87 +102,61 @@ impl BackendHealth {
     }
 }
 
-/// Erased async write op (one per backend) for `DatabaseBackends::dispatch_ops`.
-pub type BoxedBackendOp = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
-
 /// Update per-backend metrics, circuit breaker state, and state gauge from a write outcome.
-/// Shared between the trait-level `insert_bulk_inner` and the closure-based `dispatch_ops`.
 fn record_backend_outcome(
     name: &'static str,
     elapsed_secs: f64,
-    health: Option<&Arc<Mutex<BackendHealth>>>,
+    health: Option<&Mutex<BackendHealth>>,
     result: &Result<(), String>,
 ) {
     db_metrics::record_backend_insert(name, elapsed_secs);
     if result.is_err() {
         db_metrics::record_backend_insert_error(name);
     }
-    if let Some(health) = health {
-        let mut guard = health.lock();
-        match result {
-            Ok(_) => {
-                let was_half_open = guard.state == CircuitState::HalfOpen;
-                guard.record_success();
-                if was_half_open {
-                    info!("{} circuit breaker recovered — backend is healthy", name);
-                }
-            }
-            Err(_) => {
-                guard.record_failure();
-                if guard.state == CircuitState::Open {
-                    warn!(
-                        "{} circuit breaker tripped after {} consecutive failures",
-                        name, guard.consecutive_failures
-                    );
-                }
+    let Some(health) = health else { return };
+    let mut guard = health.lock();
+    match result {
+        Ok(_) => {
+            let was_half_open = guard.state == CircuitState::HalfOpen;
+            guard.record_success();
+            if was_half_open {
+                info!("{} circuit breaker recovered — backend is healthy", name);
             }
         }
-        let state_val = match guard.state {
-            CircuitState::Closed => 0.0,
-            CircuitState::Open => 1.0,
-            CircuitState::HalfOpen => 2.0,
-        };
-        db_metrics::set_circuit_state(name, state_val);
+        Err(_) => {
+            guard.record_failure();
+            if guard.state == CircuitState::Open {
+                warn!(
+                    "{} circuit breaker tripped after {} consecutive failures",
+                    name, guard.consecutive_failures
+                );
+            }
+        }
     }
+    let state_val = match guard.state {
+        CircuitState::Closed => 0.0,
+        CircuitState::Open => 1.0,
+        CircuitState::HalfOpen => 2.0,
+    };
+    db_metrics::set_circuit_state(name, state_val);
 }
 
 // ============================================================================
 // DatabaseBackends
 // ============================================================================
 
-/// Holds all configured database backends for parallel writes.
-///
-/// The `backends` vec enables `join_all` over `dyn Database` for the common insert path.
-/// The typed `postgres`/`clickhouse` fields provide concrete access for backend-specific
-/// operations (checkpoints, reorg cleanup, DDL, table operations).
-#[derive(Clone)]
+/// Holds the configured database backends. The current set (postgres, clickhouse)
+/// is fixed by the YAML schema, so backends are stored as typed `Option`s rather
+/// than a heterogeneous Vec.
+#[derive(Default, Clone)]
 pub struct DatabaseBackends {
-    backends: Vec<Arc<dyn Database>>,
     pub postgres: Option<Arc<PostgresClient>>,
     pub clickhouse: Option<Arc<ClickhouseClient>>,
     write_policy: WritePolicy,
-    /// Name of the primary backend for `PrimaryWithShadow` policy. Defaults to the first
-    /// registered backend (postgres when both are configured).
-    primary_backend: Option<&'static str>,
     max_batch_size: Option<usize>,
-    /// Per-backend circuit breaker health. Index matches `backends` vec.
-    health: Vec<Arc<Mutex<BackendHealth>>>,
+    pg_health: Option<Arc<Mutex<BackendHealth>>>,
+    ch_health: Option<Arc<Mutex<BackendHealth>>>,
     circuit_breaker_enabled: bool,
-}
-
-impl Default for DatabaseBackends {
-    fn default() -> Self {
-        Self {
-            backends: Vec::new(),
-            postgres: None,
-            clickhouse: None,
-            write_policy: WritePolicy::All,
-            primary_backend: None,
-            max_batch_size: None,
-            health: Vec::new(),
-            circuit_breaker_enabled: false,
-        }
-    }
 }
 
 impl DatabaseBackends {
@@ -188,28 +164,10 @@ impl DatabaseBackends {
         postgres: Option<Arc<PostgresClient>>,
         clickhouse: Option<Arc<ClickhouseClient>>,
     ) -> Self {
-        let mut backends: Vec<Arc<dyn Database>> = Vec::new();
-        if let Some(pg) = &postgres {
-            backends.push(Arc::clone(pg) as Arc<dyn Database>);
-        }
-        if let Some(ch) = &clickhouse {
-            backends.push(Arc::clone(ch) as Arc<dyn Database>);
-        }
-        let primary_backend = backends.first().map(|b| b.backend_name());
-        Self {
-            backends,
-            postgres,
-            clickhouse,
-            write_policy: WritePolicy::All,
-            primary_backend,
-            max_batch_size: None,
-            health: Vec::new(),
-            circuit_breaker_enabled: false,
-        }
+        Self { postgres, clickhouse, ..Self::default() }
     }
 
     /// Configure write policy, circuit breaker, and batch size from storage config.
-    /// Validates config values — clamps degenerate inputs to safe minimums.
     pub fn with_config(
         mut self,
         write_policy: Option<WritePolicy>,
@@ -217,11 +175,12 @@ impl DatabaseBackends {
         max_batch_size: Option<usize>,
     ) -> Self {
         if let Some(policy) = &write_policy {
-            // PrimaryWithShadow needs a primary AND a shadow; with a single backend
-            // it degenerates into All (the only backend must succeed either way), so
-            // fall back to make that explicit rather than silently no-op the policy.
-            if *policy == WritePolicy::PrimaryWithShadow && self.backends.len() < 2 {
-                warn!("WritePolicy::PrimaryWithShadow requires at least two backends — falling back to WritePolicy::All");
+            // PrimaryWithShadow needs both backends; with one configured the
+            // policy degenerates into All. Be explicit rather than silently no-op it.
+            if *policy == WritePolicy::PrimaryWithShadow
+                && (self.postgres.is_none() || self.clickhouse.is_none())
+            {
+                warn!("WritePolicy::PrimaryWithShadow requires both postgres and clickhouse — falling back to WritePolicy::All");
                 self.write_policy = WritePolicy::All;
             } else {
                 self.write_policy = policy.clone();
@@ -236,11 +195,9 @@ impl DatabaseBackends {
                     failure_threshold: config.failure_threshold.max(1),
                     cooldown_seconds: config.cooldown_seconds.max(1),
                 };
-                self.health = self
-                    .backends
-                    .iter()
-                    .map(|_| Arc::new(Mutex::new(BackendHealth::new(&safe_config))))
-                    .collect();
+                let new_health = || Arc::new(Mutex::new(BackendHealth::new(&safe_config)));
+                self.pg_health = self.postgres.as_ref().map(|_| new_health());
+                self.ch_health = self.clickhouse.as_ref().map(|_| new_health());
             }
         }
         // Clamp max_batch_size to >= 1 to prevent panic in chunks(0)
@@ -248,7 +205,7 @@ impl DatabaseBackends {
         self
     }
 
-    /// Parallel insert across all backends using `join_all`.
+    /// Parallel insert across configured backends.
     /// Respects write policy, circuit breaker, and batch-size caps.
     /// Never uses `try_join_all` — cancelling in-flight futures can abort PG COPY mid-stream.
     pub async fn insert_bulk(
@@ -257,11 +214,10 @@ impl DatabaseBackends {
         columns: &[String],
         data: &[Vec<EthereumSqlTypeWrapper>],
     ) -> Result<(), String> {
-        if self.backends.is_empty() || data.is_empty() {
+        if !self.has_any_db() || data.is_empty() {
             return Ok(());
         }
 
-        // Batch-size caps: split into chunks if configured
         if let Some(max) = self.max_batch_size {
             if data.len() > max {
                 for chunk in data.chunks(max) {
@@ -280,68 +236,72 @@ impl DatabaseBackends {
         columns: &[String],
         data: &[Vec<EthereumSqlTypeWrapper>],
     ) -> Result<(), String> {
-        let start = Instant::now();
-
-        let futs: Vec<_> = self
-            .backends
-            .iter()
-            .enumerate()
-            .filter_map(|(i, backend)| {
-                // Circuit breaker check
-                if self.circuit_breaker_enabled {
-                    if let Some(health) = self.health.get(i) {
-                        let mut h = health.lock();
-                        if !h.should_dispatch() {
-                            warn!(
-                                "{} circuit open, skipping write to {}",
-                                backend.backend_name(),
-                                table
-                            );
-                            return None;
-                        }
-                    }
-                }
-
-                let backend = Arc::clone(backend);
-                let health = self.health.get(i).cloned();
-                let table_owned = table.to_string();
-                Some(async move {
-                    let name = backend.backend_name();
-                    let backend_start = Instant::now();
-                    let result =
-                        backend.insert_bulk(&table_owned, columns, data).await.map_err(|e| {
-                            error!("{} insert_bulk failed: {}", name, e);
-                            format!("{}: {}", name, e)
-                        });
-                    record_backend_outcome(
-                        name,
-                        backend_start.elapsed().as_secs_f64(),
-                        health.as_ref(),
-                        &result,
-                    );
-                    (name, result)
+        let pg_op = self.postgres.as_ref().map(|pg| {
+            let pg = Arc::clone(pg);
+            async move {
+                Database::insert_bulk(&*pg, table, columns, data).await.map_err(|e| {
+                    error!("postgres insert_bulk failed: {}", e);
+                    format!("postgres: {}", e)
                 })
-            })
-            .collect();
+            }
+        });
+        let ch_op = self.clickhouse.as_ref().map(|ch| {
+            let ch = Arc::clone(ch);
+            async move {
+                Database::insert_bulk(&*ch, table, columns, data).await.map_err(|e| {
+                    error!("clickhouse insert_bulk failed: {}", e);
+                    format!("clickhouse: {}", e)
+                })
+            }
+        });
+        self.dispatch_paired(table, pg_op, ch_op).await
+    }
 
-        if futs.is_empty() {
-            // All backends have open circuits — this is a data loss vector.
-            // Return error so the caller does NOT advance the checkpoint.
-            error!("All backend circuits are open — no writes dispatched for {}", table);
-            return Err(
-                "All backend circuits are open — data not written to any backend".to_string()
-            );
+    /// Run paired per-backend writes through the shared circuit-breaker, metrics,
+    /// and write-policy framework. Either op may be `None` (backend not configured
+    /// or skipped); the helper short-circuits cleanly.
+    pub async fn dispatch_paired<PgFut, ChFut>(
+        &self,
+        context: &str,
+        pg_op: Option<PgFut>,
+        ch_op: Option<ChFut>,
+    ) -> Result<(), String>
+    where
+        PgFut: Future<Output = Result<(), String>> + Send,
+        ChFut: Future<Output = Result<(), String>> + Send,
+    {
+        let pg_offered = pg_op.is_some();
+        let ch_offered = ch_op.is_some();
+        if !pg_offered && !ch_offered {
+            return Ok(());
         }
 
-        let results = join_all(futs).await;
-        let duration = start.elapsed();
+        let pg_op = self.gate(PG_NAME, context, self.pg_health.as_deref(), pg_op);
+        let ch_op = self.gate(CH_NAME, context, self.ch_health.as_deref(), ch_op);
 
-        let mut successes: Vec<&'static str> = Vec::new();
-        let mut failures: Vec<(&'static str, String)> = Vec::new();
-        for (name, result) in results {
+        if pg_op.is_none() && ch_op.is_none() {
+            error!("All backend circuits are open — no ops dispatched for {}", context);
+            return Err(format!(
+                "All backend circuits are open — {} not written to any backend",
+                context
+            ));
+        }
+
+        let start = Instant::now();
+        let pg_health = self.pg_health.clone();
+        let ch_health = self.ch_health.clone();
+        let (pg_outcome, ch_outcome) = tokio::join!(
+            run_one(PG_NAME, pg_op, pg_health),
+            run_one(CH_NAME, ch_op, ch_health),
+        );
+
+        let mut successes: Vec<&'static str> = Vec::with_capacity(2);
+        let mut failures: Vec<(&'static str, String)> = Vec::with_capacity(2);
+        for (name, result) in [(PG_NAME, pg_outcome), (CH_NAME, ch_outcome)] {
             match result {
-                Ok(_) => successes.push(name),
-                Err(e) => failures.push((name, e)),
+                Some(Ok(())) => successes.push(name),
+                Some(Err(e)) => failures.push((name, e)),
+                None => {}
             }
         }
 
@@ -352,11 +312,30 @@ impl DatabaseBackends {
                 successes,
                 failures.len(),
                 failures.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
-                duration.as_secs_f64() * 1000.0
+                start.elapsed().as_secs_f64() * 1000.0
             );
         }
 
         self.apply_write_policy(&successes, &failures)
+    }
+
+    /// Drop a future if its backend's circuit is open (logs once, returns `None`).
+    fn gate<F>(
+        &self,
+        name: &'static str,
+        context: &str,
+        health: Option<&Mutex<BackendHealth>>,
+        op: Option<F>,
+    ) -> Option<F> {
+        let op = op?;
+        if self.circuit_breaker_enabled
+            && health.is_some_and(|h| !h.lock().should_dispatch())
+        {
+            warn!("{} circuit open, skipping {}", name, context);
+            None
+        } else {
+            Some(op)
+        }
     }
 
     /// Apply the configured `WritePolicy` to a set of per-backend outcomes.
@@ -388,10 +367,17 @@ impl DatabaseBackends {
                 }
             }
             WritePolicy::PrimaryWithShadow => {
-                let primary = self.primary_backend;
-                let primary_failed =
-                    primary.is_some_and(|p| failures.iter().any(|(name, _)| *name == p));
-                if primary_failed {
+                // Primary = postgres if configured (else clickhouse). PrimaryWithShadow
+                // is only accepted in `with_config` when both are configured, but we
+                // re-derive here defensively.
+                let primary = if self.postgres.is_some() {
+                    PG_NAME
+                } else if self.clickhouse.is_some() {
+                    CH_NAME
+                } else {
+                    return Ok(());
+                };
+                if failures.iter().any(|(n, _)| *n == primary) {
                     Err(format_failures())
                 } else {
                     Ok(())
@@ -400,75 +386,8 @@ impl DatabaseBackends {
         }
     }
 
-    /// Dispatch a set of pre-bound per-backend writes through the same
-    /// policy / circuit-breaker / metrics framework that `insert_bulk` uses.
-    ///
-    /// Intended for write paths (e.g. custom-table cron upserts, reorg cleanup)
-    /// whose per-backend logic is too rich to express via `Database::insert_bulk`.
-    /// Each op is a `(backend_name, future)` pair; ops run concurrently, circuit
-    /// breaker gates dispatch, and the aggregate result honours the configured
-    /// `WritePolicy`.
-    pub async fn dispatch_ops(
-        &self,
-        context: &str,
-        ops: Vec<(&'static str, BoxedBackendOp)>,
-    ) -> Result<(), String> {
-        if ops.is_empty() {
-            return Ok(());
-        }
-
-        let mut dispatched: Vec<(&'static str, Option<Arc<Mutex<BackendHealth>>>, BoxedBackendOp)> =
-            Vec::with_capacity(ops.len());
-
-        for (name, fut) in ops {
-            let backend_idx = self.backends.iter().position(|b| b.backend_name() == name);
-            let health = backend_idx.and_then(|i| self.health.get(i).cloned());
-            if self.circuit_breaker_enabled {
-                if let Some(h) = &health {
-                    if !h.lock().should_dispatch() {
-                        warn!("{} circuit open, skipping {}", name, context);
-                        continue;
-                    }
-                }
-            }
-            dispatched.push((name, health, fut));
-        }
-
-        if dispatched.is_empty() {
-            error!("All backend circuits are open — no ops dispatched for {}", context);
-            return Err(format!(
-                "All backend circuits are open — {} not written to any backend",
-                context
-            ));
-        }
-
-        let results = join_all(dispatched.into_iter().map(|(name, health, fut)| async move {
-            let backend_start = Instant::now();
-            let result = fut.await;
-            record_backend_outcome(
-                name,
-                backend_start.elapsed().as_secs_f64(),
-                health.as_ref(),
-                &result,
-            );
-            (name, result)
-        }))
-        .await;
-
-        let mut successes: Vec<&'static str> = Vec::with_capacity(results.len());
-        let mut failures: Vec<(&'static str, String)> = Vec::new();
-        for (name, result) in results {
-            match result {
-                Ok(_) => successes.push(name),
-                Err(e) => failures.push((name, e)),
-            }
-        }
-
-        self.apply_write_policy(&successes, &failures)
-    }
-
     pub fn has_any_db(&self) -> bool {
-        !self.backends.is_empty()
+        self.postgres.is_some() || self.clickhouse.is_some()
     }
 
     pub fn write_policy(&self) -> &WritePolicy {
@@ -480,11 +399,28 @@ impl DatabaseBackends {
         if !self.circuit_breaker_enabled {
             return None;
         }
-        for (i, backend) in self.backends.iter().enumerate() {
-            if backend.backend_name() == backend_name {
-                return self.health.get(i).map(|h| h.lock().state);
-            }
-        }
-        None
+        let health = match backend_name {
+            PG_NAME => self.pg_health.as_deref()?,
+            CH_NAME => self.ch_health.as_deref()?,
+            _ => return None,
+        };
+        Some(health.lock().state)
     }
+}
+
+/// Run a single per-backend op, recording metrics and circuit-breaker outcome.
+/// Returns `None` if no op was supplied.
+async fn run_one<F>(
+    name: &'static str,
+    op: Option<F>,
+    health: Option<Arc<Mutex<BackendHealth>>>,
+) -> Option<Result<(), String>>
+where
+    F: Future<Output = Result<(), String>>,
+{
+    let op = op?;
+    let start = Instant::now();
+    let result = op.await;
+    record_backend_outcome(name, start.elapsed().as_secs_f64(), health.as_deref(), &result);
+    Some(result)
 }

@@ -80,10 +80,6 @@ fn parse_clickhouse_batch_size_value(value: Option<String>) -> usize {
 }
 
 impl ClickhouseClient {
-    /// Stable identifier exposed to circuit breakers, metrics, and routing.
-    /// Renaming this string is a breaking API change.
-    pub const BACKEND_NAME: &'static str = "clickhouse";
-
     pub async fn new() -> Result<Self, ClickhouseConnectionError> {
         let connection = clickhouse_connection()?;
         let batch_size = parse_clickhouse_batch_size();
@@ -412,6 +408,6 @@ impl crate::database::Database for ClickhouseClient {
     }
 
     fn backend_name(&self) -> &'static str {
-        Self::BACKEND_NAME
+        "clickhouse"
     }
 }

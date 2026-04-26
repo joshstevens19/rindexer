@@ -13,10 +13,8 @@ use alloy::primitives::{Address, B256, U256};
 use chrono::{DateTime, Utc};
 use tracing::{debug, error, info, warn};
 
-use crate::database::clickhouse::client::ClickhouseClient;
-use crate::database::postgres::client::PostgresClient;
 use crate::database::sql_type_wrapper::EthereumSqlTypeWrapper;
-use crate::database::{BoxedBackendOp, DatabaseBackends};
+use crate::database::DatabaseBackends;
 use crate::event::{
     get_factory_addresses_with_birth_blocks, GetFactoryAddressesWithBirthBlocksParams,
 };
@@ -572,50 +570,42 @@ async fn wait_for_factory_sync(
     }
 }
 
-/// Build a per-backend op list for a custom-table cron write, ready for
-/// `DatabaseBackends::dispatch_ops`. Rows are shared across both backends via
-/// `Arc` so we don't deep-clone the row vec per backend.
-fn build_cron_dispatch_ops(
+/// Dispatch a custom-table cron write to all configured backends through
+/// `DatabaseBackends::dispatch_paired`. Rows are shared across both backends
+/// via `Arc` so we don't deep-clone the row vec per backend.
+async fn dispatch_cron_write(
     databases: &DatabaseBackends,
     full_table: &str,
     table: &Table,
     operation: &TableOperation,
     rows: Vec<TableRowData>,
-) -> Vec<(&'static str, BoxedBackendOp)> {
-    let mut ops: Vec<(&'static str, BoxedBackendOp)> = Vec::with_capacity(2);
+) -> Result<(), String> {
     let rows = Arc::new(rows);
-
-    if let Some(postgres) = databases.postgres.clone() {
+    let pg_op = databases.postgres.clone().map(|pg| {
         let full_table = full_table.to_string();
         let table = table.clone();
         let operation = operation.clone();
         let rows = Arc::clone(&rows);
-        ops.push((
-            PostgresClient::BACKEND_NAME,
-            Box::pin(async move {
-                super::tables::execute_postgres_operation_internal(
-                    &postgres, &full_table, &table, &operation, &rows, None,
-                )
-                .await
-            }),
-        ));
-    }
-    if let Some(clickhouse) = databases.clickhouse.clone() {
+        async move {
+            super::tables::execute_postgres_operation_internal(
+                &pg, &full_table, &table, &operation, &rows, None,
+            )
+            .await
+        }
+    });
+    let ch_op = databases.clickhouse.clone().map(|ch| {
         let full_table = full_table.to_string();
         let table = table.clone();
         let operation = operation.clone();
         let rows = Arc::clone(&rows);
-        ops.push((
-            ClickhouseClient::BACKEND_NAME,
-            Box::pin(async move {
-                super::tables::execute_clickhouse_operation_internal(
-                    &clickhouse, &full_table, &table, &operation, &rows,
-                )
-                .await
-            }),
-        ));
-    }
-    ops
+        async move {
+            super::tables::execute_clickhouse_operation_internal(
+                &ch, &full_table, &table, &operation, &rows,
+            )
+            .await
+        }
+    });
+    databases.dispatch_paired(&format!("cron::{}", table.name), pg_op, ch_op).await
 }
 
 /// Run a single cron task until shutdown.
@@ -1216,14 +1206,8 @@ async fn execute_cron_operations_batch(
 
     info!("Tables::{} - {:?} - {} rows", task.table.name, operation.operation_type, all_rows.len());
 
-    let ops = build_cron_dispatch_ops(
-        &databases,
-        &task.full_table_name,
-        &task.table,
-        operation,
-        all_rows,
-    );
-    databases.dispatch_ops(&format!("cron::{}", task.table.name), ops).await?;
+    dispatch_cron_write(&databases, &task.full_table_name, &task.table, operation, all_rows)
+        .await?;
 
     Ok(last_successful_block)
 }
@@ -1526,14 +1510,8 @@ async fn execute_cron_operations(
             continue;
         }
 
-        let ops = build_cron_dispatch_ops(
-            databases,
-            &task.full_table_name,
-            &task.table,
-            operation,
-            all_rows,
-        );
-        databases.dispatch_ops(&format!("cron::{}", task.table.name), ops).await?;
+        dispatch_cron_write(databases, &task.full_table_name, &task.table, operation, all_rows)
+            .await?;
     }
 
     let addr_info = if task.factory_config.is_some() {
