@@ -100,7 +100,7 @@ impl ClickhouseClient {
 
     pub async fn query_one<T>(&self, sql: &str) -> Result<T, ClickhouseError>
     where
-        T: Row + for<'b> Deserialize<'b>,
+        T: for<'a> Row<Value<'a> = T> + for<'b> Deserialize<'b> + 'static,
     {
         let start = Instant::now();
         let result = self.conn.query(sql).fetch_one().await;
@@ -111,7 +111,7 @@ impl ClickhouseClient {
 
     pub async fn query<T>(&self, sql: &str) -> Result<T, ClickhouseError>
     where
-        T: Row + for<'b> Deserialize<'b>,
+        T: for<'a> Row<Value<'a> = T> + for<'b> Deserialize<'b> + 'static,
     {
         let start = Instant::now();
         let result = self.conn.query(sql).fetch_one().await;
@@ -122,7 +122,7 @@ impl ClickhouseClient {
 
     pub async fn query_all<T>(&self, sql: &str) -> Result<Vec<T>, ClickhouseError>
     where
-        T: Row + for<'b> Deserialize<'b>,
+        T: for<'a> Row<Value<'a> = T> + for<'b> Deserialize<'b> + 'static,
     {
         let start = Instant::now();
         let result = self.conn.query(sql).fetch_all().await;
@@ -133,7 +133,7 @@ impl ClickhouseClient {
 
     pub async fn query_optional<T>(&self, sql: &str) -> Result<Option<T>, ClickhouseError>
     where
-        T: Row + for<'b> Deserialize<'b>,
+        T: for<'a> Row<Value<'a> = T> + for<'b> Deserialize<'b> + 'static,
     {
         let start = Instant::now();
         let result = self.conn.query(sql).fetch_optional().await;

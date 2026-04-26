@@ -33,7 +33,7 @@ chrono = { version = "0.4", features = ["serde"] }
 colored = "3.0.0"
 croner = "2"
 csv = { workspace = true }
-clickhouse = { version = "0.13.3", features = ["rustls-tls"] }
+clickhouse = { version = "0.15.0", features = ["rustls-tls"] }
 deadpool = { version = "0.12", features = ["rt_tokio_1"] }
 deadpool-lapin = "0.13"
 dotenvy = "0.15"
