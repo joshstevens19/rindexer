@@ -42,6 +42,9 @@ pub enum UpdateKnownFactoryDeployedAddressesError {
 
     #[error("Could not parse logs")]
     LogsParse,
+
+    #[error("No storage backend configured (postgres/clickhouse/csv); cannot persist factory-deployed addresses")]
+    NoStorageConfigured,
 }
 
 #[derive(PartialEq, Eq, Hash)]
@@ -216,38 +219,37 @@ pub async fn update_known_factory_deployed_addresses(
 
     // CSV fallback only when no database is configured
     if !wrote_to_db {
-        if let Some(csv_details) = &config.csv_details {
-            let full_path = get_full_path(&config.project_path, &csv_details.path)?;
+        let Some(csv_details) = &config.csv_details else {
+            return Err(UpdateKnownFactoryDeployedAddressesError::NoStorageConfigured);
+        };
+        let full_path = get_full_path(&config.project_path, &csv_details.path)?;
 
-            let csv_path = build_known_factory_address_file(
-                &full_path,
-                &config.contract_name,
-                &config.network_contract.network,
-                &config.event.name,
-                &config.input_names(),
-            );
-            let csv_appender = AsyncCsvAppender::new(&csv_path);
+        let csv_path = build_known_factory_address_file(
+            &full_path,
+            &config.contract_name,
+            &config.network_contract.network,
+            &config.event.name,
+            &config.input_names(),
+        );
+        let csv_appender = AsyncCsvAppender::new(&csv_path);
 
-            if !Path::new(&csv_path).exists() {
-                csv_appender
-                    .append_header(vec![
-                        "factory_address".to_string(),
-                        "factory_deployed_address".to_string(),
-                    ])
-                    .await?;
-            }
-
+        if !Path::new(&csv_path).exists() {
             csv_appender
-                .append_bulk(
-                    addresses
-                        .iter()
-                        .map(|item| {
-                            vec![item.factory_address.to_string(), item.address.to_string()]
-                        })
-                        .collect::<Vec<_>>(),
-                )
+                .append_header(vec![
+                    "factory_address".to_string(),
+                    "factory_deployed_address".to_string(),
+                ])
                 .await?;
         }
+
+        csv_appender
+            .append_bulk(
+                addresses
+                    .iter()
+                    .map(|item| vec![item.factory_address.to_string(), item.address.to_string()])
+                    .collect::<Vec<_>>(),
+            )
+            .await?;
     }
 
     Ok(())
