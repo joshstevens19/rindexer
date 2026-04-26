@@ -138,24 +138,25 @@ pub static DB_OPERATION_DURATION: Lazy<HistogramVec> = Lazy::new(|| {
 });
 
 /// Per-backend insert duration histogram.
-/// Labels: backend (postgres/clickhouse), table
+/// Labels: backend (postgres/clickhouse). Table dimension intentionally omitted
+/// because schemas can be dynamic and unbounded.
 pub static BACKEND_INSERT_DURATION: Lazy<HistogramVec> = Lazy::new(|| {
     register_histogram_vec!(
         "rindexer_backend_insert_duration_seconds",
         "Per-backend insert_bulk duration in seconds",
-        &["backend", "table"],
+        &["backend"],
         vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5]
     )
     .expect("failed to register BACKEND_INSERT_DURATION")
 });
 
 /// Per-backend insert error counter.
-/// Labels: backend (postgres/clickhouse), table
+/// Labels: backend (postgres/clickhouse). Table dimension omitted; see `BACKEND_INSERT_DURATION`.
 pub static BACKEND_INSERT_ERRORS: Lazy<CounterVec> = Lazy::new(|| {
     register_counter_vec!(
         "rindexer_backend_insert_errors_total",
         "Total per-backend insert_bulk errors",
-        &["backend", "table"]
+        &["backend"]
     )
     .expect("failed to register BACKEND_INSERT_ERRORS")
 });

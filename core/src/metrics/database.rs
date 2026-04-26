@@ -53,13 +53,13 @@ use super::definitions::{
 };
 
 /// Record per-backend insert duration.
-pub fn record_backend_insert(backend: &str, table: &str, duration_secs: f64) {
-    BACKEND_INSERT_DURATION.with_label_values(&[backend, table]).observe(duration_secs);
+pub fn record_backend_insert(backend: &str, duration_secs: f64) {
+    BACKEND_INSERT_DURATION.with_label_values(&[backend]).observe(duration_secs);
 }
 
 /// Record per-backend insert error.
-pub fn record_backend_insert_error(backend: &str, table: &str) {
-    BACKEND_INSERT_ERRORS.with_label_values(&[backend, table]).inc();
+pub fn record_backend_insert_error(backend: &str) {
+    BACKEND_INSERT_ERRORS.with_label_values(&[backend]).inc();
 }
 
 /// Update circuit breaker state gauge (0=closed, 1=open, 2=half_open).

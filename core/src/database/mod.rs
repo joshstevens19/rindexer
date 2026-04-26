@@ -262,9 +262,9 @@ impl DatabaseBackends {
 
                     // Per-backend metrics
                     let elapsed = backend_start.elapsed().as_secs_f64();
-                    db_metrics::record_backend_insert(name, &table_owned, elapsed);
+                    db_metrics::record_backend_insert(name, elapsed);
                     if result.is_err() {
-                        db_metrics::record_backend_insert_error(name, &table_owned);
+                        db_metrics::record_backend_insert_error(name);
                     }
 
                     // Update circuit breaker state
