@@ -4,6 +4,8 @@ pub mod generate;
 pub mod postgres;
 pub mod sql_type_wrapper;
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -113,6 +115,9 @@ pub struct DatabaseBackends {
     pub postgres: Option<Arc<PostgresClient>>,
     pub clickhouse: Option<Arc<ClickhouseClient>>,
     write_policy: WritePolicy,
+    /// Name of the primary backend for `PrimaryWithShadow` policy. Defaults to the first
+    /// registered backend (postgres when both are configured).
+    primary_backend: Option<&'static str>,
     max_batch_size: Option<usize>,
     /// Per-backend circuit breaker health. Index matches `backends` vec.
     health: Vec<Arc<Mutex<BackendHealth>>>,
@@ -126,6 +131,7 @@ impl Default for DatabaseBackends {
             postgres: None,
             clickhouse: None,
             write_policy: WritePolicy::All,
+            primary_backend: None,
             max_batch_size: None,
             health: Vec::new(),
             circuit_breaker_enabled: false,
@@ -145,11 +151,13 @@ impl DatabaseBackends {
         if let Some(ch) = &clickhouse {
             backends.push(Arc::clone(ch) as Arc<dyn Database>);
         }
+        let primary_backend = backends.first().map(|b| b.backend_name());
         Self {
             backends,
             postgres,
             clickhouse,
             write_policy: WritePolicy::All,
+            primary_backend,
             max_batch_size: None,
             health: Vec::new(),
             circuit_breaker_enabled: false,
@@ -165,9 +173,9 @@ impl DatabaseBackends {
         max_batch_size: Option<usize>,
     ) -> Self {
         if let Some(policy) = &write_policy {
-            // Validate PrimaryWithShadow requires postgres
-            if *policy == WritePolicy::PrimaryWithShadow && self.postgres.is_none() {
-                warn!("WritePolicy::PrimaryWithShadow requires postgres — falling back to WritePolicy::All");
+            // PrimaryWithShadow needs at least one backend to act as primary.
+            if *policy == WritePolicy::PrimaryWithShadow && self.primary_backend.is_none() {
+                warn!("WritePolicy::PrimaryWithShadow requires at least one backend — falling back to WritePolicy::All");
                 self.write_policy = WritePolicy::All;
             } else {
                 self.write_policy = policy.clone();
@@ -363,9 +371,146 @@ impl DatabaseBackends {
                 }
             }
             WritePolicy::PrimaryWithShadow => {
-                // PG is primary — error only if PG failed
-                let pg_failed = failures.iter().any(|(name, _)| *name == "postgres");
-                if pg_failed {
+                // Error only if the primary backend failed; shadow failures are tolerated.
+                let primary = self.primary_backend;
+                let primary_failed =
+                    primary.is_some_and(|p| failures.iter().any(|(name, _)| *name == p));
+                if primary_failed {
+                    Err(failures
+                        .iter()
+                        .map(|(n, e)| format!("{}: {}", n, e))
+                        .collect::<Vec<_>>()
+                        .join("; "))
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+
+    /// Dispatch a set of pre-bound per-backend writes through the same
+    /// policy / circuit-breaker / metrics framework that `insert_bulk` uses.
+    ///
+    /// Intended for write paths (e.g. custom-table cron upserts, reorg cleanup)
+    /// whose per-backend logic is too rich to express via `Database::insert_bulk`.
+    /// Each op is a `(backend_name, future)` pair; ops run concurrently, circuit
+    /// breaker gates dispatch, and the aggregate result honours the configured
+    /// `WritePolicy`.
+    pub async fn dispatch_ops(
+        &self,
+        context: &str,
+        ops: Vec<(&'static str, Pin<Box<dyn Future<Output = Result<(), String>> + Send>>)>,
+    ) -> Result<(), String> {
+        if ops.is_empty() {
+            return Ok(());
+        }
+
+        let mut dispatched: Vec<(
+            &'static str,
+            Option<Arc<Mutex<BackendHealth>>>,
+            Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
+        )> = Vec::new();
+
+        for (name, fut) in ops {
+            let backend_idx = self.backends.iter().position(|b| b.backend_name() == name);
+            let health = backend_idx.and_then(|i| self.health.get(i).cloned());
+            if self.circuit_breaker_enabled {
+                if let Some(h) = &health {
+                    let mut guard = h.lock();
+                    if !guard.should_dispatch() {
+                        warn!("{} circuit open, skipping {}", name, context);
+                        continue;
+                    }
+                }
+            }
+            dispatched.push((name, health, fut));
+        }
+
+        if dispatched.is_empty() {
+            error!("All backend circuits are open — no ops dispatched for {}", context);
+            return Err(format!(
+                "All backend circuits are open — {} not written to any backend",
+                context
+            ));
+        }
+
+        let results: Vec<(&'static str, Option<Arc<Mutex<BackendHealth>>>, Result<(), String>)> =
+            join_all(dispatched.into_iter().map(|(name, health, fut)| async move {
+                let backend_start = Instant::now();
+                let result = fut.await;
+                let elapsed = backend_start.elapsed().as_secs_f64();
+                db_metrics::record_backend_insert(name, elapsed);
+                if result.is_err() {
+                    db_metrics::record_backend_insert_error(name);
+                }
+                (name, health, result)
+            }))
+            .await;
+
+        let mut successes: Vec<&'static str> = Vec::new();
+        let mut failures: Vec<(&'static str, String)> = Vec::new();
+        for (name, health, result) in results {
+            if let Some(h) = health {
+                let mut guard = h.lock();
+                match &result {
+                    Ok(_) => {
+                        let was_half_open = guard.state == CircuitState::HalfOpen;
+                        guard.record_success();
+                        if was_half_open {
+                            info!("{} circuit breaker recovered — backend is healthy", name);
+                        }
+                    }
+                    Err(_) => {
+                        guard.record_failure();
+                        if guard.state == CircuitState::Open {
+                            warn!(
+                                "{} circuit breaker tripped after {} consecutive failures",
+                                name, guard.consecutive_failures
+                            );
+                        }
+                    }
+                }
+                let state_val = match guard.state {
+                    CircuitState::Closed => 0.0,
+                    CircuitState::Open => 1.0,
+                    CircuitState::HalfOpen => 2.0,
+                };
+                db_metrics::set_circuit_state(name, state_val);
+            }
+            match result {
+                Ok(_) => successes.push(name),
+                Err(e) => failures.push((name, e)),
+            }
+        }
+
+        match self.write_policy {
+            WritePolicy::All => {
+                if failures.is_empty() {
+                    Ok(())
+                } else {
+                    Err(failures
+                        .iter()
+                        .map(|(n, e)| format!("{}: {}", n, e))
+                        .collect::<Vec<_>>()
+                        .join("; "))
+                }
+            }
+            WritePolicy::Any => {
+                if successes.is_empty() {
+                    Err(failures
+                        .iter()
+                        .map(|(n, e)| format!("{}: {}", n, e))
+                        .collect::<Vec<_>>()
+                        .join("; "))
+                } else {
+                    Ok(())
+                }
+            }
+            WritePolicy::PrimaryWithShadow => {
+                let primary = self.primary_backend;
+                let primary_failed =
+                    primary.is_some_and(|p| failures.iter().any(|(name, _)| *name == p));
+                if primary_failed {
                     Err(failures
                         .iter()
                         .map(|(n, e)| format!("{}: {}", n, e))
