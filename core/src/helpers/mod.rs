@@ -23,7 +23,7 @@ pub use file::{
     create_mod_file, format_all_files_for_project, load_env_from_full_path,
     load_env_from_project_path, write_file, CreateModFileError, WriteFileError,
 };
-use rand::{distr::Alphanumeric, Rng};
+use rand::{distr::Alphanumeric, RngExt};
 
 mod duration;
 pub use duration::format_duration;

@@ -90,7 +90,7 @@ mod tests {
     use super::*;
     use crate::provider::create_client;
     use alloy::primitives::U64;
-    use rand::Rng;
+    use rand::RngExt;
     use std::collections::HashMap;
 
     /// A generic function to help with spot-checking random block numbers against timestamps.
