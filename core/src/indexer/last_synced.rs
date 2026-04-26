@@ -9,7 +9,7 @@ use tokio::{
     fs::File,
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
 };
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use crate::database::postgres::generate::{
     generate_internal_cron_table_name, generate_internal_cron_table_name_no_shorten,
@@ -296,24 +296,6 @@ pub async fn update_progress_and_last_synced_task(
     to_block: U64,
     on_complete: impl FnOnce() + Send + 'static,
 ) {
-    let update_last_synced_block_result = tokio::time::timeout(
-        Duration::from_millis(100),
-        config.progress().update_last_synced_block(
-            config.network_contract().cached_provider.chain().id(),
-            config.id(),
-            to_block,
-        ),
-    )
-    .await;
-
-    // We don't want the in-memory progress reporter to hold up processing. Under high-ingest
-    // workloads, contention can be high enough to hang here.
-    match update_last_synced_block_result {
-        Ok(Err(e)) => error!("Error updating in-mem last synced block result: {:?}", e),
-        Err(_) => debug!("Timeout in update_last_synced_block_result, completing early"),
-        _ => {}
-    };
-
     let latest = config
         .network_contract()
         .cached_provider
@@ -386,9 +368,10 @@ pub async fn update_progress_and_last_synced_task(
         }
     }
     // CSV/stream fallback only when no database is configured
+    let mut file_checkpoint_ok = false;
     if config.postgres().is_none() && config.clickhouse().is_none() {
         if let Some(csv_details) = &config.csv_details() {
-            if let Err(e) = update_last_synced_block_number_for_file(
+            match update_last_synced_block_number_for_file(
                 &config.contract_name(),
                 &config.network_contract().network,
                 &config.event_name(),
@@ -399,15 +382,16 @@ pub async fn update_progress_and_last_synced_task(
             )
             .await
             {
-                error!(
+                Ok(()) => file_checkpoint_ok = true,
+                Err(e) => error!(
                     "Error updating last synced block to CSV - path - {} error - {:?}",
                     csv_details.path, e
-                );
+                ),
             }
         } else if let Some(stream_last_synced_block_file_path) =
             &config.stream_last_synced_block_file_path()
         {
-            if let Err(e) = update_last_synced_block_number_for_file(
+            match update_last_synced_block_number_for_file(
                 &config.contract_name(),
                 &config.network_contract().network,
                 &config.event_name(),
@@ -420,12 +404,44 @@ pub async fn update_progress_and_last_synced_task(
             )
             .await
             {
-                error!(
+                Ok(()) => file_checkpoint_ok = true,
+                Err(e) => error!(
                     "Error updating last synced block to stream - path - {} error - {:?}",
                     stream_last_synced_block_file_path, e
-                );
+                ),
             }
         }
+    }
+
+    // Only advance the in-memory progress reporter after *some* persistent
+    // checkpoint has actually been written. Partial/total DB failures must not
+    // silently move the reported tip ahead of durable state.
+    let any_persistent_write_ok = pg_checkpoint_ok || ch_checkpoint_ok || file_checkpoint_ok;
+    if any_persistent_write_ok {
+        let update_last_synced_block_result = tokio::time::timeout(
+            Duration::from_millis(100),
+            config.progress().update_last_synced_block(
+                config.network_contract().cached_provider.chain().id(),
+                config.id(),
+                to_block,
+            ),
+        )
+        .await;
+
+        // 100ms cap mirrors the contract-event fetch loop; under high-ingest workloads
+        // the in-memory reporter must not hold up processing.
+        match update_last_synced_block_result {
+            Ok(Err(e)) => error!("Error updating in-mem last synced block result: {:?}", e),
+            Err(_) => debug!("Timeout in update_last_synced_block_result, completing early"),
+            _ => {}
+        };
+    } else if config.postgres().is_some() || config.clickhouse().is_some() {
+        warn!(
+            network = %config.network_contract().network,
+            event = %config.event_name(),
+            to_block = to_block.to::<u64>(),
+            "No backend accepted the checkpoint write; in-memory progress not advanced",
+        );
     }
 
     on_complete();
@@ -436,19 +452,8 @@ pub async fn evm_trace_update_progress_and_last_synced_task(
     to_block: U64,
     on_complete: impl FnOnce() + Send + 'static,
 ) {
-    let update_last_synced_block_result = tokio::time::timeout(
-        Duration::from_millis(100),
-        config.progress.update_last_synced_block(config.chain_id, &config.id, to_block),
-    )
-    .await;
-
-    // We don't want the in-memory progress reporter to hold up processing. Under high-ingest
-    // workloads, contention can be high enough to hang here.
-    match update_last_synced_block_result {
-        Ok(Err(e)) => error!("Error updating in-mem last synced trace result: {:?}", e),
-        Err(_) => debug!("Timeout in update_last_synced_block_result, completing early"),
-        _ => {}
-    }
+    let mut pg_checkpoint_ok = false;
+    let mut ch_checkpoint_ok = false;
 
     if let Some(postgres) = &config.databases.postgres {
         // Use the native_transfer table for all trace events since they share the same pipeline
@@ -462,8 +467,9 @@ pub async fn evm_trace_update_progress_and_last_synced_task(
             .execute(&query, &[&EthereumSqlTypeWrapper::U64(to_block.to()), &config.network])
             .await;
 
-        if let Err(e) = result {
-            error!("Error updating last synced trace block db: {:?}", e);
+        match result {
+            Ok(_) => pg_checkpoint_ok = true,
+            Err(e) => error!("Error updating last synced trace block db: {:?}", e),
         }
     }
     if let Some(clickhouse) = &config.databases.clickhouse {
@@ -477,15 +483,17 @@ pub async fn evm_trace_update_progress_and_last_synced_task(
 
         let result = clickhouse.execute(&query).await;
 
-        if let Err(e) = result {
-            error!("Error updating last synced trace block clickhouse: {:?}", e);
+        match result {
+            Ok(_) => ch_checkpoint_ok = true,
+            Err(e) => error!("Error updating last synced trace block clickhouse: {:?}", e),
         }
     }
 
     // CSV/stream fallback only when no database is configured
+    let mut file_checkpoint_ok = false;
     if config.databases.postgres.is_none() && config.databases.clickhouse.is_none() {
         if let Some(csv_details) = &config.csv_details {
-            if let Err(e) = update_last_synced_block_number_for_file(
+            match update_last_synced_block_number_for_file(
                 &config.contract_name,
                 &config.network,
                 &config.event_name,
@@ -496,15 +504,16 @@ pub async fn evm_trace_update_progress_and_last_synced_task(
             )
             .await
             {
-                error!(
+                Ok(()) => file_checkpoint_ok = true,
+                Err(e) => error!(
                     "Error updating last synced block to CSV - path - {} error - {:?}",
                     csv_details.path, e
-                );
+                ),
             }
         } else if let Some(stream_last_synced_block_file_path) =
             &config.stream_last_synced_block_file_path
         {
-            if let Err(e) = update_last_synced_block_number_for_file(
+            match update_last_synced_block_number_for_file(
                 &config.contract_name,
                 &config.network,
                 &config.event_name,
@@ -517,12 +526,35 @@ pub async fn evm_trace_update_progress_and_last_synced_task(
             )
             .await
             {
-                error!(
+                Ok(()) => file_checkpoint_ok = true,
+                Err(e) => error!(
                     "Error updating last synced block to stream - path - {} error - {:?}",
                     stream_last_synced_block_file_path, e
-                );
+                ),
             }
         }
+    }
+
+    let any_persistent_write_ok = pg_checkpoint_ok || ch_checkpoint_ok || file_checkpoint_ok;
+    if any_persistent_write_ok {
+        let update_last_synced_block_result = tokio::time::timeout(
+            Duration::from_millis(100),
+            config.progress.update_last_synced_block(config.chain_id, &config.id, to_block),
+        )
+        .await;
+
+        match update_last_synced_block_result {
+            Ok(Err(e)) => error!("Error updating in-mem last synced trace result: {:?}", e),
+            Err(_) => debug!("Timeout in update_last_synced_block_result, completing early"),
+            _ => {}
+        }
+    } else if config.databases.postgres.is_some() || config.databases.clickhouse.is_some() {
+        warn!(
+            network = %config.network,
+            event = %config.event_name,
+            to_block = to_block.to::<u64>(),
+            "No backend accepted the trace checkpoint write; in-memory progress not advanced",
+        );
     }
 
     on_complete();
