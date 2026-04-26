@@ -14,7 +14,7 @@ use chrono::{DateTime, Utc};
 use tracing::{debug, error, info, warn};
 
 use crate::database::sql_type_wrapper::EthereumSqlTypeWrapper;
-use crate::database::DatabaseBackends;
+use crate::database::{BoxedBackendOp, DatabaseBackends};
 use crate::event::{
     get_factory_addresses_with_birth_blocks, GetFactoryAddressesWithBirthBlocksParams,
 };
@@ -23,7 +23,7 @@ use crate::indexer::last_synced::{
     get_last_synced_cron_block, update_last_synced_cron_block, CronSyncConfig,
 };
 use crate::is_running;
-use crate::manifest::contract::{parse_interval, ColumnType, Table, TableCronMapping};
+use crate::manifest::contract::{parse_interval, ColumnType, Table, TableCronMapping, TableOperation};
 use crate::manifest::core::Manifest;
 use crate::provider::ChainProvider;
 use alloy::primitives::U64;
@@ -568,6 +568,52 @@ async fn wait_for_factory_sync(
         // Wait before checking again (short interval for responsiveness)
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
+}
+
+/// Build a per-backend op list for a custom-table cron write, ready for
+/// `DatabaseBackends::dispatch_ops`. Rows are shared across both backends via
+/// `Arc` so we don't deep-clone the row vec per backend.
+fn build_cron_dispatch_ops(
+    databases: &DatabaseBackends,
+    full_table: &str,
+    table: &Table,
+    operation: &TableOperation,
+    rows: Vec<TableRowData>,
+) -> Vec<(&'static str, BoxedBackendOp)> {
+    let mut ops: Vec<(&'static str, BoxedBackendOp)> = Vec::with_capacity(2);
+    let rows = Arc::new(rows);
+
+    if let Some(postgres) = databases.postgres.clone() {
+        let full_table = full_table.to_string();
+        let table = table.clone();
+        let operation = operation.clone();
+        let rows = Arc::clone(&rows);
+        ops.push((
+            "postgres",
+            Box::pin(async move {
+                super::tables::execute_postgres_operation_internal(
+                    &postgres, &full_table, &table, &operation, &rows, None,
+                )
+                .await
+            }),
+        ));
+    }
+    if let Some(clickhouse) = databases.clickhouse.clone() {
+        let full_table = full_table.to_string();
+        let table = table.clone();
+        let operation = operation.clone();
+        let rows = Arc::clone(&rows);
+        ops.push((
+            "clickhouse",
+            Box::pin(async move {
+                super::tables::execute_clickhouse_operation_internal(
+                    &clickhouse, &full_table, &table, &operation, &rows,
+                )
+                .await
+            }),
+        ));
+    }
+    ops
 }
 
 /// Run a single cron task until shutdown.
@@ -1164,44 +1210,17 @@ async fn execute_cron_operations_batch(
         return Ok(last_successful_block);
     }
 
-    // Step 4: Write all rows to database in batch, fanning out through the
-    // shared DatabaseBackends dispatch (circuit breaker, write policy, metrics).
     let operation = &task.cron_entry.operations[0];
 
     info!("Tables::{} - {:?} - {} rows", task.table.name, operation.operation_type, all_rows.len());
 
-    let mut ops: Vec<(&'static str, std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>)> = Vec::new();
-    if let Some(postgres) = databases.postgres.clone() {
-        let full_table = task.full_table_name.clone();
-        let table = task.table.clone();
-        let op = operation.clone();
-        let rows = all_rows.clone();
-        ops.push((
-            "postgres",
-            Box::pin(async move {
-                super::tables::execute_postgres_operation_internal(
-                    &postgres, &full_table, &table, &op, &rows, None,
-                )
-                .await
-            }),
-        ));
-    }
-    if let Some(clickhouse) = databases.clickhouse.clone() {
-        let full_table = task.full_table_name.clone();
-        let table = task.table.clone();
-        let op = operation.clone();
-        let rows = all_rows.clone();
-        ops.push((
-            "clickhouse",
-            Box::pin(async move {
-                super::tables::execute_clickhouse_operation_internal(
-                    &clickhouse, &full_table, &table, &op, &rows,
-                )
-                .await
-            }),
-        ));
-    }
-
+    let ops = build_cron_dispatch_ops(
+        &databases,
+        &task.full_table_name,
+        &task.table,
+        operation,
+        all_rows,
+    );
     databases.dispatch_ops(&format!("cron::{}", task.table.name), ops).await?;
 
     Ok(last_successful_block)
@@ -1505,39 +1524,13 @@ async fn execute_cron_operations(
             continue;
         }
 
-        // Execute the operation for all rows via the shared dispatch framework.
-        let mut ops: Vec<(&'static str, std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>)> = Vec::new();
-        if let Some(postgres) = databases.postgres.clone() {
-            let full_table = task.full_table_name.clone();
-            let table = task.table.clone();
-            let op = operation.clone();
-            let rows = all_rows.clone();
-            ops.push((
-                "postgres",
-                Box::pin(async move {
-                    super::tables::execute_postgres_operation_internal(
-                        &postgres, &full_table, &table, &op, &rows, None,
-                    )
-                    .await
-                }),
-            ));
-        }
-        if let Some(clickhouse) = databases.clickhouse.clone() {
-            let full_table = task.full_table_name.clone();
-            let table = task.table.clone();
-            let op = operation.clone();
-            let rows = all_rows.clone();
-            ops.push((
-                "clickhouse",
-                Box::pin(async move {
-                    super::tables::execute_clickhouse_operation_internal(
-                        &clickhouse, &full_table, &table, &op, &rows,
-                    )
-                    .await
-                }),
-            ));
-        }
-
+        let ops = build_cron_dispatch_ops(
+            databases,
+            &task.full_table_name,
+            &task.table,
+            operation,
+            all_rows,
+        );
         databases.dispatch_ops(&format!("cron::{}", task.table.name), ops).await?;
     }
 
