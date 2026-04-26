@@ -16,6 +16,10 @@ pub mod stream_type {
     pub const KAFKA: &str = "kafka";
     pub const REDIS: &str = "redis";
     pub const CLOUDFLARE_QUEUES: &str = "cloudflare_queues";
+
+    /// Iterator-driven label set so callers (e.g. depth-gauge zero-out
+    /// loops) don't drift when a new backend is added.
+    pub const ALL: &[&str] = &[SNS, WEBHOOK, RABBITMQ, KAFKA, REDIS, CLOUDFLARE_QUEUES];
 }
 
 /// Record a successful stream message send.

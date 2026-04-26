@@ -72,16 +72,16 @@ impl Webhook {
 /// with many distinct webhook URLs would blow Prometheus TSDB cardinality.
 /// Extracting `host[:port]` bounds the label set to the number of distinct
 /// destination hosts (typically a handful) while still letting operators
-/// identify which host is dropping events. Falls back to `"unknown"` if URL
-/// parsing fails — we'd rather lose the label than panic in a hot path.
-pub(crate) fn webhook_target_label(endpoint: &str) -> String {
+/// identify which host is dropping events.
+fn webhook_target_label(endpoint: &str) -> String {
+    const UNKNOWN: &str = "unknown";
     match reqwest::Url::parse(endpoint) {
         Ok(url) => match (url.host_str(), url.port()) {
             (Some(host), Some(port)) => format!("{host}:{port}"),
             (Some(host), None) => host.to_string(),
-            (None, _) => "unknown".to_string(),
+            (None, _) => UNKNOWN.to_string(),
         },
-        Err(_) => "unknown".to_string(),
+        Err(_) => UNKNOWN.to_string(),
     }
 }
 

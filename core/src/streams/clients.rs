@@ -1166,10 +1166,6 @@ impl StreamsClients {
         network: &str,
         head_block: u64,
     ) -> Result<usize, StreamError> {
-        // Read the latest registered reorg_safe_distance at flush time, not
-        // at buffer insertion time. Lets `register_network_reorg_distance`
-        // updates take effect on the next flush without needing to reset the
-        // buffer map.
         let distance = self.reorg_safe_distance_for(network);
         let flush_start = Instant::now();
         let mut ready_by_key: Vec<FinalizedDeliveryBuffer> = Vec::new();
@@ -1217,14 +1213,11 @@ impl StreamsClients {
 
     /// Sum the buffer size per `(stream_type, network)` for `network` across
     /// every entry in `map` and push the result into the depth gauge. Assumes
-    /// the caller holds `finalized_buffers` lock — emits no metric if
-    /// `network` has no buffer entries at all (leaving any stale gauge value
-    /// untouched would be misleading, so explicitly zero out on empty).
+    /// the caller holds `finalized_buffers` lock. Iterates every
+    /// `stream_type::ALL` label so a buffer that just fully drained does not
+    /// leave its previous gauge value stuck — Prometheus gauges otherwise
+    /// retain the last `set` value indefinitely.
     fn refresh_depth_gauge_under_lock(map: &HashMap<BufferKey, FinalizedBuffer>, network: &str) {
-        // Collect per-stream_type counts for this network. Any stream_type
-        // that has NO current entries for the network must still be zeroed
-        // out on the gauge, otherwise a gauge for a buffer that fully
-        // drained would get stuck at its last non-zero value.
         let mut totals: HashMap<&'static str, u64> = HashMap::new();
         for (key, buf) in map.iter() {
             if key.network != network {
@@ -1232,20 +1225,9 @@ impl StreamsClients {
             }
             *totals.entry(key.stream_type).or_default() += buf.len() as u64;
         }
-        // Zero out any stream_type that previously had a gauge emission for
-        // this network but is now empty. We only track `totals` keys — a
-        // stream_type never observed on this network has no prior emission
-        // and needs no zero write.
-        for known_stream_type in [
-            stream_type::SNS,
-            stream_type::WEBHOOK,
-            stream_type::RABBITMQ,
-            stream_type::KAFKA,
-            stream_type::REDIS,
-            stream_type::CLOUDFLARE_QUEUES,
-        ] {
-            let depth = totals.remove(known_stream_type).unwrap_or(0);
-            stream_metrics::set_finalized_buffer_depth(known_stream_type, network, depth as f64);
+        for &st in stream_type::ALL {
+            let depth = totals.remove(st).unwrap_or(0);
+            stream_metrics::set_finalized_buffer_depth(st, network, depth as f64);
         }
     }
 
@@ -1411,9 +1393,15 @@ impl FinalizedBuffer {
 
     pub fn flush(&mut self, current_head: u64, reorg_safe_distance: u64) -> Vec<(u64, Vec<Value>)> {
         let finality_threshold = current_head.saturating_sub(reorg_safe_distance);
-        let ready_keys: Vec<u64> =
-            self.buffer.keys().copied().filter(|&k| k <= finality_threshold).collect();
-        ready_keys.into_iter().filter_map(|k| self.buffer.remove(&k).map(|v| (k, v))).collect()
+        // BTreeMap::split_off keeps keys < arg in self, returns keys >= arg.
+        // We want to drain keys ≤ threshold and retain keys > threshold, so
+        // split at `threshold + 1`: the high half (returned) becomes the new
+        // buffer, the original low half drains. Single O(log n + drained)
+        // pass, no per-key remove.
+        let cutoff = finality_threshold.saturating_add(1);
+        let keep = self.buffer.split_off(&cutoff);
+        let drained = std::mem::replace(&mut self.buffer, keep);
+        drained.into_iter().collect()
     }
 
     pub fn discard_range(&mut self, fork_point: u64, detection_point: u64) {
@@ -1851,16 +1839,7 @@ mod tests {
 
     #[tokio::test]
     async fn stream_trace_event_with_finalized_delivery_buffers_instead_of_sending() {
-        // I2 regression: a NativeTransfer / trace event on a stream configured
-        // with `delivery: finalized` must be buffered, not delivered
-        // instantly. Pre-fix, `should_buffer` unconditionally bypassed the
-        // buffer when `is_trace_event == true`, so users opting into
-        // finalized delivery on native-transfer streams got instant delivery
-        // with no warning — a silent violation of the configured reorg
-        // safety expectation.
         let mut server = mockito::Server::new_async().await;
-        // Expect ZERO hits: buffered means nothing should reach the endpoint
-        // until flush_finalized is invoked.
         let mock = server.mock("POST", "/hook").expect(0).create_async().await;
 
         let config = WebhookStreamConfig {
@@ -1872,9 +1851,6 @@ mod tests {
         };
 
         let clients = webhook_clients(vec![config]);
-        // Simulate coordinator registering the network's reorg distance at
-        // startup. Without this, FinalizedBuffer::new would be created with 0
-        // and the next flush would leak the event instantly.
         clients.register_network_reorg_distance("ethereum".to_string(), 10);
 
         let msg = EventMessage {
@@ -1885,12 +1861,8 @@ mod tests {
             block_number: 100,
         };
 
-        let sent = clients
-            .stream("id".to_string(), &msg, false, true) // is_trace_event = true
-            .await
-            .unwrap();
+        let sent = clients.stream("id".to_string(), &msg, false, true).await.unwrap();
 
-        // Post-fix: buffered, not dispatched. Pre-fix: hit the endpoint.
         assert_eq!(sent, 0, "finalized trace event must not dispatch instantly");
         mock.assert_async().await;
         assert_eq!(
@@ -2378,12 +2350,10 @@ mod tests {
 
     #[tokio::test]
     async fn flush_finalized_healthy_backend_delivers_when_other_backend_fails() {
-        // C1 regression: a persistent publish error on backend A must not
-        // cause backend B's already-drained events to be dropped. Pre-fix,
-        // the `?` in the per-key dispatch loop propagated the first Err and
-        // skipped every subsequent key — silent data loss with no
-        // STREAM_PUBLISH_DROPPED_TOTAL entry for the lost events because
-        // they never reached `publish_with_retry`.
+        // A persistent publish error on backend A must not cause backend B's
+        // already-drained events to be dropped — the per-key dispatch loop
+        // intentionally records the failure, continues, and surfaces the
+        // first error after every key has had a chance to publish.
         let mut server = mockito::Server::new_async().await;
         let bad =
             server.mock("POST", "/bad").with_status(500).expect_at_least(1).create_async().await;
@@ -2405,8 +2375,9 @@ mod tests {
         };
         let clients = webhook_clients(vec![bad_cfg, good_cfg]);
 
-        // Seed both config buckets with the same block so flush produces two
-        // BufferKey entries (differing only in `config_index`).
+        // Two BufferKey entries — same network/event, differing config_index —
+        // so the dispatch loop has to traverse both and the bug surfaces
+        // when /bad iterates first under HashMap's nondeterministic order.
         seed_buffer_for_config(
             &clients,
             stream_type::WEBHOOK,
@@ -2430,11 +2401,6 @@ mod tests {
 
         let result = clients.flush_finalized("ethereum", 110).await;
 
-        // /bad exhausts retries and surfaces a WebhookError — that's expected
-        // and the coordinator warn-logs it. The critical post-fix invariant is
-        // that /good still received its event regardless of HashMap iteration
-        // order: before the fix, if /bad's key iterated first, /good's
-        // already-drained events were silently lost.
         assert!(
             matches!(result, Err(StreamError::WebhookCouldNotPublish(_))),
             "expected webhook err surfaced, got {:?}",
@@ -2446,15 +2412,11 @@ mod tests {
 
     #[tokio::test]
     async fn flush_finalized_respects_re_registered_larger_distance() {
-        // I3 regression: the per-buffer distance must come from the registry
-        // at flush time, not be cached inside `FinalizedBuffer` at first
-        // insert. The scary direction: a distance that is re-registered
-        // LARGER after the buffer exists must take effect — otherwise events
-        // flush too early relative to the newly-configured reorg-safe
-        // window, which is a silent correctness deviation from the manifest.
+        // The scary direction: a distance re-registered LARGER after the
+        // buffer exists must take effect on the next flush, otherwise
+        // events ship too early relative to the newly-configured
+        // reorg-safe window — a silent correctness deviation.
         let mut server = mockito::Server::new_async().await;
-        // Expect zero hits: under the re-registered distance of 50, head=110
-        // is not enough to surface block 100 (110 - 50 = 60 < 100).
         let mock = server.mock("POST", "/hook").expect(0).create_async().await;
 
         let config = WebhookStreamConfig {
@@ -2466,11 +2428,9 @@ mod tests {
         };
         let clients = webhook_clients(vec![config]);
 
-        // Seed under distance=10 (so block 100 would be ready at head 110).
+        // Seed under distance=10 (block 100 would be ready at head 110).
         seed_buffer(&clients, "ethereum", "Transfer", &[100], 10).await;
-
-        // Re-register a larger distance. Post-fix, this must take effect on
-        // the next flush.
+        // Re-register larger; head=110 - 50 = 60 < 100, so 100 must stay parked.
         clients.register_network_reorg_distance("ethereum".to_string(), 50);
         let sent = clients.flush_finalized("ethereum", 110).await.unwrap();
 
@@ -2485,14 +2445,11 @@ mod tests {
 
     #[tokio::test]
     async fn finalized_buffer_depth_gauge_tracks_add_and_flush() {
-        // I4 regression: the finalized-buffer depth gauge must reflect the
-        // current in-memory buffer size per (stream_type, network) so
-        // operators can alert on stuck buffers. Pre-fix, only an overflow
-        // counter existed — useless for answering "is the buffer draining?".
+        // Operators alert on "buffer not draining" via this gauge — verify
+        // it actually moves with add and flush. The unique network label
+        // isolates this test from process-wide metric emissions.
         use crate::metrics::definitions::STREAM_FINALIZED_BUFFER_DEPTH;
 
-        // Isolate this test from others by using a label combination unlikely
-        // to collide with other tests' metric emissions.
         let network = "depth_gauge_test_network";
 
         let mut server = mockito::Server::new_async().await;
@@ -2506,22 +2463,18 @@ mod tests {
         };
         let clients = webhook_clients(vec![config]);
 
-        // Start: gauge should be 0 (no buffered events for this network).
         let before =
             STREAM_FINALIZED_BUFFER_DEPTH.with_label_values(&[stream_type::WEBHOOK, network]).get();
         assert_eq!(before, 0.0, "depth gauge must start at zero");
 
-        // Seed a buffered event — the gauge should move to 1.
         seed_buffer(&clients, network, "Transfer", &[100], 10).await;
-        // Trigger a gauge refresh through a production code path. We call
-        // flush_finalized at a head below threshold so nothing drains, but
-        // the depth gauge is refreshed as part of the flush.
+        // head=50 < threshold(100), so flush drains nothing but still
+        // refreshes the gauge from the post-seed map state.
         let _ = clients.flush_finalized(network, 50).await.unwrap();
         let after_seed =
             STREAM_FINALIZED_BUFFER_DEPTH.with_label_values(&[stream_type::WEBHOOK, network]).get();
         assert_eq!(after_seed, 1.0, "depth gauge must track buffered event count");
 
-        // Drain — gauge must drop back to zero.
         let sent = clients.flush_finalized(network, 110).await.unwrap();
         assert_eq!(sent, 1);
         let after_flush =
