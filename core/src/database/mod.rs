@@ -100,6 +100,50 @@ impl BackendHealth {
     }
 }
 
+/// Erased async write op (one per backend) for `DatabaseBackends::dispatch_ops`.
+pub type BoxedBackendOp = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
+
+/// Update per-backend metrics, circuit breaker state, and state gauge from a write outcome.
+/// Shared between the trait-level `insert_bulk_inner` and the closure-based `dispatch_ops`.
+fn record_backend_outcome(
+    name: &'static str,
+    elapsed_secs: f64,
+    health: Option<&Arc<Mutex<BackendHealth>>>,
+    result: &Result<(), String>,
+) {
+    db_metrics::record_backend_insert(name, elapsed_secs);
+    if result.is_err() {
+        db_metrics::record_backend_insert_error(name);
+    }
+    if let Some(health) = health {
+        let mut guard = health.lock();
+        match result {
+            Ok(_) => {
+                let was_half_open = guard.state == CircuitState::HalfOpen;
+                guard.record_success();
+                if was_half_open {
+                    info!("{} circuit breaker recovered — backend is healthy", name);
+                }
+            }
+            Err(_) => {
+                guard.record_failure();
+                if guard.state == CircuitState::Open {
+                    warn!(
+                        "{} circuit breaker tripped after {} consecutive failures",
+                        name, guard.consecutive_failures
+                    );
+                }
+            }
+        }
+        let state_val = match guard.state {
+            CircuitState::Closed => 0.0,
+            CircuitState::Open => 1.0,
+            CircuitState::HalfOpen => 2.0,
+        };
+        db_metrics::set_circuit_state(name, state_val);
+    }
+}
+
 // ============================================================================
 // DatabaseBackends
 // ============================================================================
@@ -267,47 +311,12 @@ impl DatabaseBackends {
                             error!("{} insert_bulk failed: {}", name, e);
                             format!("{}: {}", name, e)
                         });
-
-                    // Per-backend metrics
-                    let elapsed = backend_start.elapsed().as_secs_f64();
-                    db_metrics::record_backend_insert(name, elapsed);
-                    if result.is_err() {
-                        db_metrics::record_backend_insert_error(name);
-                    }
-
-                    // Update circuit breaker state
-                    if let Some(health) = health {
-                        let mut h = health.lock();
-                        match &result {
-                            Ok(_) => {
-                                let was_half_open = h.state == CircuitState::HalfOpen;
-                                h.record_success();
-                                if was_half_open {
-                                    info!(
-                                        "{} circuit breaker recovered — backend is healthy",
-                                        name
-                                    );
-                                }
-                            }
-                            Err(_) => {
-                                h.record_failure();
-                                if h.state == CircuitState::Open {
-                                    warn!(
-                                        "{} circuit breaker tripped after {} consecutive failures",
-                                        name, h.consecutive_failures
-                                    );
-                                }
-                            }
-                        }
-                        // Update circuit state metric
-                        let state_val = match h.state {
-                            CircuitState::Closed => 0.0,
-                            CircuitState::Open => 1.0,
-                            CircuitState::HalfOpen => 2.0,
-                        };
-                        db_metrics::set_circuit_state(name, state_val);
-                    }
-
+                    record_backend_outcome(
+                        name,
+                        backend_start.elapsed().as_secs_f64(),
+                        health.as_ref(),
+                        &result,
+                    );
                     (name, result)
                 })
             })
@@ -325,13 +334,12 @@ impl DatabaseBackends {
         let results = join_all(futs).await;
         let duration = start.elapsed();
 
-        // Collect successes and failures
-        let mut successes = Vec::new();
-        let mut failures = Vec::new();
-        for (name, result) in &results {
+        let mut successes: Vec<&'static str> = Vec::new();
+        let mut failures: Vec<(&'static str, String)> = Vec::new();
+        for (name, result) in results {
             match result {
-                Ok(_) => successes.push(*name),
-                Err(e) => failures.push((*name, e.as_str())),
+                Ok(_) => successes.push(name),
+                Err(e) => failures.push((name, e)),
             }
         }
 
@@ -346,41 +354,43 @@ impl DatabaseBackends {
             );
         }
 
-        // Apply write policy
+        self.apply_write_policy(&successes, &failures)
+    }
+
+    /// Apply the configured `WritePolicy` to a set of per-backend outcomes.
+    fn apply_write_policy(
+        &self,
+        successes: &[&'static str],
+        failures: &[(&'static str, String)],
+    ) -> Result<(), String> {
+        let format_failures = || {
+            failures
+                .iter()
+                .map(|(n, e)| format!("{}: {}", n, e))
+                .collect::<Vec<_>>()
+                .join("; ")
+        };
         match self.write_policy {
             WritePolicy::All => {
                 if failures.is_empty() {
                     Ok(())
                 } else {
-                    Err(failures
-                        .iter()
-                        .map(|(n, e)| format!("{}: {}", n, e))
-                        .collect::<Vec<_>>()
-                        .join("; "))
+                    Err(format_failures())
                 }
             }
             WritePolicy::Any => {
                 if successes.is_empty() {
-                    Err(failures
-                        .iter()
-                        .map(|(n, e)| format!("{}: {}", n, e))
-                        .collect::<Vec<_>>()
-                        .join("; "))
+                    Err(format_failures())
                 } else {
                     Ok(())
                 }
             }
             WritePolicy::PrimaryWithShadow => {
-                // Error only if the primary backend failed; shadow failures are tolerated.
                 let primary = self.primary_backend;
                 let primary_failed =
                     primary.is_some_and(|p| failures.iter().any(|(name, _)| *name == p));
                 if primary_failed {
-                    Err(failures
-                        .iter()
-                        .map(|(n, e)| format!("{}: {}", n, e))
-                        .collect::<Vec<_>>()
-                        .join("; "))
+                    Err(format_failures())
                 } else {
                     Ok(())
                 }
@@ -399,25 +409,21 @@ impl DatabaseBackends {
     pub async fn dispatch_ops(
         &self,
         context: &str,
-        ops: Vec<(&'static str, Pin<Box<dyn Future<Output = Result<(), String>> + Send>>)>,
+        ops: Vec<(&'static str, BoxedBackendOp)>,
     ) -> Result<(), String> {
         if ops.is_empty() {
             return Ok(());
         }
 
-        let mut dispatched: Vec<(
-            &'static str,
-            Option<Arc<Mutex<BackendHealth>>>,
-            Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
-        )> = Vec::new();
+        let mut dispatched: Vec<(&'static str, Option<Arc<Mutex<BackendHealth>>>, BoxedBackendOp)> =
+            Vec::with_capacity(ops.len());
 
         for (name, fut) in ops {
             let backend_idx = self.backends.iter().position(|b| b.backend_name() == name);
             let health = backend_idx.and_then(|i| self.health.get(i).cloned());
             if self.circuit_breaker_enabled {
                 if let Some(h) = &health {
-                    let mut guard = h.lock();
-                    if !guard.should_dispatch() {
+                    if !h.lock().should_dispatch() {
                         warn!("{} circuit open, skipping {}", name, context);
                         continue;
                     }
@@ -434,93 +440,29 @@ impl DatabaseBackends {
             ));
         }
 
-        let results: Vec<(&'static str, Option<Arc<Mutex<BackendHealth>>>, Result<(), String>)> =
-            join_all(dispatched.into_iter().map(|(name, health, fut)| async move {
-                let backend_start = Instant::now();
-                let result = fut.await;
-                let elapsed = backend_start.elapsed().as_secs_f64();
-                db_metrics::record_backend_insert(name, elapsed);
-                if result.is_err() {
-                    db_metrics::record_backend_insert_error(name);
-                }
-                (name, health, result)
-            }))
-            .await;
+        let results = join_all(dispatched.into_iter().map(|(name, health, fut)| async move {
+            let backend_start = Instant::now();
+            let result = fut.await;
+            record_backend_outcome(
+                name,
+                backend_start.elapsed().as_secs_f64(),
+                health.as_ref(),
+                &result,
+            );
+            (name, result)
+        }))
+        .await;
 
-        let mut successes: Vec<&'static str> = Vec::new();
+        let mut successes: Vec<&'static str> = Vec::with_capacity(results.len());
         let mut failures: Vec<(&'static str, String)> = Vec::new();
-        for (name, health, result) in results {
-            if let Some(h) = health {
-                let mut guard = h.lock();
-                match &result {
-                    Ok(_) => {
-                        let was_half_open = guard.state == CircuitState::HalfOpen;
-                        guard.record_success();
-                        if was_half_open {
-                            info!("{} circuit breaker recovered — backend is healthy", name);
-                        }
-                    }
-                    Err(_) => {
-                        guard.record_failure();
-                        if guard.state == CircuitState::Open {
-                            warn!(
-                                "{} circuit breaker tripped after {} consecutive failures",
-                                name, guard.consecutive_failures
-                            );
-                        }
-                    }
-                }
-                let state_val = match guard.state {
-                    CircuitState::Closed => 0.0,
-                    CircuitState::Open => 1.0,
-                    CircuitState::HalfOpen => 2.0,
-                };
-                db_metrics::set_circuit_state(name, state_val);
-            }
+        for (name, result) in results {
             match result {
                 Ok(_) => successes.push(name),
                 Err(e) => failures.push((name, e)),
             }
         }
 
-        match self.write_policy {
-            WritePolicy::All => {
-                if failures.is_empty() {
-                    Ok(())
-                } else {
-                    Err(failures
-                        .iter()
-                        .map(|(n, e)| format!("{}: {}", n, e))
-                        .collect::<Vec<_>>()
-                        .join("; "))
-                }
-            }
-            WritePolicy::Any => {
-                if successes.is_empty() {
-                    Err(failures
-                        .iter()
-                        .map(|(n, e)| format!("{}: {}", n, e))
-                        .collect::<Vec<_>>()
-                        .join("; "))
-                } else {
-                    Ok(())
-                }
-            }
-            WritePolicy::PrimaryWithShadow => {
-                let primary = self.primary_backend;
-                let primary_failed =
-                    primary.is_some_and(|p| failures.iter().any(|(name, _)| *name == p));
-                if primary_failed {
-                    Err(failures
-                        .iter()
-                        .map(|(n, e)| format!("{}: {}", n, e))
-                        .collect::<Vec<_>>()
-                        .join("; "))
-                } else {
-                    Ok(())
-                }
-            }
-        }
+        self.apply_write_policy(&successes, &failures)
     }
 
     pub fn has_any_db(&self) -> bool {
