@@ -1,0 +1,25 @@
+core/src/indexer/cron_scheduler.rs
+  9997a21dbd197c7a 1167-1168,1173-1187,1189-1202,1205-1206,1508-1523,1525-1538,1540-1541
+core/src/indexer/tables.rs
+  9997a21dbd197c7a 1464
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "6425f1c4c5635e4c7a944c7ca1e2cf92b5c2f9dd",
+  "prompts": {
+    "9997a21dbd197c7a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10073143-9b1a-4068-ac5e-f34cd46e3dff",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 305,
+      "overriden_lines": 0
+    }
+  }
+}
