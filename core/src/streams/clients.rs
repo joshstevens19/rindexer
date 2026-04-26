@@ -141,8 +141,9 @@ pub struct StreamsClients {
     /// `flush_finalized` and invalidation via `discard_finalized`.
     finalized_buffers: AsyncMutex<HashMap<BufferKey, FinalizedBuffer>>,
     /// Per-network `reorg_safe_distance`. Populated at startup by
-    /// `register_network_reorg_distance`. `FinalizedBuffer::new` needs this to
-    /// know how far behind the chain head a block must be before flushing.
+    /// `register_network_reorg_distance` and re-read at every
+    /// `flush_finalized` call so post-insertion re-registration takes
+    /// effect (see `FinalizedBuffer::flush`).
     reorg_safe_distances: StdMutex<HashMap<String, u64>>,
 }
 
@@ -289,7 +290,7 @@ impl StreamsClients {
             event_signature_hash: B256::ZERO,
         };
         let mut map = self.finalized_buffers.lock().await;
-        let buf = map.entry(key).or_insert_with(|| FinalizedBuffer::new(distance));
+        let buf = map.entry(key).or_insert_with(FinalizedBuffer::new);
         for &b in blocks {
             buf.add(b, vec![serde_json::json!({"block": b})]);
         }
@@ -498,7 +499,6 @@ impl StreamsClients {
         config_index: usize,
         event_message: &EventMessage,
     ) {
-        let distance = self.reorg_safe_distance_for(&event_message.network);
         let key = BufferKey {
             stream_type,
             config_index,
@@ -507,7 +507,7 @@ impl StreamsClients {
             event_signature_hash: event_message.event_signature_hash,
         };
         let mut map = self.finalized_buffers.lock().await;
-        let buffer = map.entry(key).or_insert_with(|| FinalizedBuffer::new(distance));
+        let buffer = map.entry(key).or_insert_with(FinalizedBuffer::new);
         if let Value::Array(data) = &event_message.event_data {
             buffer.add(event_message.block_number, data.clone());
         }
@@ -1165,6 +1165,11 @@ impl StreamsClients {
         network: &str,
         head_block: u64,
     ) -> Result<usize, StreamError> {
+        // Read the latest registered reorg_safe_distance at flush time, not
+        // at buffer insertion time. Lets `register_network_reorg_distance`
+        // updates take effect on the next flush without needing to reset the
+        // buffer map.
+        let distance = self.reorg_safe_distance_for(network);
         let mut ready_by_key: Vec<FinalizedDeliveryBuffer> = Vec::new();
         {
             let mut map = self.finalized_buffers.lock().await;
@@ -1172,7 +1177,7 @@ impl StreamsClients {
                 if key.network != network {
                     continue;
                 }
-                let ready = buffer.flush(head_block);
+                let ready = buffer.flush(head_block, distance);
                 if !ready.is_empty() {
                     ready_by_key.push((key.clone(), ready));
                 }
@@ -1339,26 +1344,31 @@ impl StreamsClients {
 /// source block number. Used by `StreamDeliveryMode::Finalized` to delay
 /// dispatch until a block is deeper than the chain's `reorg_safe_distance`.
 ///
-/// `flush(current_head)` drains every bucket whose block is `<= current_head -
-/// reorg_safe_distance`; `discard_range(fork_point, detection_point)` removes
-/// buckets in an invalidated range when a reorg is detected.
+/// `flush(current_head, reorg_safe_distance)` drains every bucket whose block
+/// is `<= current_head - reorg_safe_distance`; `discard_range(fork_point,
+/// detection_point)` removes buckets in an invalidated range when a reorg is
+/// detected.
+///
+/// The `reorg_safe_distance` is NOT stored on the buffer — it is passed at
+/// flush time from `StreamsClients::reorg_safe_distances`. Caching the
+/// distance on first insert would silently pin a stale value if the manifest
+/// (or test wiring) later re-registered a new distance for the same network.
 #[derive(Debug)]
 pub(crate) struct FinalizedBuffer {
     buffer: BTreeMap<u64, Vec<Value>>,
-    reorg_safe_distance: u64,
 }
 
 impl FinalizedBuffer {
-    pub fn new(reorg_safe_distance: u64) -> Self {
-        Self { buffer: BTreeMap::new(), reorg_safe_distance }
+    pub fn new() -> Self {
+        Self { buffer: BTreeMap::new() }
     }
 
     pub fn add(&mut self, block_number: u64, events: Vec<Value>) {
         self.buffer.entry(block_number).or_default().extend(events);
     }
 
-    pub fn flush(&mut self, current_head: u64) -> Vec<(u64, Vec<Value>)> {
-        let finality_threshold = current_head.saturating_sub(self.reorg_safe_distance);
+    pub fn flush(&mut self, current_head: u64, reorg_safe_distance: u64) -> Vec<(u64, Vec<Value>)> {
+        let finality_threshold = current_head.saturating_sub(reorg_safe_distance);
         let ready_keys: Vec<u64> =
             self.buffer.keys().copied().filter(|&k| k <= finality_threshold).collect();
         ready_keys.into_iter().filter_map(|k| self.buffer.remove(&k).map(|v| (k, v))).collect()
@@ -2076,43 +2086,43 @@ mod tests {
 
     #[test]
     fn finalized_buffer_flushes_only_below_threshold() {
-        let mut buf = FinalizedBuffer::new(10);
+        let mut buf = FinalizedBuffer::new();
         buf.add(100, vec![json!({"event": "a"})]);
         buf.add(105, vec![json!({"event": "b"})]);
 
-        let flushed = buf.flush(112); // threshold = 102
+        let flushed = buf.flush(112, 10); // threshold = 102
         assert_eq!(flushed.len(), 1);
         assert_eq!(flushed[0].0, 100);
 
-        let flushed2 = buf.flush(120);
+        let flushed2 = buf.flush(120, 10);
         assert_eq!(flushed2.len(), 1);
         assert_eq!(flushed2[0].0, 105);
     }
 
     #[test]
     fn finalized_buffer_discards_range_inclusive() {
-        let mut buf = FinalizedBuffer::new(10);
+        let mut buf = FinalizedBuffer::new();
         buf.add(98, vec![json!({"event": "a"})]);
         buf.add(99, vec![json!({"event": "b"})]);
         buf.add(100, vec![json!({"event": "c"})]);
 
         buf.discard_range(99, 100);
 
-        let flushed = buf.flush(200);
+        let flushed = buf.flush(200, 10);
         assert_eq!(flushed.len(), 1);
         assert_eq!(flushed[0].0, 98);
     }
 
     #[test]
     fn finalized_buffer_discard_on_empty_is_noop() {
-        let mut buf = FinalizedBuffer::new(10);
+        let mut buf = FinalizedBuffer::new();
         buf.discard_range(5, 10);
         assert_eq!(buf.len(), 0);
     }
 
     #[test]
     fn finalized_buffer_add_merges_same_block() {
-        let mut buf = FinalizedBuffer::new(10);
+        let mut buf = FinalizedBuffer::new();
         buf.add(50, vec![json!({"a": 1})]);
         buf.add(50, vec![json!({"a": 2})]);
         assert_eq!(buf.len(), 2);
@@ -2142,7 +2152,7 @@ mod tests {
             event_signature_hash: B256::ZERO,
         };
         let mut map = clients.finalized_buffers.lock().await;
-        let buf = map.entry(key).or_insert_with(|| FinalizedBuffer::new(distance));
+        let buf = map.entry(key).or_insert_with(FinalizedBuffer::new);
         for &b in blocks {
             buf.add(b, vec![json!({"block": b})]);
         }
@@ -2318,7 +2328,7 @@ mod tests {
             event_signature_hash: B256::ZERO,
         };
         let mut map = clients.finalized_buffers.lock().await;
-        let buf = map.entry(key).or_insert_with(|| FinalizedBuffer::new(distance));
+        let buf = map.entry(key).or_insert_with(FinalizedBuffer::new);
         for &b in blocks {
             buf.add(b, vec![json!({"block": b})]);
         }
@@ -2390,5 +2400,44 @@ mod tests {
         );
         good.assert_async().await;
         bad.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn flush_finalized_respects_re_registered_larger_distance() {
+        // I3 regression: the per-buffer distance must come from the registry
+        // at flush time, not be cached inside `FinalizedBuffer` at first
+        // insert. The scary direction: a distance that is re-registered
+        // LARGER after the buffer exists must take effect — otherwise events
+        // flush too early relative to the newly-configured reorg-safe
+        // window, which is a silent correctness deviation from the manifest.
+        let mut server = mockito::Server::new_async().await;
+        // Expect zero hits: under the re-registered distance of 50, head=110
+        // is not enough to surface block 100 (110 - 50 = 60 < 100).
+        let mock = server.mock("POST", "/hook").expect(0).create_async().await;
+
+        let config = WebhookStreamConfig {
+            endpoint: format!("{}/hook", server.url()),
+            shared_secret: "s".to_string(),
+            networks: vec!["ethereum".to_string()],
+            events: vec![stream_event("Transfer")],
+            delivery: None,
+        };
+        let clients = webhook_clients(vec![config]);
+
+        // Seed under distance=10 (so block 100 would be ready at head 110).
+        seed_buffer(&clients, "ethereum", "Transfer", &[100], 10).await;
+
+        // Re-register a larger distance. Post-fix, this must take effect on
+        // the next flush.
+        clients.register_network_reorg_distance("ethereum".to_string(), 50);
+        let sent = clients.flush_finalized("ethereum", 110).await.unwrap();
+
+        assert_eq!(sent, 0, "flush must honor the newly-registered larger distance");
+        assert_eq!(
+            buffered_blocks(&clients, "ethereum").await,
+            vec![100],
+            "block 100 must remain buffered under the re-registered distance of 50"
+        );
+        mock.assert_async().await;
     }
 }
