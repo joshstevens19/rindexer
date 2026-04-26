@@ -1,0 +1,10 @@
+core/Cargo.toml
+  fe8ee08cb2266df3 15,19-21,24,35,41-42,50-55,58-60,63,69,73-74,82,92
+  71e1f5331ce549d4 96-99
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "2443df992955ae67482e15a8dd5b6d4d4d6458ca",
+  "prompts": {}
+}
