@@ -522,6 +522,7 @@ impl StreamsClients {
             );
             stream_metrics::record_finalized_buffer_overflow(stream_type, &event_message.network);
         }
+        Self::refresh_depth_gauge_under_lock(&map, &event_message.network);
     }
 
     fn should_send_for_config(
@@ -1170,6 +1171,7 @@ impl StreamsClients {
         // updates take effect on the next flush without needing to reset the
         // buffer map.
         let distance = self.reorg_safe_distance_for(network);
+        let flush_start = Instant::now();
         let mut ready_by_key: Vec<FinalizedDeliveryBuffer> = Vec::new();
         {
             let mut map = self.finalized_buffers.lock().await;
@@ -1182,6 +1184,7 @@ impl StreamsClients {
                     ready_by_key.push((key.clone(), ready));
                 }
             }
+            Self::refresh_depth_gauge_under_lock(&map, network);
         }
 
         // Continue-on-error across keys: a persistent publish failure on one
@@ -1202,10 +1205,48 @@ impl StreamsClients {
                 }
             }
         }
+        stream_metrics::record_finalized_flush_duration(
+            network,
+            flush_start.elapsed().as_secs_f64(),
+        );
         if let Some(e) = first_err {
             return Err(e);
         }
         Ok(total_sent)
+    }
+
+    /// Sum the buffer size per `(stream_type, network)` for `network` across
+    /// every entry in `map` and push the result into the depth gauge. Assumes
+    /// the caller holds `finalized_buffers` lock — emits no metric if
+    /// `network` has no buffer entries at all (leaving any stale gauge value
+    /// untouched would be misleading, so explicitly zero out on empty).
+    fn refresh_depth_gauge_under_lock(map: &HashMap<BufferKey, FinalizedBuffer>, network: &str) {
+        // Collect per-stream_type counts for this network. Any stream_type
+        // that has NO current entries for the network must still be zeroed
+        // out on the gauge, otherwise a gauge for a buffer that fully
+        // drained would get stuck at its last non-zero value.
+        let mut totals: HashMap<&'static str, u64> = HashMap::new();
+        for (key, buf) in map.iter() {
+            if key.network != network {
+                continue;
+            }
+            *totals.entry(key.stream_type).or_default() += buf.len() as u64;
+        }
+        // Zero out any stream_type that previously had a gauge emission for
+        // this network but is now empty. We only track `totals` keys — a
+        // stream_type never observed on this network has no prior emission
+        // and needs no zero write.
+        for known_stream_type in [
+            stream_type::SNS,
+            stream_type::WEBHOOK,
+            stream_type::RABBITMQ,
+            stream_type::KAFKA,
+            stream_type::REDIS,
+            stream_type::CLOUDFLARE_QUEUES,
+        ] {
+            let depth = totals.remove(known_stream_type).unwrap_or(0);
+            stream_metrics::set_finalized_buffer_depth(known_stream_type, network, depth as f64);
+        }
     }
 
     /// Remove buffered events for `network` whose source block falls in the
@@ -1220,6 +1261,7 @@ impl StreamsClients {
             }
             buffer.discard_range(fork_point, detection_point);
         }
+        Self::refresh_depth_gauge_under_lock(&map, network);
     }
 
     /// Re-publish a block's worth of previously-buffered events through the
@@ -2438,6 +2480,53 @@ mod tests {
             vec![100],
             "block 100 must remain buffered under the re-registered distance of 50"
         );
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn finalized_buffer_depth_gauge_tracks_add_and_flush() {
+        // I4 regression: the finalized-buffer depth gauge must reflect the
+        // current in-memory buffer size per (stream_type, network) so
+        // operators can alert on stuck buffers. Pre-fix, only an overflow
+        // counter existed — useless for answering "is the buffer draining?".
+        use crate::metrics::definitions::STREAM_FINALIZED_BUFFER_DEPTH;
+
+        // Isolate this test from others by using a label combination unlikely
+        // to collide with other tests' metric emissions.
+        let network = "depth_gauge_test_network";
+
+        let mut server = mockito::Server::new_async().await;
+        let mock = server.mock("POST", "/hook").with_status(200).expect(1).create_async().await;
+        let config = WebhookStreamConfig {
+            endpoint: format!("{}/hook", server.url()),
+            shared_secret: "s".to_string(),
+            networks: vec![network.to_string()],
+            events: vec![stream_event("Transfer")],
+            delivery: None,
+        };
+        let clients = webhook_clients(vec![config]);
+
+        // Start: gauge should be 0 (no buffered events for this network).
+        let before =
+            STREAM_FINALIZED_BUFFER_DEPTH.with_label_values(&[stream_type::WEBHOOK, network]).get();
+        assert_eq!(before, 0.0, "depth gauge must start at zero");
+
+        // Seed a buffered event — the gauge should move to 1.
+        seed_buffer(&clients, network, "Transfer", &[100], 10).await;
+        // Trigger a gauge refresh through a production code path. We call
+        // flush_finalized at a head below threshold so nothing drains, but
+        // the depth gauge is refreshed as part of the flush.
+        let _ = clients.flush_finalized(network, 50).await.unwrap();
+        let after_seed =
+            STREAM_FINALIZED_BUFFER_DEPTH.with_label_values(&[stream_type::WEBHOOK, network]).get();
+        assert_eq!(after_seed, 1.0, "depth gauge must track buffered event count");
+
+        // Drain — gauge must drop back to zero.
+        let sent = clients.flush_finalized(network, 110).await.unwrap();
+        assert_eq!(sent, 1);
+        let after_flush =
+            STREAM_FINALIZED_BUFFER_DEPTH.with_label_values(&[stream_type::WEBHOOK, network]).get();
+        assert_eq!(after_flush, 0.0, "depth gauge must return to zero after a complete drain");
         mock.assert_async().await;
     }
 }
