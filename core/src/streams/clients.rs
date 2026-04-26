@@ -466,17 +466,20 @@ impl StreamsClients {
     }
 
     /// Returns `true` when the dispatch should be routed into the
-    /// `FinalizedBuffer` instead of publishing immediately. Reorg notifications
-    /// (`force_send_network_wide`) and trace events always bypass the buffer;
-    /// `block_number == 0` is a sentinel for synthetic messages that likewise
-    /// never buffer.
+    /// `FinalizedBuffer` instead of publishing immediately. Reorg
+    /// notifications (`force_send_network_wide`) and synthetic messages
+    /// (`block_number == 0`) bypass the buffer. Trace (native-transfer)
+    /// events DO buffer when the user opts into `Finalized` delivery —
+    /// `finalized_buffer_distance_for_network` already accounts for
+    /// `manifest.native_transfers.reorg_safe_distance`, and the flush path's
+    /// `filter_chunk_event_data_by_conditions` passes trace chunks through
+    /// unfiltered when no explicit stream_event is configured.
     fn should_buffer(
         delivery: Option<&crate::manifest::stream::StreamDeliveryMode>,
         event_message: &EventMessage,
-        is_trace_event: bool,
         force_send_network_wide: bool,
     ) -> bool {
-        if force_send_network_wide || is_trace_event {
+        if force_send_network_wide {
             return false;
         }
         if event_message.block_number == 0 {
@@ -873,7 +876,6 @@ impl StreamsClients {
                         if Self::should_buffer(
                             config.delivery.as_ref(),
                             event_message,
-                            is_trace_event,
                             force_send_network_wide,
                         ) {
                             self.buffer_event(stream_type::SNS, idx, event_message).await;
@@ -903,7 +905,6 @@ impl StreamsClients {
                         if Self::should_buffer(
                             config.delivery.as_ref(),
                             event_message,
-                            is_trace_event,
                             force_send_network_wide,
                         ) {
                             self.buffer_event(stream_type::WEBHOOK, idx, event_message).await;
@@ -933,7 +934,6 @@ impl StreamsClients {
                         if Self::should_buffer(
                             config.delivery.as_ref(),
                             event_message,
-                            is_trace_event,
                             force_send_network_wide,
                         ) {
                             self.buffer_event(stream_type::RABBITMQ, idx, event_message).await;
@@ -964,7 +964,6 @@ impl StreamsClients {
                         if Self::should_buffer(
                             config.delivery.as_ref(),
                             event_message,
-                            is_trace_event,
                             force_send_network_wide,
                         ) {
                             self.buffer_event(stream_type::KAFKA, idx, event_message).await;
@@ -994,7 +993,6 @@ impl StreamsClients {
                         if Self::should_buffer(
                             config.delivery.as_ref(),
                             event_message,
-                            is_trace_event,
                             force_send_network_wide,
                         ) {
                             self.buffer_event(stream_type::REDIS, idx, event_message).await;
@@ -1024,7 +1022,6 @@ impl StreamsClients {
                         if Self::should_buffer(
                             config.delivery.as_ref(),
                             event_message,
-                            is_trace_event,
                             force_send_network_wide,
                         ) {
                             self.buffer_event(stream_type::CLOUDFLARE_QUEUES, idx, event_message)
@@ -1798,6 +1795,57 @@ mod tests {
 
         assert!(result.is_ok());
         mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn stream_trace_event_with_finalized_delivery_buffers_instead_of_sending() {
+        // I2 regression: a NativeTransfer / trace event on a stream configured
+        // with `delivery: finalized` must be buffered, not delivered
+        // instantly. Pre-fix, `should_buffer` unconditionally bypassed the
+        // buffer when `is_trace_event == true`, so users opting into
+        // finalized delivery on native-transfer streams got instant delivery
+        // with no warning — a silent violation of the configured reorg
+        // safety expectation.
+        let mut server = mockito::Server::new_async().await;
+        // Expect ZERO hits: buffered means nothing should reach the endpoint
+        // until flush_finalized is invoked.
+        let mock = server.mock("POST", "/hook").expect(0).create_async().await;
+
+        let config = WebhookStreamConfig {
+            endpoint: format!("{}/hook", server.url()),
+            shared_secret: "s".to_string(),
+            networks: vec!["ethereum".to_string()],
+            events: vec![stream_event("Transfer")], // no NativeTransfer entry
+            delivery: Some(crate::manifest::stream::StreamDeliveryMode::Finalized),
+        };
+
+        let clients = webhook_clients(vec![config]);
+        // Simulate coordinator registering the network's reorg distance at
+        // startup. Without this, FinalizedBuffer::new would be created with 0
+        // and the next flush would leak the event instantly.
+        clients.register_network_reorg_distance("ethereum".to_string(), 10);
+
+        let msg = EventMessage {
+            event_name: "NativeTransfer".to_string(),
+            event_data: json!([{"from": "0x1", "to": "0x2", "value": "1000"}]),
+            event_signature_hash: B256::ZERO,
+            network: "ethereum".to_string(),
+            block_number: 100,
+        };
+
+        let sent = clients
+            .stream("id".to_string(), &msg, false, true) // is_trace_event = true
+            .await
+            .unwrap();
+
+        // Post-fix: buffered, not dispatched. Pre-fix: hit the endpoint.
+        assert_eq!(sent, 0, "finalized trace event must not dispatch instantly");
+        mock.assert_async().await;
+        assert_eq!(
+            buffered_blocks(&clients, "ethereum").await,
+            vec![100],
+            "event must be parked in the finalized buffer for later flush"
+        );
     }
 
     #[tokio::test]
