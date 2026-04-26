@@ -243,7 +243,7 @@ pub fn generate_rindexer_typings(
             if manifest.storage.postgres_enabled() && manifest.storage.clickhouse_enabled() {
                 write_file(
                     &generate_file_location(&output, "database"),
-                    generate_database_backends_code().as_str(),
+                    generate_database_backends_code(&manifest.storage).as_str(),
                 )
                 .map_err(WriteGlobalError::from)?;
             } else if manifest.storage.postgres_enabled() {

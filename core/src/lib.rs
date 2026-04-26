@@ -37,6 +37,7 @@ pub use database::{
     },
 };
 pub use database::{Database, DatabaseBackends};
+pub use manifest::storage::{CircuitBreakerConfig, WritePolicy};
 
 mod simple_file_formatters;
 pub use simple_file_formatters::csv::AsyncCsvAppender;
