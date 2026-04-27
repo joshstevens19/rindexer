@@ -1425,9 +1425,31 @@ async fn prefetch_block_timestamps(
 
 /// Gets a block timestamp from the cache, or returns None if not cached.
 /// Should be called after prefetch_block_timestamps has populated the cache.
-async fn get_cached_block_timestamp(network: &str, block_number: u64) -> Option<u64> {
+pub(crate) async fn get_cached_block_timestamp(network: &str, block_number: u64) -> Option<u64> {
     let cache = BLOCK_TIMESTAMP_CACHE.read().await;
     cache.get(&(network.to_string(), block_number)).copied()
+}
+
+/// Snapshots block timestamps from the cache for a batch of (network, block_number)
+/// pairs. Used by the no-code event-table writer to hydrate
+/// `tx_information.block_timestamp` before serialization — recovers from RPC
+/// providers that don't include `blockTimestamp` in `eth_getLogs` responses.
+/// One async lock acquisition; lookups against the returned map are sync, so
+/// the writer's sync iterator stays sync.
+pub(crate) async fn snapshot_cached_block_timestamps(
+    pairs: &[(String, u64)],
+) -> std::collections::HashMap<(String, u64), u64> {
+    let mut out = std::collections::HashMap::with_capacity(pairs.len());
+    if pairs.is_empty() {
+        return out;
+    }
+    let cache = BLOCK_TIMESTAMP_CACHE.read().await;
+    for key in pairs {
+        if let Some(ts) = cache.get(key).copied() {
+            out.insert(key.clone(), ts);
+        }
+    }
+    out
 }
 
 /// Predicate: would the column-write path silently emit Null for a critical
@@ -1448,13 +1470,20 @@ fn block_ts_guard_trips(
 
 /// Best-effort block-number hint for guard-trip error messages. Prefers the
 /// canonical `rindexer_block_number` injected key, falls back to user-aliased
-/// `block_number`, returns `<unknown>` when neither is present.
+/// `block_number`. When neither is present we emit a diagnostic sentinel and
+/// log at error level so operators can spot mis-shaped rows that would otherwise
+/// produce a hint-less error.
 fn extract_block_num_hint(columns: &HashMap<String, EthereumSqlTypeWrapper>) -> String {
-    columns
-        .get("rindexer_block_number")
-        .or_else(|| columns.get("block_number"))
-        .map(|v| format!("{:?}", v))
-        .unwrap_or_else(|| "<unknown>".to_string())
+    if let Some(v) = columns.get("rindexer_block_number").or_else(|| columns.get("block_number")) {
+        return format!("{:?}", v);
+    }
+    tracing::error!(
+        target: "rindexer::block_timestamp_guard",
+        column_keys = ?columns.keys().collect::<Vec<_>>(),
+        "block_timestamp guard tripped on a row missing both rindexer_block_number and block_number — \
+         row shape is unexpected; emitting <missing-block-number> sentinel"
+    );
+    "<missing-block-number>".to_string()
 }
 
 /// Transaction metadata available for table value references.
@@ -5608,9 +5637,9 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_block_num_hint_unknown_when_absent() {
+    fn test_extract_block_num_hint_sentinel_when_absent() {
         let cols: HashMap<String, EthereumSqlTypeWrapper> = HashMap::new();
-        assert_eq!(extract_block_num_hint(&cols), "<unknown>");
+        assert_eq!(extract_block_num_hint(&cols), "<missing-block-number>");
     }
 
     // =========================================================================
