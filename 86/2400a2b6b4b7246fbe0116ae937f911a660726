@@ -1,0 +1,49 @@
+examples/rindexer_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/uniswap_v3_pool.rs
+  5bc1816c4cfca6a0 401,436
+examples/clickhouse_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/uniswap_v3_pool_token.rs
+  5bc1816c4cfca6a0 278,313
+examples/rindexer_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/uniswap_v3_pool_token.rs
+  5bc1816c4cfca6a0 302,337
+examples/rust_clickhouse/src/rindexer_lib/typings/clickhouse_indexer/events/rocket_pool.rs
+  5bc1816c4cfca6a0 317,352
+examples/rindexer_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/uniswap_v3_factory_pool_created_token_0_token_1.rs
+  5bc1816c4cfca6a0 320,355
+examples/rindexer_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/uniswap_v3_factory.rs
+  5bc1816c4cfca6a0 317,352
+examples/clickhouse_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/uniswap_v3_factory.rs
+  5bc1816c4cfca6a0 294,329
+examples/clickhouse_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/uniswap_v3_factory_pool_created_pool.rs
+  5bc1816c4cfca6a0 295,330
+examples/rindexer_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/uniswap_v3_factory_pool_created_pool.rs
+  5bc1816c4cfca6a0 319,354
+examples/clickhouse_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/uniswap_v3_factory_pool_created_token_0_token_1.rs
+  5bc1816c4cfca6a0 296,331
+examples/rindexer_rust_playground/src/rindexer_lib/typings/rindexer_playground/events/erc_20_filter.rs
+  5bc1816c4cfca6a0 422,457
+examples/rindexer_rust_playground/src/rindexer_lib/typings/rindexer_playground/events/rocket_pool_eth.rs
+  5bc1816c4cfca6a0 438,473
+examples/rindexer_rust_playground/src/rindexer_lib/typings/rindexer_playground/events/uniswap_v3_pool_filter.rs
+  5bc1816c4cfca6a0 396,431
+examples/clickhouse_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/uniswap_v3_pool.rs
+  5bc1816c4cfca6a0 373,408
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "862400a2b6b4b7246fbe0116ae937f911a660726",
+  "prompts": {
+    "5bc1816c4cfca6a0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8059c82-e683-4011-97aa-47dd1c0c10e9",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 28,
+      "total_deletions": 28,
+      "accepted_lines": 28,
+      "overriden_lines": 0
+    }
+  }
+}
