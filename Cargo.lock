@@ -3206,7 +3206,7 @@ dependencies = [
 
 [[package]]
 name = "clickhouse_factory_indexing"
-version = "0.40.0"
+version = "0.1.0"
 dependencies = [
  "alloy",
  "rindexer",
@@ -4255,7 +4255,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "e2e-tests"
-version = "0.40.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -12209,7 +12209,7 @@ dependencies = [
 
 [[package]]
 name = "rindexer_factory_contract"
-version = "0.40.0"
+version = "0.1.0"
 dependencies = [
  "alloy",
  "rindexer",
@@ -12219,7 +12219,7 @@ dependencies = [
 
 [[package]]
 name = "rindexer_rust_playground"
-version = "0.40.0"
+version = "0.1.0"
 dependencies = [
  "alloy",
  "rindexer",
@@ -12435,7 +12435,7 @@ dependencies = [
 
 [[package]]
 name = "rust_clickhouse"
-version = "0.40.0"
+version = "0.1.0"
 dependencies = [
  "alloy",
  "rindexer",
@@ -16260,7 +16260,7 @@ checksum = "66fee0b777b0f5ac1c69bb06d361268faafa61cd4682ae064a171c16c433e9e4"
 
 [[package]]
 name = "xtask"
-version = "0.40.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",

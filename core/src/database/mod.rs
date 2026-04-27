@@ -275,10 +275,8 @@ impl DatabaseBackends {
         let start = Instant::now();
         let pg_health = self.pg_health.clone();
         let ch_health = self.ch_health.clone();
-        let (pg_outcome, ch_outcome) = tokio::join!(
-            run_one(PG_NAME, pg_op, pg_health),
-            run_one(CH_NAME, ch_op, ch_health),
-        );
+        let (pg_outcome, ch_outcome) =
+            tokio::join!(run_one(PG_NAME, pg_op, pg_health), run_one(CH_NAME, ch_op, ch_health),);
 
         let mut successes: Vec<&'static str> = Vec::with_capacity(2);
         let mut failures: Vec<(&'static str, String)> = Vec::with_capacity(2);
@@ -313,9 +311,7 @@ impl DatabaseBackends {
         op: Option<F>,
     ) -> Option<F> {
         let op = op?;
-        if self.circuit_breaker_enabled
-            && health.is_some_and(|h| !h.lock().should_dispatch())
-        {
+        if self.circuit_breaker_enabled && health.is_some_and(|h| !h.lock().should_dispatch()) {
             warn!("{} circuit open, skipping {}", name, context);
             None
         } else {
@@ -390,13 +386,8 @@ fn apply_write_policy(
     successes: &[&'static str],
     failures: &[(&'static str, String)],
 ) -> Result<(), String> {
-    let format_failures = || {
-        failures
-            .iter()
-            .map(|(n, e)| format!("{}: {}", n, e))
-            .collect::<Vec<_>>()
-            .join("; ")
-    };
+    let format_failures =
+        || failures.iter().map(|(n, e)| format!("{}: {}", n, e)).collect::<Vec<_>>().join("; ");
     match policy {
         WritePolicy::All => {
             if failures.is_empty() {
@@ -429,31 +420,25 @@ mod tests {
 
     #[test]
     fn all_ok_when_no_failures() {
-        assert!(apply_write_policy(&WritePolicy::All, Some(PG_NAME), &[PG_NAME, CH_NAME], &[])
-            .is_ok());
+        assert!(
+            apply_write_policy(&WritePolicy::All, Some(PG_NAME), &[PG_NAME, CH_NAME], &[]).is_ok()
+        );
     }
 
     #[test]
     fn all_fails_on_any_failure() {
-        let err = apply_write_policy(
-            &WritePolicy::All,
-            Some(PG_NAME),
-            &[PG_NAME],
-            &[fail(CH_NAME)],
-        )
-        .unwrap_err();
+        let err =
+            apply_write_policy(&WritePolicy::All, Some(PG_NAME), &[PG_NAME], &[fail(CH_NAME)])
+                .unwrap_err();
         assert!(err.contains("clickhouse"));
     }
 
     #[test]
     fn any_succeeds_when_at_least_one_writes() {
-        assert!(apply_write_policy(
-            &WritePolicy::Any,
-            Some(PG_NAME),
-            &[PG_NAME],
-            &[fail(CH_NAME)],
-        )
-        .is_ok());
+        assert!(
+            apply_write_policy(&WritePolicy::Any, Some(PG_NAME), &[PG_NAME], &[fail(CH_NAME)],)
+                .is_ok()
+        );
     }
 
     #[test]

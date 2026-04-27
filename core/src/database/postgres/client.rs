@@ -567,4 +567,3 @@ impl PostgresClient {
         Ok((total_deleted, all_affected_tx_hashes))
     }
 }
-

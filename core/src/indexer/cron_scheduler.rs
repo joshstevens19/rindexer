@@ -23,7 +23,9 @@ use crate::indexer::last_synced::{
     get_last_synced_cron_block, update_last_synced_cron_block, CronSyncConfig,
 };
 use crate::is_running;
-use crate::manifest::contract::{parse_interval, ColumnType, Table, TableCronMapping, TableOperation};
+use crate::manifest::contract::{
+    parse_interval, ColumnType, Table, TableCronMapping, TableOperation,
+};
 use crate::manifest::core::Manifest;
 use crate::provider::ChainProvider;
 use alloy::primitives::U64;
@@ -588,7 +590,12 @@ async fn dispatch_cron_write(
         let rows = Arc::clone(&rows);
         async move {
             super::tables::execute_postgres_operation_internal(
-                &pg, &full_table, &table, &operation, &rows, None,
+                &pg,
+                &full_table,
+                &table,
+                &operation,
+                &rows,
+                None,
             )
             .await
         }
@@ -600,7 +607,11 @@ async fn dispatch_cron_write(
         let rows = Arc::clone(&rows);
         async move {
             super::tables::execute_clickhouse_operation_internal(
-                &ch, &full_table, &table, &operation, &rows,
+                &ch,
+                &full_table,
+                &table,
+                &operation,
+                &rows,
             )
             .await
         }

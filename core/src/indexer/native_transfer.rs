@@ -17,9 +17,9 @@ use tokio_util::sync::CancellationToken;
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::DatabaseBackends;
 use crate::indexer::reorg::{detect_and_handle_reorg, ReorgContext, ReorgCoordinator};
-use crate::PostgresClient;
 use crate::is_running;
 use crate::provider::RECOMMENDED_RPC_CHUNK_SIZE;
+use crate::PostgresClient;
 use crate::{
     event::{
         callback_registry::{TraceCallbackRegistry, TraceResult, TxInformation},
