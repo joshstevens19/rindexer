@@ -36,7 +36,7 @@ pub use database::{
         setup::setup_postgres,
     },
 };
-pub use database::{Database, DatabaseBackends};
+pub use database::DatabaseBackends;
 pub use manifest::storage::{CircuitBreakerConfig, WritePolicy};
 
 mod simple_file_formatters;

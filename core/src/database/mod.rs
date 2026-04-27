@@ -22,21 +22,6 @@ use self::{
 const PG_NAME: &str = "postgres";
 const CH_NAME: &str = "clickhouse";
 
-/// Trait for database backends that support bulk row insertion.
-/// Implemented by PostgresClient and ClickhouseClient; provided as an extension
-/// hook for future backends, not used for runtime fan-out (which is typed-pair).
-#[async_trait::async_trait]
-pub trait Database: Send + Sync + 'static {
-    async fn insert_bulk(
-        &self,
-        table: &str,
-        columns: &[String],
-        data: &[Vec<EthereumSqlTypeWrapper>],
-    ) -> Result<(), String>;
-
-    fn backend_name(&self) -> &'static str;
-}
-
 // ============================================================================
 // Circuit Breaker
 // ============================================================================
@@ -239,7 +224,7 @@ impl DatabaseBackends {
         let pg_op = self.postgres.as_ref().map(|pg| {
             let pg = Arc::clone(pg);
             async move {
-                Database::insert_bulk(&*pg, table, columns, data).await.map_err(|e| {
+                pg.insert_bulk(table, columns, data).await.map_err(|e| {
                     error!("postgres insert_bulk failed: {}", e);
                     format!("postgres: {}", e)
                 })
@@ -248,7 +233,7 @@ impl DatabaseBackends {
         let ch_op = self.clickhouse.as_ref().map(|ch| {
             let ch = Arc::clone(ch);
             async move {
-                Database::insert_bulk(&*ch, table, columns, data).await.map_err(|e| {
+                ch.insert_bulk(table, columns, data).await.map(|_| ()).map_err(|e| {
                     error!("clickhouse insert_bulk failed: {}", e);
                     format!("clickhouse: {}", e)
                 })
@@ -338,51 +323,22 @@ impl DatabaseBackends {
         }
     }
 
-    /// Apply the configured `WritePolicy` to a set of per-backend outcomes.
     fn apply_write_policy(
         &self,
         successes: &[&'static str],
         failures: &[(&'static str, String)],
     ) -> Result<(), String> {
-        let format_failures = || {
-            failures
-                .iter()
-                .map(|(n, e)| format!("{}: {}", n, e))
-                .collect::<Vec<_>>()
-                .join("; ")
-        };
-        match self.write_policy {
-            WritePolicy::All => {
-                if failures.is_empty() {
-                    Ok(())
-                } else {
-                    Err(format_failures())
-                }
-            }
-            WritePolicy::Any => {
-                if successes.is_empty() {
-                    Err(format_failures())
-                } else {
-                    Ok(())
-                }
-            }
-            WritePolicy::PrimaryWithShadow => {
-                // Primary = postgres if configured (else clickhouse). PrimaryWithShadow
-                // is only accepted in `with_config` when both are configured, but we
-                // re-derive here defensively.
-                let primary = if self.postgres.is_some() {
-                    PG_NAME
-                } else if self.clickhouse.is_some() {
-                    CH_NAME
-                } else {
-                    return Ok(());
-                };
-                if failures.iter().any(|(n, _)| *n == primary) {
-                    Err(format_failures())
-                } else {
-                    Ok(())
-                }
-            }
+        apply_write_policy(&self.write_policy, self.primary_backend_name(), successes, failures)
+    }
+
+    /// Primary = postgres when configured, otherwise clickhouse.
+    fn primary_backend_name(&self) -> Option<&'static str> {
+        if self.postgres.is_some() {
+            Some(PG_NAME)
+        } else if self.clickhouse.is_some() {
+            Some(CH_NAME)
+        } else {
+            None
         }
     }
 
@@ -423,4 +379,155 @@ where
     let result = op.await;
     record_backend_outcome(name, start.elapsed().as_secs_f64(), health.as_deref(), &result);
     Some(result)
+}
+
+/// Apply a `WritePolicy` to per-backend outcomes. Pure function — the
+/// `DatabaseBackends` method is a thin shim, so policy logic is unit-testable
+/// without standing up a real client.
+fn apply_write_policy(
+    policy: &WritePolicy,
+    primary_backend: Option<&'static str>,
+    successes: &[&'static str],
+    failures: &[(&'static str, String)],
+) -> Result<(), String> {
+    let format_failures = || {
+        failures
+            .iter()
+            .map(|(n, e)| format!("{}: {}", n, e))
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    match policy {
+        WritePolicy::All => {
+            if failures.is_empty() {
+                Ok(())
+            } else {
+                Err(format_failures())
+            }
+        }
+        WritePolicy::Any => {
+            if successes.is_empty() {
+                Err(format_failures())
+            } else {
+                Ok(())
+            }
+        }
+        WritePolicy::PrimaryWithShadow => match primary_backend {
+            Some(primary) if failures.iter().any(|(n, _)| *n == primary) => Err(format_failures()),
+            _ => Ok(()),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fail(name: &'static str) -> (&'static str, String) {
+        (name, format!("{} boom", name))
+    }
+
+    #[test]
+    fn all_ok_when_no_failures() {
+        assert!(apply_write_policy(&WritePolicy::All, Some(PG_NAME), &[PG_NAME, CH_NAME], &[])
+            .is_ok());
+    }
+
+    #[test]
+    fn all_fails_on_any_failure() {
+        let err = apply_write_policy(
+            &WritePolicy::All,
+            Some(PG_NAME),
+            &[PG_NAME],
+            &[fail(CH_NAME)],
+        )
+        .unwrap_err();
+        assert!(err.contains("clickhouse"));
+    }
+
+    #[test]
+    fn any_succeeds_when_at_least_one_writes() {
+        assert!(apply_write_policy(
+            &WritePolicy::Any,
+            Some(PG_NAME),
+            &[PG_NAME],
+            &[fail(CH_NAME)],
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn any_fails_only_when_all_fail() {
+        assert!(apply_write_policy(
+            &WritePolicy::Any,
+            Some(PG_NAME),
+            &[],
+            &[fail(PG_NAME), fail(CH_NAME)],
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn primary_with_shadow_tolerates_shadow_failure() {
+        assert!(apply_write_policy(
+            &WritePolicy::PrimaryWithShadow,
+            Some(PG_NAME),
+            &[PG_NAME],
+            &[fail(CH_NAME)],
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn primary_with_shadow_fails_on_primary_failure() {
+        assert!(apply_write_policy(
+            &WritePolicy::PrimaryWithShadow,
+            Some(PG_NAME),
+            &[CH_NAME],
+            &[fail(PG_NAME)],
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn primary_with_shadow_treats_missing_primary_as_ok() {
+        // Defensive: if primary is None (no backends), nothing to gate on.
+        assert!(apply_write_policy(&WritePolicy::PrimaryWithShadow, None, &[], &[]).is_ok());
+    }
+
+    #[test]
+    fn dispatch_paired_short_circuits_when_no_ops() {
+        let db = DatabaseBackends::default();
+        let result = futures::executor::block_on(db.dispatch_paired::<
+            std::future::Ready<Result<(), String>>,
+            std::future::Ready<Result<(), String>>,
+        >("test", None, None));
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn dispatch_paired_runs_both_under_all_policy() {
+        let db = DatabaseBackends::default().with_config(Some(WritePolicy::All), None, None);
+        let result = db
+            .dispatch_paired(
+                "test",
+                Some(async { Ok::<(), String>(()) }),
+                Some(async { Err::<(), String>("boom".into()) }),
+            )
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn dispatch_paired_returns_ok_under_any_policy_when_one_succeeds() {
+        let db = DatabaseBackends::default().with_config(Some(WritePolicy::Any), None, None);
+        let result = db
+            .dispatch_paired(
+                "test",
+                Some(async { Ok::<(), String>(()) }),
+                Some(async { Err::<(), String>("boom".into()) }),
+            )
+            .await;
+        assert!(result.is_ok());
+    }
 }
