@@ -1,0 +1,11 @@
+core/src/indexer/cron_scheduler.rs
+  9997a21dbd197c7a 17,571-572,1192,1194,1517
+core/src/database/mod.rs
+  9997a21dbd197c7a 34-35,329,379-380,383,401
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "8c193b1baa97d1c0ad9d5006ab9395e27baaba82",
+  "prompts": {}
+}

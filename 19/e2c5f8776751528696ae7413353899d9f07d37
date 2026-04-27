@@ -1,0 +1,9 @@
+core/src/database/mod.rs
+  9997a21dbd197c7a 36-37,347,468-469,472,490
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "19e2c5f8776751528696ae7413353899d9f07d37",
+  "prompts": {}
+}

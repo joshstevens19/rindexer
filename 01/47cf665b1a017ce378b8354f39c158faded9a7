@@ -1,0 +1,25 @@
+core/src/event/factory_event_filter_sync.rs
+  9997a21dbd197c7a 215-226,228-231,234-242
+core/src/database/mod.rs
+  9997a21dbd197c7a 29-30,92-93,96-97,100-101
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "0147cf665b1a017ce378b8354f39c158faded9a7",
+  "prompts": {
+    "9997a21dbd197c7a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10073143-9b1a-4068-ac5e-f34cd46e3dff",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 19,
+      "total_deletions": 7,
+      "accepted_lines": 8,
+      "overriden_lines": 0
+    }
+  }
+}
