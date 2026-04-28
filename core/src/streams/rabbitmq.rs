@@ -1,6 +1,8 @@
-use deadpool::managed::PoolError;
-use deadpool_lapin::{Manager, Pool};
-use lapin::{options::*, types::FieldTable, BasicProperties, ConnectionProperties, ExchangeKind};
+use bb8::{Pool, RunError};
+use bb8_lapin::LapinConnectionManager;
+use lapin::{
+    options::*, types::FieldTable, BasicProperties, DefaultConnectionBuilder, ExchangeKind,
+};
 use serde_json::Value;
 
 use crate::manifest::stream::ExchangeKindWrapper;
@@ -14,21 +16,37 @@ pub enum RabbitMQError {
     #[error("Could not parse message: {0}")]
     CouldNotParseMessage(#[from] serde_json::Error),
 
-    #[error("Connection pool error")]
-    PoolError(#[from] PoolError<lapin::Error>),
+    #[error("Connection pool timed out")]
+    PoolTimedOut,
+}
+
+impl From<RunError<lapin::ErrorKind>> for RabbitMQError {
+    fn from(err: RunError<lapin::ErrorKind>) -> Self {
+        match err {
+            RunError::User(kind) => Self::LapinError(lapin::Error::from(kind)),
+            RunError::TimedOut => Self::PoolTimedOut,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct RabbitMQ {
-    pool: Pool,
+    pool: Pool<LapinConnectionManager<async_rs::Tokio>>,
 }
 
 impl RabbitMQ {
-    pub async fn new(uri: &str) -> Self {
-        let manager = Manager::new(uri, ConnectionProperties::default());
-        let pool = Pool::builder(manager).max_size(16).build().expect("Failed to create pool");
+    pub async fn new(uri: &str) -> Result<Self, RabbitMQError> {
+        let builder = DefaultConnectionBuilder::new()
+            .map_err(RabbitMQError::LapinError)?
+            .with_uri_str(uri.to_string());
+        let manager = LapinConnectionManager::new(builder);
+        let pool = Pool::builder()
+            .max_size(16)
+            .build(manager)
+            .await
+            .map_err(|kind| RabbitMQError::LapinError(lapin::Error::from(kind)))?;
 
-        Self { pool }
+        Ok(Self { pool })
     }
 
     pub async fn publish(
@@ -60,20 +78,22 @@ impl RabbitMQ {
 
         channel
             .exchange_declare(
-                exchange,
+                exchange.into(),
                 exchange_type.0.clone(),
                 ExchangeDeclareOptions::default(),
                 FieldTable::default(),
             )
             .await?;
 
+        let routing_key: &str = match exchange_type.0 {
+            ExchangeKind::Fanout => "", // Fanout exchange ignores the routing key
+            _ => routing_key.as_deref().expect("Routing key should be defined"),
+        };
+
         channel
             .basic_publish(
-                exchange,
-                match exchange_type.0 {
-                    ExchangeKind::Fanout => "", // Fanout exchange ignores the routing key
-                    _ => routing_key.as_ref().expect("Routing key should be defined"),
-                },
+                exchange.into(),
+                routing_key.into(),
                 BasicPublishOptions::default(),
                 &message_body,
                 BasicProperties::default()

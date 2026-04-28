@@ -170,7 +170,11 @@ impl StreamsClients {
         let rabbitmq = if let Some(config) = stream_config.rabbitmq.as_ref() {
             Some(RabbitMQStream {
                 config: config.clone(),
-                client: Arc::new(RabbitMQ::new(&config.url).await),
+                client: Arc::new(
+                    RabbitMQ::new(&config.url)
+                        .await
+                        .unwrap_or_else(|e| panic!("Failed to create RabbitMQ client: {e:?}")),
+                ),
             })
         } else {
             None

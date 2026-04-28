@@ -208,7 +208,7 @@ async fn stream_reorg_reaches_rabbitmq() {
 
     channel
         .exchange_declare(
-            exchange,
+            exchange.into(),
             ExchangeKind::Direct,
             ExchangeDeclareOptions::default(),
             FieldTable::default(),
@@ -217,15 +217,15 @@ async fn stream_reorg_reaches_rabbitmq() {
         .expect("exchange_declare");
 
     channel
-        .queue_declare(queue_name, QueueDeclareOptions::default(), FieldTable::default())
+        .queue_declare(queue_name.into(), QueueDeclareOptions::default(), FieldTable::default())
         .await
         .expect("queue_declare");
 
     channel
         .queue_bind(
-            queue_name,
-            exchange,
-            routing_key,
+            queue_name.into(),
+            exchange.into(),
+            routing_key.into(),
             QueueBindOptions::default(),
             FieldTable::default(),
         )
@@ -234,8 +234,8 @@ async fn stream_reorg_reaches_rabbitmq() {
 
     let mut consumer = channel
         .basic_consume(
-            queue_name,
-            "e2e-reorg-consumer",
+            queue_name.into(),
+            "e2e-reorg-consumer".into(),
             BasicConsumeOptions::default(),
             FieldTable::default(),
         )
