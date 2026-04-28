@@ -1,0 +1,31 @@
+core/src/generator/trace_bindings.rs
+  e9068f4089fd978d 5,381,479,651-652,658
+core/src/generator/events_bindings.rs
+  e9068f4089fd978d 5,365-366,589-590,596
+core/src/generator/database_bindings.rs
+  e9068f4089fd978d 4-49,168-344
+core/src/database/mod.rs
+  e9068f4089fd978d 518-811
+core/src/manifest/storage.rs
+  e9068f4089fd978d 324-420
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "31c3d7ae161541571a38abf332e56d9d0b54e75e",
+  "prompts": {
+    "e9068f4089fd978d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "000815c8-5ce3-4e38-a23d-c0ce5dfc60e8",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 1070,
+      "total_deletions": 102,
+      "accepted_lines": 1050,
+      "overriden_lines": 0
+    }
+  }
+}
