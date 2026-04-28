@@ -519,7 +519,7 @@ impl<TExtensions> {event_type_name}<TExtensions> where TExtensions: 'static + Se
           let index_event_in_order = contract_details
             .index_event_in_order
             .as_ref()
-            .map_or(false, |vec| vec.contains(&event_name.to_string()));
+            .is_some_and(|vec| vec.contains(&event_name.to_string()));
 
         // Expect providers to have been initialized, but it's an async init so this should
         // be fast but for correctness we must await each future.
@@ -554,7 +554,7 @@ impl<TExtensions> {event_type_name}<TExtensions> where TExtensions: 'static + Se
                                                     .networks
                                                     .iter()
                                                     .find(|n| n.name == c.network)
-                                                    .map_or(false, |n| n.disable_logs_bloom_checks.unwrap_or_default()),
+                                                    .is_some_and(|n| n.disable_logs_bloom_checks.unwrap_or_default()),
                     }}
                 }})
                 .collect(),
