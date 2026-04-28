@@ -3,7 +3,8 @@
 use std::time::Instant;
 
 use super::definitions::{
-    STREAM_FINALIZED_BUFFER_OVERFLOW_TOTAL, STREAM_MESSAGES_TOTAL, STREAM_MESSAGE_DURATION,
+    STREAM_FINALIZED_BUFFER_DEPTH, STREAM_FINALIZED_BUFFER_OVERFLOW_TOTAL,
+    STREAM_FINALIZED_FLUSH_DURATION, STREAM_MESSAGES_TOTAL, STREAM_MESSAGE_DURATION,
     STREAM_PUBLISH_DROPPED_TOTAL,
 };
 
@@ -15,6 +16,10 @@ pub mod stream_type {
     pub const KAFKA: &str = "kafka";
     pub const REDIS: &str = "redis";
     pub const CLOUDFLARE_QUEUES: &str = "cloudflare_queues";
+
+    /// Iterator-driven label set so callers (e.g. depth-gauge zero-out
+    /// loops) don't drift when a new backend is added.
+    pub const ALL: &[&str] = &[SNS, WEBHOOK, RABBITMQ, KAFKA, REDIS, CLOUDFLARE_QUEUES];
 }
 
 /// Record a successful stream message send.
@@ -36,6 +41,19 @@ pub fn record_stream_error(stream_type: &str, duration_secs: f64) {
 /// visibility.
 pub fn record_finalized_buffer_overflow(stream_type: &str, network: &str) {
     STREAM_FINALIZED_BUFFER_OVERFLOW_TOTAL.with_label_values(&[stream_type, network]).inc();
+}
+
+/// Set the current depth of a finalized-delivery buffer for a given
+/// `(stream_type, network)` pair. Called after every add / flush / discard
+/// so the gauge reflects live buffer state.
+pub fn set_finalized_buffer_depth(stream_type: &str, network: &str, depth: f64) {
+    STREAM_FINALIZED_BUFFER_DEPTH.with_label_values(&[stream_type, network]).set(depth);
+}
+
+/// Record the end-to-end duration of a `flush_finalized` call for a network,
+/// useful for detecting flush stalls or unusually slow publisher fanouts.
+pub fn record_finalized_flush_duration(network: &str, duration_secs: f64) {
+    STREAM_FINALIZED_FLUSH_DURATION.with_label_values(&[network]).observe(duration_secs);
 }
 
 /// Record a terminal publish failure — retries were exhausted and the message
