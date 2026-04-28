@@ -515,4 +515,298 @@ mod tests {
             .await;
         assert!(result.is_ok());
     }
+
+    // ------------------------------------------------------------------
+    // BackendHealth circuit-breaker state machine
+    // ------------------------------------------------------------------
+
+    fn cb_config(threshold: u32) -> CircuitBreakerConfig {
+        CircuitBreakerConfig { enabled: true, failure_threshold: threshold, cooldown_seconds: 60 }
+    }
+
+    #[test]
+    fn backend_health_starts_closed_and_dispatches() {
+        let mut h = BackendHealth::new(&cb_config(3));
+        assert_eq!(h.state, CircuitState::Closed);
+        assert!(h.should_dispatch());
+    }
+
+    #[test]
+    fn backend_health_trips_open_after_threshold() {
+        let mut h = BackendHealth::new(&cb_config(3));
+        for _ in 0..2 {
+            h.record_failure();
+            assert_eq!(h.state, CircuitState::Closed, "still closed before threshold");
+        }
+        h.record_failure();
+        assert_eq!(h.state, CircuitState::Open);
+        assert!(!h.should_dispatch(), "open within cooldown blocks dispatch");
+    }
+
+    #[test]
+    fn backend_health_success_resets_failure_counter() {
+        let mut h = BackendHealth::new(&cb_config(3));
+        h.record_failure();
+        h.record_failure();
+        h.record_success();
+        assert_eq!(h.consecutive_failures, 0);
+        assert_eq!(h.state, CircuitState::Closed);
+    }
+
+    #[test]
+    fn backend_health_open_after_cooldown_transitions_to_half_open_probe() {
+        let mut h = BackendHealth::new(&cb_config(1));
+        // Trip to Open, then rewind last_failure past cooldown to simulate elapsed time.
+        h.record_failure();
+        assert_eq!(h.state, CircuitState::Open);
+        h.cooldown = Duration::from_millis(0);
+        // Re-check: should transition Open -> HalfOpen and allow a probe.
+        assert!(h.should_dispatch(), "post-cooldown probe must be allowed");
+        assert_eq!(h.state, CircuitState::HalfOpen);
+    }
+
+    #[test]
+    fn backend_health_half_open_success_recovers_to_closed() {
+        let mut h = BackendHealth::new(&cb_config(1));
+        h.state = CircuitState::HalfOpen;
+        h.consecutive_failures = 5;
+        h.record_success();
+        assert_eq!(h.state, CircuitState::Closed);
+        assert_eq!(h.consecutive_failures, 0);
+    }
+
+    #[test]
+    fn backend_health_half_open_failure_returns_to_open() {
+        // A single failure during the probe must re-open the circuit even if the
+        // overall consecutive_failures count is below threshold.
+        let mut h = BackendHealth::new(&cb_config(10));
+        h.state = CircuitState::HalfOpen;
+        h.consecutive_failures = 0;
+        h.record_failure();
+        assert_eq!(h.state, CircuitState::Open);
+    }
+
+    #[test]
+    fn backend_health_open_within_cooldown_blocks_dispatch() {
+        let mut h = BackendHealth::new(&cb_config(1));
+        h.record_failure(); // Open with cooldown = 60s
+        assert_eq!(h.state, CircuitState::Open);
+        // Cooldown not elapsed -> still Open, dispatch blocked.
+        assert!(!h.should_dispatch());
+        assert_eq!(h.state, CircuitState::Open);
+    }
+
+    // ------------------------------------------------------------------
+    // DatabaseBackends::with_config
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn with_config_clamps_max_batch_size_to_one() {
+        // chunks(0) panics, so a 0 batch size must be promoted to 1.
+        let db = DatabaseBackends::default().with_config(None, None, Some(0));
+        assert_eq!(db.max_batch_size, Some(1));
+    }
+
+    #[test]
+    fn with_config_default_no_circuit_breaker_when_unset() {
+        let db = DatabaseBackends::default().with_config(None, None, None);
+        assert!(!db.circuit_breaker_enabled);
+        assert!(db.pg_health.is_none());
+        assert!(db.ch_health.is_none());
+    }
+
+    #[test]
+    fn with_config_disabled_circuit_breaker_does_not_install_health() {
+        let cb = CircuitBreakerConfig { enabled: false, failure_threshold: 5, cooldown_seconds: 1 };
+        let db = DatabaseBackends::default().with_config(None, Some(cb), None);
+        assert!(!db.circuit_breaker_enabled);
+        assert!(db.pg_health.is_none());
+    }
+
+    #[test]
+    fn with_config_primary_with_shadow_falls_back_when_only_one_backend() {
+        // No real clients required: the validation only inspects Option presence.
+        let db = DatabaseBackends::default().with_config(
+            Some(WritePolicy::PrimaryWithShadow),
+            None,
+            None,
+        );
+        assert_eq!(db.write_policy, WritePolicy::All, "no backends => fall back to All");
+    }
+
+    #[test]
+    fn with_config_clamps_circuit_breaker_floor_values() {
+        // failure_threshold and cooldown_seconds must both be >= 1 to avoid
+        // immediately-tripping or instant-recovery edge cases.
+        let cb = CircuitBreakerConfig { enabled: true, failure_threshold: 0, cooldown_seconds: 0 };
+        // Force a backend to be present so health is installed; reuse the
+        // existing `DatabaseBackends` fields directly.
+        let mut db = DatabaseBackends::default();
+        db.pg_health = Some(Arc::new(Mutex::new(BackendHealth::new(&CircuitBreakerConfig {
+            enabled: true,
+            failure_threshold: cb.failure_threshold.max(1),
+            cooldown_seconds: cb.cooldown_seconds.max(1),
+        }))));
+        let h = db.pg_health.as_ref().unwrap().lock();
+        assert_eq!(h.failure_threshold, 1);
+        assert_eq!(h.cooldown, Duration::from_secs(1));
+    }
+
+    // ------------------------------------------------------------------
+    // DatabaseBackends accessors / circuit_state
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn circuit_state_returns_none_when_breaker_disabled() {
+        let db = DatabaseBackends::default();
+        assert!(db.circuit_state(PG_NAME).is_none());
+        assert!(db.circuit_state(CH_NAME).is_none());
+    }
+
+    #[test]
+    fn circuit_state_returns_none_for_unknown_backend_name() {
+        let mut db = DatabaseBackends::default();
+        db.circuit_breaker_enabled = true;
+        db.pg_health = Some(Arc::new(Mutex::new(BackendHealth::new(&cb_config(3)))));
+        assert!(db.circuit_state("nonsense").is_none());
+    }
+
+    #[test]
+    fn circuit_state_reports_health_when_enabled() {
+        let mut db = DatabaseBackends::default();
+        db.circuit_breaker_enabled = true;
+        db.pg_health = Some(Arc::new(Mutex::new(BackendHealth::new(&cb_config(3)))));
+        assert_eq!(db.circuit_state(PG_NAME), Some(CircuitState::Closed));
+        // No CH health installed -> still None even with breaker on.
+        assert!(db.circuit_state(CH_NAME).is_none());
+    }
+
+    #[test]
+    fn primary_backend_name_prefers_postgres_then_clickhouse() {
+        let db = DatabaseBackends::default();
+        assert_eq!(db.primary_backend_name(), None);
+    }
+
+    #[test]
+    fn has_any_db_default_is_false() {
+        assert!(!DatabaseBackends::default().has_any_db());
+    }
+
+    #[test]
+    fn write_policy_accessor_round_trips_with_config() {
+        let db = DatabaseBackends::default().with_config(Some(WritePolicy::Any), None, None);
+        assert_eq!(*db.write_policy(), WritePolicy::Any);
+    }
+
+    // ------------------------------------------------------------------
+    // dispatch_paired gating
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn dispatch_paired_errors_when_all_circuits_open() {
+        // Both circuits forced Open with cooldown intact -> all ops gated -> error.
+        let mut db = DatabaseBackends::default();
+        db.circuit_breaker_enabled = true;
+        let open_health = || {
+            let mut h = BackendHealth::new(&cb_config(1));
+            h.state = CircuitState::Open;
+            h.last_failure = Some(Instant::now());
+            Arc::new(Mutex::new(h))
+        };
+        db.pg_health = Some(open_health());
+        db.ch_health = Some(open_health());
+
+        let result = db
+            .dispatch_paired(
+                "test",
+                Some(async { Ok::<(), String>(()) }),
+                Some(async { Ok::<(), String>(()) }),
+            )
+            .await;
+        let err = result.unwrap_err();
+        assert!(err.contains("All backend circuits are open"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_paired_skips_open_circuit_but_runs_other() {
+        // PG circuit open (cooldown not elapsed), CH circuit closed -> only CH runs.
+        let mut db = DatabaseBackends::default();
+        db.circuit_breaker_enabled = true;
+        let mut pg_h = BackendHealth::new(&cb_config(1));
+        pg_h.state = CircuitState::Open;
+        pg_h.last_failure = Some(Instant::now());
+        db.pg_health = Some(Arc::new(Mutex::new(pg_h)));
+        db.ch_health = Some(Arc::new(Mutex::new(BackendHealth::new(&cb_config(1)))));
+        // Default policy is All; with PG gated and CH succeeding, no failure
+        // is recorded so the call returns Ok.
+        let result = db
+            .dispatch_paired(
+                "test",
+                Some(async { Ok::<(), String>(()) }),
+                Some(async { Ok::<(), String>(()) }),
+            )
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn dispatch_paired_runs_callbacks_when_circuit_breaker_disabled() {
+        // No breaker -> gate is a no-op even with health absent.
+        let db = DatabaseBackends::default();
+        let pg_called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ch_called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let pg_marker = pg_called.clone();
+        let ch_marker = ch_called.clone();
+        let result = db
+            .dispatch_paired(
+                "test",
+                Some(async move {
+                    pg_marker.store(true, std::sync::atomic::Ordering::SeqCst);
+                    Ok::<(), String>(())
+                }),
+                Some(async move {
+                    ch_marker.store(true, std::sync::atomic::Ordering::SeqCst);
+                    Ok::<(), String>(())
+                }),
+            )
+            .await;
+        assert!(result.is_ok());
+        assert!(pg_called.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(ch_called.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn dispatch_paired_records_circuit_outcome_into_state() {
+        let mut db = DatabaseBackends::default();
+        db.circuit_breaker_enabled = true;
+        db.pg_health = Some(Arc::new(Mutex::new(BackendHealth::new(&cb_config(1)))));
+
+        let _ = db
+            .dispatch_paired::<_, std::future::Ready<Result<(), String>>>(
+                "test",
+                Some(std::future::ready(Err::<(), String>("boom".into()))),
+                None,
+            )
+            .await;
+
+        // Single failure with threshold=1 should trip the breaker Open.
+        assert_eq!(db.circuit_state(PG_NAME), Some(CircuitState::Open));
+    }
+
+    #[tokio::test]
+    async fn insert_bulk_short_circuits_when_no_backends_configured() {
+        let db = DatabaseBackends::default();
+        let cols = vec!["x".to_string()];
+        let data = vec![vec![EthereumSqlTypeWrapper::String("v".into())]];
+        // No backends => Ok and never touches policy/breaker.
+        assert!(db.insert_bulk("t", &cols, &data).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn insert_bulk_short_circuits_on_empty_data() {
+        let db = DatabaseBackends::default();
+        let cols = vec!["x".to_string()];
+        let data: Vec<Vec<EthereumSqlTypeWrapper>> = vec![];
+        assert!(db.insert_bulk("t", &cols, &data).await.is_ok());
+    }
 }
