@@ -1,4 +1,5 @@
 use crate::database::clickhouse::client::ClickhouseError;
+use crate::database::clickhouse::types::ClickhouseAddress;
 use crate::database::generate::generate_internal_factory_event_table_name_no_shorten;
 use crate::database::postgres::client::PostgresError;
 use crate::database::{
@@ -328,7 +329,7 @@ pub async fn get_known_factory_deployed_addresses(
         let table_name = generate_internal_factory_event_table_name_no_shorten(&table_params);
         let query = format!(
             r#"
-            SELECT toString(factory_deployed_address) AS factory_deployed_address
+            SELECT factory_deployed_address
             FROM rindexer_internal.{table_name} FINAL
             WHERE network = ?
             "#
@@ -336,7 +337,7 @@ pub async fn get_known_factory_deployed_addresses(
 
         #[derive(Debug, clickhouse::Row, Deserialize)]
         struct FactoryDeployedAddresses {
-            factory_deployed_address: String,
+            factory_deployed_address: ClickhouseAddress,
         }
 
         let result: Vec<FactoryDeployedAddresses> =
@@ -344,10 +345,7 @@ pub async fn get_known_factory_deployed_addresses(
 
         let values = result
             .into_iter()
-            .map(|row| {
-                Address::from_str(&row.factory_deployed_address)
-                    .expect("Factory deployed address not a valid ethereum address")
-            })
+            .map(|row| Address::from(row.factory_deployed_address))
             .collect::<HashSet<_>>();
 
         set_known_factory_deployed_addresses_cache(key, values.clone());
@@ -457,23 +455,19 @@ pub async fn get_factory_addresses_with_birth_blocks(
     if let Some(database) = &params.clickhouse {
         #[derive(Debug, clickhouse::Row, Deserialize)]
         struct AddressWithBlock {
-            address: String,
+            address: ClickhouseAddress,
             block_number: u64,
         }
 
         let query = format!(
-            r#"SELECT toString({address_column}) AS address, block_number FROM {schema_name}.{table_name} FINAL WHERE network = ?"#
+            r#"SELECT {address_column} AS address, block_number FROM {schema_name}.{table_name} FINAL WHERE network = ?"#
         );
 
         let result: Vec<AddressWithBlock> =
             database.conn.query(&query).bind(params.network.clone()).fetch_all().await?;
 
-        let values: HashMap<Address, u64> = result
-            .into_iter()
-            .filter_map(|row| {
-                Address::from_str(&row.address).ok().map(|addr| (addr, row.block_number))
-            })
-            .collect();
+        let values: HashMap<Address, u64> =
+            result.into_iter().map(|row| (Address::from(row.address), row.block_number)).collect();
 
         return Ok(values);
     }
