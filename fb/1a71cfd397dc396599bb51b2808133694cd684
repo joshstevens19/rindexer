@@ -1,0 +1,32 @@
+core/src/database/clickhouse/client.rs
+  71e1f5331ce549d4 5
+core/src/helpers/mod.rs
+  71e1f5331ce549d4 21
+core/Cargo.toml
+  fe8ee08cb2266df3 15,19-21,24,35,41-42,50-55,58-59,61,64,70,74-75,83,93
+  71e1f5331ce549d4 97-100
+core/src/database/postgres/client.rs
+  71e1f5331ce549d4 10
+core/src/helpers/file.rs
+  71e1f5331ce549d4 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "fb1a71cfd397dc396599bb51b2808133694cd684",
+  "prompts": {
+    "71e1f5331ce549d4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9f80f68e-f933-477d-be1b-f2cbe2f38479",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 5,
+      "total_deletions": 5,
+      "accepted_lines": 5,
+      "overriden_lines": 0
+    }
+  }
+}
