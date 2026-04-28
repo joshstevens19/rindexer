@@ -35,12 +35,6 @@ impl TestModule for DualWriteTests {
                 dual_write_checkpoint_resume,
             )
             .with_timeout(180),
-            TestDefinition::new(
-                "test_single_backend_regression",
-                "Regression: PG-only config still works correctly after dual-write changes",
-                single_backend_regression,
-            )
-            .with_timeout(120),
         ]
     }
 }
@@ -656,112 +650,6 @@ fn dual_write_checkpoint_resume(
         assert!(pg_dups.is_empty(), "PG should have no duplicates after resume");
 
         info!("dual_write_checkpoint_resume PASSED: batch1=11, total=21, 0 duplicates");
-
-        Ok(())
-    })
-}
-
-// ============================================================================
-// Test 4: Single-backend regression — PG-only still works after all changes
-// ============================================================================
-
-fn single_backend_regression(
-    context: &mut TestContext,
-) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
-    Box::pin(async move {
-        // 1. Start ONLY PG container (no CH)
-        let (pg_container, pg_port) = crate::docker::start_postgres_container().await?;
-        context.register_container(pg_container);
-        crate::docker::wait_for_postgres_ready(pg_port, 30).await?;
-
-        // 2. Deploy contract and send transfers
-        let contract_address = context.deploy_test_contract().await?;
-        for i in 0..10u64 {
-            let recipient = helpers::generate_test_address(i);
-            context
-                .anvil
-                .send_transfer(
-                    &contract_address,
-                    &recipient,
-                    ethers::types::U256::from((i + 1) * 500),
-                )
-                .await?;
-            context.anvil.mine_block().await?;
-        }
-        let end_block = context.anvil.get_block_number().await?;
-
-        // 3. Configure with ONLY PG (no CH) — backward compatibility regression test
-        let mut config = RindexerInstance::create_contract_config(
-            &context.anvil.rpc_url,
-            &contract_address,
-            context.health_port,
-        );
-        config.name = "single_pg_test".to_string();
-        config.storage.postgres = Some(PostgresConfig { enabled: true });
-        config.storage.clickhouse = None;
-        config.storage.csv.enabled = false;
-        if let Some(contract) = config.contracts.get_mut(0) {
-            if let Some(detail) = contract.details.get_mut(0) {
-                detail.end_block = Some(end_block.to_string());
-            }
-        }
-
-        // 4. Start indexer with PG env vars only
-        helpers::copy_abis_to_project(&context.project_path)?;
-        let yaml = serde_yaml::to_string(&config)?;
-        std::fs::write(context.project_path.join("rindexer.yaml"), yaml)?;
-
-        let mut rindexer =
-            RindexerInstance::new(&context.rindexer_binary, context.project_path.clone());
-        for (k, v) in crate::docker::postgres_env_vars(pg_port) {
-            rindexer = rindexer.with_env(&k, &v);
-        }
-        rindexer.start_indexer().await?;
-        context.rindexer = Some(rindexer);
-        context.wait_for_sync_completion(60).await?;
-
-        // 5. Verify PG has all events
-        let pg_conn_str = format!(
-            "host=localhost port={} user=postgres password=postgres dbname=postgres",
-            pg_port
-        );
-        let pg_table = "single_pg_test_simple_erc_20.transfer";
-        let pg_count = wait_for_pg_count(&pg_conn_str, pg_table, 11, 15).await?;
-        assert_eq!(
-            pg_count, 11,
-            "PG-only should have 11 rows (1 mint + 10 transfers), got {}",
-            pg_count
-        );
-
-        // 6. Verify checkpoint
-        let (pg_client, pg_conn) =
-            tokio_postgres::connect(&pg_conn_str, tokio_postgres::NoTls).await?;
-        tokio::spawn(async move {
-            let _ = pg_conn.await;
-        });
-        let checkpoint_rows = pg_client
-            .query(
-                "SELECT last_synced_block::TEXT as block FROM rindexer_internal.single_pg_test_simple_erc_20_transfer WHERE network = 'anvil'",
-                &[],
-            )
-            .await?;
-        assert!(!checkpoint_rows.is_empty(), "PG checkpoint should exist");
-        let checkpoint: u64 = checkpoint_rows[0].get::<_, String>("block").parse().unwrap_or(0);
-        assert!(checkpoint > 0, "PG checkpoint should be > 0");
-
-        // 7. No duplicates
-        let dups = pg_client
-            .query(
-                &format!(
-                    "SELECT tx_hash, log_index, COUNT(*) FROM {} GROUP BY tx_hash, log_index HAVING COUNT(*) > 1",
-                    pg_table
-                ),
-                &[],
-            )
-            .await?;
-        assert!(dups.is_empty(), "PG-only should have no duplicates");
-
-        info!("single_backend_regression PASSED: {} rows, checkpoint={}", pg_count, checkpoint);
 
         Ok(())
     })

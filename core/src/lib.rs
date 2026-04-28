@@ -19,7 +19,6 @@ mod health;
 pub use health::{start_health_server, HealthServer, HealthServerState, HealthStatus};
 
 mod database;
-pub use database::{CircuitState, DatabaseBackends};
 pub use database::{
     clickhouse::{
         client::ClickhouseClient,
@@ -37,6 +36,7 @@ pub use database::{
         setup::setup_postgres,
     },
 };
+pub use database::{CircuitState, DatabaseBackends};
 pub use manifest::storage::{CircuitBreakerConfig, WritePolicy};
 
 mod simple_file_formatters;
