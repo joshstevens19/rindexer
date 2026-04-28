@@ -23,8 +23,8 @@ tokio = { workspace = true, features = ["test-util"] }
 [dependencies]
 alloy = { workspace = true, features = ["json-rpc", "eip712"] }
 async-trait = "0.1.89"
-aws-config = "1.8.8"
-aws-sdk-sns = "1.88.0"
+aws-config = { version = "1", features = ["behavior-version-latest", "default-https-client", "rt-tokio"], default-features = false }
+aws-sdk-sns = { version = "1", features = ["behavior-version-latest", "default-https-client", "rt-tokio"], default-features = false }
 bb8 = "0.9.0"
 bb8-postgres = "0.9.0"
 bb8-redis = "0.24.0"
