@@ -9,13 +9,13 @@ use tokio::{
     fs::File,
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
 };
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
-use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::postgres::generate::{
     generate_internal_cron_table_name, generate_internal_cron_table_name_no_shorten,
     generate_internal_event_table_name_no_shorten,
 };
+use crate::database::DatabaseBackends;
 use crate::{
     database::{
         generate::generate_indexer_contract_schema_name,
@@ -25,7 +25,7 @@ use crate::{
     helpers::get_full_path,
     manifest::{storage::CsvDetails, stream::StreamsConfig},
     metrics::indexing as metrics,
-    EthereumSqlTypeWrapper, PostgresClient,
+    EthereumSqlTypeWrapper,
 };
 
 async fn get_last_synced_block_number_file(
@@ -79,8 +79,7 @@ fn build_last_synced_block_number_file(
 
 pub struct SyncConfig<'a> {
     pub project_path: &'a Path,
-    pub postgres: &'a Option<Arc<PostgresClient>>,
-    pub clickhouse: &'a Option<Arc<ClickhouseClient>>,
+    pub databases: &'a DatabaseBackends,
     pub csv_details: &'a Option<CsvDetails>,
     pub stream_details: &'a Option<&'a StreamsConfig>,
     pub contract_csv_enabled: bool,
@@ -91,11 +90,17 @@ pub struct SyncConfig<'a> {
 }
 
 pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64> {
-    // 1. Database storage takes priority (matches write-side priority in
-    //    update_progress_and_last_synced_task which uses postgres > clickhouse > csv > stream)
+    // 1. Database storage takes priority.
+    //    With dual backends: query BOTH, resume from min(pg, ch).
+    //    The leading backend receives idempotent re-inserts on replay.
+
+    let mut pg_block: Option<U64> = None;
+    let mut ch_block: Option<U64> = None;
+    let mut has_any_db = false;
 
     // Query Postgres for last synced block
-    if let Some(postgres) = config.postgres {
+    if let Some(postgres) = &config.databases.postgres {
+        has_any_db = true;
         let schema =
             generate_indexer_contract_schema_name(config.indexer_name, config.contract_name);
         let table_name = generate_internal_event_table_name(&schema, config.event_name);
@@ -103,26 +108,25 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
             "SELECT last_synced_block FROM rindexer_internal.{table_name} WHERE network = $1"
         );
 
-        return match postgres.query_one(&query, &[&config.network]).await {
+        match postgres.query_one(&query, &[&config.network]).await {
             Ok(row) => {
                 let result: Decimal = row.get("last_synced_block");
                 let parsed =
                     U64::from_str(&result.to_string()).expect("Failed to parse last_synced_block");
-                if parsed.is_zero() {
-                    None
-                } else {
-                    Some(parsed)
+                if !parsed.is_zero() {
+                    pg_block = Some(parsed);
                 }
             }
             Err(e) => {
-                error!("Error fetching last synced block: {:?}", e);
-                None
+                error!("Error fetching last synced block from postgres: {:?}", e);
             }
         };
     }
 
     // Query ClickHouse for last synced block
-    if let Some(clickhouse) = config.clickhouse {
+    if let Some(clickhouse) = &config.databases.clickhouse {
+        has_any_db = true;
+
         #[derive(Row, Deserialize)]
         struct LastBlock {
             last_synced_block: u64,
@@ -136,25 +140,46 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
             config.network
         );
 
-        let row = clickhouse.query_one::<LastBlock>(&query).await;
-
-        return match row {
+        match clickhouse.query_one::<LastBlock>(&query).await {
             Ok(row) => {
-                let result = row.last_synced_block.to_string();
-                let parsed =
-                    U64::from_str(&result.to_string()).expect("Failed to parse last_synced_block");
-
-                if parsed.is_zero() {
-                    None
-                } else {
-                    Some(parsed)
+                let parsed = U64::from_str(&row.last_synced_block.to_string())
+                    .expect("Failed to parse last_synced_block");
+                if !parsed.is_zero() {
+                    ch_block = Some(parsed);
                 }
             }
             Err(e) => {
-                error!("Error fetching last synced block: {:?}", e);
-                None
+                error!("Error fetching last synced block from clickhouse: {:?}", e);
             }
         };
+    }
+
+    // Reconcile: resume from min(pg, ch) so the lagging backend catches up.
+    if has_any_db {
+        let result = match (pg_block, ch_block) {
+            (Some(pg), Some(ch)) => Some(std::cmp::min(pg, ch)),
+            (Some(pg), None) => Some(pg),
+            (None, Some(ch)) => Some(ch),
+            (None, None) => None,
+        };
+        if pg_block.is_some() || ch_block.is_some() {
+            tracing::info!(
+                "Checkpoint: PG={:?}, CH={:?}, resuming from {:?}",
+                pg_block,
+                ch_block,
+                result
+            );
+
+            // Record checkpoint lag metrics when both backends have values
+            if let (Some(pg), Some(ch)) = (pg_block, ch_block) {
+                let max_block = std::cmp::max(pg, ch);
+                let pg_lag = (max_block - pg).to::<u64>();
+                let ch_lag = (max_block - ch).to::<u64>();
+                crate::metrics::database::set_checkpoint_lag("postgres", pg_lag);
+                crate::metrics::database::set_checkpoint_lag("clickhouse", ch_lag);
+            }
+        }
+        return result;
     }
 
     // 2. File-based fallbacks (only when no database storage is configured)
@@ -271,24 +296,6 @@ pub async fn update_progress_and_last_synced_task(
     to_block: U64,
     on_complete: impl FnOnce() + Send + 'static,
 ) {
-    let update_last_synced_block_result = tokio::time::timeout(
-        Duration::from_millis(100),
-        config.progress().update_last_synced_block(
-            config.network_contract().cached_provider.chain().id(),
-            config.id(),
-            to_block,
-        ),
-    )
-    .await;
-
-    // We don't want the in-memory progress reporter to hold up processing. Under high-ingest
-    // workloads, contention can be high enough to hang here.
-    match update_last_synced_block_result {
-        Ok(Err(e)) => error!("Error updating in-mem last synced block result: {:?}", e),
-        Err(_) => debug!("Timeout in update_last_synced_block_result, completing early"),
-        _ => {}
-    };
-
     let latest = config
         .network_contract()
         .cached_provider
@@ -311,6 +318,10 @@ pub async fn update_progress_and_last_synced_task(
         metrics::set_blocks_behind(network, contract, event, to_block_u64, latest);
     }
 
+    // Write checkpoint to ALL configured database backends (independent blocks, not else-if).
+    let mut pg_checkpoint_ok = false;
+    let mut ch_checkpoint_ok = false;
+
     if let Some(postgres) = &config.postgres() {
         let schema =
             generate_indexer_contract_schema_name(&config.indexer_name(), &config.contract_name());
@@ -321,12 +332,12 @@ pub async fn update_progress_and_last_synced_task(
              UPDATE rindexer_internal.latest_block SET block = {latest} WHERE network = '{network}' AND {latest} > block;"
         );
 
-        let result = postgres.batch_execute(&query).await;
-
-        if let Err(e) = result {
-            error!("Error updating db last synced block: {:?}", e);
+        match postgres.batch_execute(&query).await {
+            Ok(_) => pg_checkpoint_ok = true,
+            Err(e) => error!("Error updating db last synced block: {:?}", e),
         }
-    } else if let Some(clickhouse) = &config.clickhouse() {
+    }
+    if let Some(clickhouse) = &config.clickhouse() {
         let schema =
             generate_indexer_contract_schema_name(&config.indexer_name(), &config.contract_name());
         let table_name =
@@ -339,49 +350,98 @@ pub async fn update_progress_and_last_synced_task(
             "#
         );
 
-        let result = clickhouse.execute_batch(&query).await;
+        match clickhouse.execute_batch(&query).await {
+            Ok(_) => ch_checkpoint_ok = true,
+            Err(e) => error!("Error updating clickhouse last synced block: {:?}", e),
+        }
+    }
 
-        if let Err(e) = result {
-            error!("Error updating clickhouse last synced block: {:?}", e);
+    // Record checkpoint lag: if one backend's checkpoint failed, it's now behind.
+    if config.postgres().is_some() && config.clickhouse().is_some() {
+        if pg_checkpoint_ok && !ch_checkpoint_ok {
+            crate::metrics::database::set_checkpoint_lag("clickhouse", 1);
+        } else if !pg_checkpoint_ok && ch_checkpoint_ok {
+            crate::metrics::database::set_checkpoint_lag("postgres", 1);
+        } else if pg_checkpoint_ok && ch_checkpoint_ok {
+            crate::metrics::database::set_checkpoint_lag("postgres", 0);
+            crate::metrics::database::set_checkpoint_lag("clickhouse", 0);
         }
-    } else if let Some(csv_details) = &config.csv_details() {
-        if let Err(e) = update_last_synced_block_number_for_file(
-            &config.contract_name(),
-            &config.network_contract().network,
-            &config.event_name(),
-            &get_full_path(&config.project_path(), &csv_details.path).unwrap_or_else(|_| {
-                panic!("failed to get full path {}", config.project_path().display())
-            }),
-            to_block,
-        )
-        .await
+    }
+    // CSV/stream fallback only when no database is configured
+    let mut file_checkpoint_ok = false;
+    if config.postgres().is_none() && config.clickhouse().is_none() {
+        if let Some(csv_details) = &config.csv_details() {
+            match update_last_synced_block_number_for_file(
+                &config.contract_name(),
+                &config.network_contract().network,
+                &config.event_name(),
+                &get_full_path(&config.project_path(), &csv_details.path).unwrap_or_else(|_| {
+                    panic!("failed to get full path {}", config.project_path().display())
+                }),
+                to_block,
+            )
+            .await
+            {
+                Ok(()) => file_checkpoint_ok = true,
+                Err(e) => error!(
+                    "Error updating last synced block to CSV - path - {} error - {:?}",
+                    csv_details.path, e
+                ),
+            }
+        } else if let Some(stream_last_synced_block_file_path) =
+            &config.stream_last_synced_block_file_path()
         {
-            error!(
-                "Error updating last synced block to CSV - path - {} error - {:?}",
-                csv_details.path, e
-            );
+            match update_last_synced_block_number_for_file(
+                &config.contract_name(),
+                &config.network_contract().network,
+                &config.event_name(),
+                &config
+                    .project_path()
+                    .join(stream_last_synced_block_file_path)
+                    .canonicalize()
+                    .expect("Failed to canonicalize path"),
+                to_block,
+            )
+            .await
+            {
+                Ok(()) => file_checkpoint_ok = true,
+                Err(e) => error!(
+                    "Error updating last synced block to stream - path - {} error - {:?}",
+                    stream_last_synced_block_file_path, e
+                ),
+            }
         }
-    } else if let Some(stream_last_synced_block_file_path) =
-        &config.stream_last_synced_block_file_path()
-    {
-        if let Err(e) = update_last_synced_block_number_for_file(
-            &config.contract_name(),
-            &config.network_contract().network,
-            &config.event_name(),
-            &config
-                .project_path()
-                .join(stream_last_synced_block_file_path)
-                .canonicalize()
-                .expect("Failed to canonicalize path"),
-            to_block,
+    }
+
+    // Only advance the in-memory progress reporter after *some* persistent
+    // checkpoint has actually been written. Partial/total DB failures must not
+    // silently move the reported tip ahead of durable state.
+    let any_persistent_write_ok = pg_checkpoint_ok || ch_checkpoint_ok || file_checkpoint_ok;
+    if any_persistent_write_ok {
+        let update_last_synced_block_result = tokio::time::timeout(
+            Duration::from_millis(100),
+            config.progress().update_last_synced_block(
+                config.network_contract().cached_provider.chain().id(),
+                config.id(),
+                to_block,
+            ),
         )
-        .await
-        {
-            error!(
-                "Error updating last synced block to stream - path - {} error - {:?}",
-                stream_last_synced_block_file_path, e
-            );
-        }
+        .await;
+
+        // 100ms cap mirrors the contract-event fetch loop; under high-ingest workloads
+        // the in-memory reporter must not hold up processing.
+        match update_last_synced_block_result {
+            Ok(Err(e)) => error!("Error updating in-mem last synced block result: {:?}", e),
+            Err(_) => debug!("Timeout in update_last_synced_block_result, completing early"),
+            _ => {}
+        };
+    } else if config.postgres().is_some() || config.clickhouse().is_some() {
+        warn!(
+            network = %config.network_contract().network,
+            event = %config.event_name(),
+            to_block = to_block.to::<u64>(),
+            "No backend accepted the checkpoint write; in-memory progress not advanced",
+        );
     }
 
     on_complete();
@@ -392,21 +452,10 @@ pub async fn evm_trace_update_progress_and_last_synced_task(
     to_block: U64,
     on_complete: impl FnOnce() + Send + 'static,
 ) {
-    let update_last_synced_block_result = tokio::time::timeout(
-        Duration::from_millis(100),
-        config.progress.update_last_synced_block(config.chain_id, &config.id, to_block),
-    )
-    .await;
+    let mut pg_checkpoint_ok = false;
+    let mut ch_checkpoint_ok = false;
 
-    // We don't want the in-memory progress reporter to hold up processing. Under high-ingest
-    // workloads, contention can be high enough to hang here.
-    match update_last_synced_block_result {
-        Ok(Err(e)) => error!("Error updating in-mem last synced trace result: {:?}", e),
-        Err(_) => debug!("Timeout in update_last_synced_block_result, completing early"),
-        _ => {}
-    }
-
-    if let Some(postgres) = &config.postgres {
+    if let Some(postgres) = &config.databases.postgres {
         // Use the native_transfer table for all trace events since they share the same pipeline
         let schema =
             generate_indexer_contract_schema_name(&config.indexer_name, &config.contract_name);
@@ -418,49 +467,94 @@ pub async fn evm_trace_update_progress_and_last_synced_task(
             .execute(&query, &[&EthereumSqlTypeWrapper::U64(to_block.to()), &config.network])
             .await;
 
-        if let Err(e) = result {
-            error!("Error updating last synced trace block db: {:?}", e);
+        match result {
+            Ok(_) => pg_checkpoint_ok = true,
+            Err(e) => error!("Error updating last synced trace block db: {:?}", e),
+        }
+    }
+    if let Some(clickhouse) = &config.databases.clickhouse {
+        let schema =
+            generate_indexer_contract_schema_name(&config.indexer_name, &config.contract_name);
+        let table_name = generate_internal_event_table_name_no_shorten(&schema, "native_transfer");
+        let query = format!(
+            "INSERT INTO rindexer_internal.{table_name} (network, last_synced_block) VALUES ('{}', {})",
+            config.network, to_block
+        );
+
+        let result = clickhouse.execute(&query).await;
+
+        match result {
+            Ok(_) => ch_checkpoint_ok = true,
+            Err(e) => error!("Error updating last synced trace block clickhouse: {:?}", e),
         }
     }
 
-    if let Some(csv_details) = &config.csv_details {
-        if let Err(e) = update_last_synced_block_number_for_file(
-            &config.contract_name,
-            &config.network,
-            &config.event_name,
-            &get_full_path(&config.project_path, &csv_details.path).unwrap_or_else(|_| {
-                panic!("failed to get full path {}", config.project_path.display())
-            }),
-            to_block,
-        )
-        .await
+    // CSV/stream fallback only when no database is configured
+    let mut file_checkpoint_ok = false;
+    if config.databases.postgres.is_none() && config.databases.clickhouse.is_none() {
+        if let Some(csv_details) = &config.csv_details {
+            match update_last_synced_block_number_for_file(
+                &config.contract_name,
+                &config.network,
+                &config.event_name,
+                &get_full_path(&config.project_path, &csv_details.path).unwrap_or_else(|_| {
+                    panic!("failed to get full path {}", config.project_path.display())
+                }),
+                to_block,
+            )
+            .await
+            {
+                Ok(()) => file_checkpoint_ok = true,
+                Err(e) => error!(
+                    "Error updating last synced block to CSV - path - {} error - {:?}",
+                    csv_details.path, e
+                ),
+            }
+        } else if let Some(stream_last_synced_block_file_path) =
+            &config.stream_last_synced_block_file_path
         {
-            error!(
-                "Error updating last synced block to CSV - path - {} error - {:?}",
-                csv_details.path, e
-            );
+            match update_last_synced_block_number_for_file(
+                &config.contract_name,
+                &config.network,
+                &config.event_name,
+                &config
+                    .project_path
+                    .join(stream_last_synced_block_file_path)
+                    .canonicalize()
+                    .expect("Failed to canonicalize path"),
+                to_block,
+            )
+            .await
+            {
+                Ok(()) => file_checkpoint_ok = true,
+                Err(e) => error!(
+                    "Error updating last synced block to stream - path - {} error - {:?}",
+                    stream_last_synced_block_file_path, e
+                ),
+            }
         }
-    } else if let Some(stream_last_synced_block_file_path) =
-        &config.stream_last_synced_block_file_path
-    {
-        if let Err(e) = update_last_synced_block_number_for_file(
-            &config.contract_name,
-            &config.network,
-            &config.event_name,
-            &config
-                .project_path
-                .join(stream_last_synced_block_file_path)
-                .canonicalize()
-                .expect("Failed to canonicalize path"),
-            to_block,
+    }
+
+    let any_persistent_write_ok = pg_checkpoint_ok || ch_checkpoint_ok || file_checkpoint_ok;
+    if any_persistent_write_ok {
+        let update_last_synced_block_result = tokio::time::timeout(
+            Duration::from_millis(100),
+            config.progress.update_last_synced_block(config.chain_id, &config.id, to_block),
         )
-        .await
-        {
-            error!(
-                "Error updating last synced block to stream - path - {} error - {:?}",
-                stream_last_synced_block_file_path, e
-            );
+        .await;
+
+        match update_last_synced_block_result {
+            Ok(Err(e)) => error!("Error updating in-mem last synced trace result: {:?}", e),
+            Err(_) => debug!("Timeout in update_last_synced_block_result, completing early"),
+            _ => {}
         }
+    } else if config.databases.postgres.is_some() || config.databases.clickhouse.is_some() {
+        warn!(
+            network = %config.network,
+            event = %config.event_name,
+            to_block = to_block.to::<u64>(),
+            "No backend accepted the trace checkpoint write; in-memory progress not advanced",
+        );
     }
 
     on_complete();
@@ -472,8 +566,7 @@ pub async fn evm_trace_update_progress_and_last_synced_task(
 
 /// Configuration for cron sync state operations.
 pub struct CronSyncConfig<'a> {
-    pub postgres: &'a Option<Arc<PostgresClient>>,
-    pub clickhouse: &'a Option<Arc<ClickhouseClient>>,
+    pub databases: &'a DatabaseBackends,
     pub indexer_name: &'a str,
     pub contract_name: &'a str,
     pub table_name: &'a str,
@@ -485,8 +578,11 @@ pub struct CronSyncConfig<'a> {
 ///
 /// Returns `None` if the block is 0 (never synced) or on error.
 pub async fn get_last_synced_cron_block(config: CronSyncConfig<'_>) -> Option<U64> {
+    let mut pg_block: Option<U64> = None;
+    let mut ch_block: Option<U64> = None;
+
     // Query PostgreSQL for last synced block
-    if let Some(postgres) = config.postgres {
+    if let Some(postgres) = &config.databases.postgres {
         let schema =
             generate_indexer_contract_schema_name(config.indexer_name, config.contract_name);
         let table_name =
@@ -495,26 +591,23 @@ pub async fn get_last_synced_cron_block(config: CronSyncConfig<'_>) -> Option<U6
             "SELECT last_synced_block FROM rindexer_internal.{table_name} WHERE network = $1"
         );
 
-        return match postgres.query_one(&query, &[&config.network]).await {
+        match postgres.query_one(&query, &[&config.network]).await {
             Ok(row) => {
                 let result: Decimal = row.get("last_synced_block");
                 let parsed =
                     U64::from_str(&result.to_string()).expect("Failed to parse last_synced_block");
-                if parsed.is_zero() {
-                    None
-                } else {
-                    Some(parsed)
+                if !parsed.is_zero() {
+                    pg_block = Some(parsed);
                 }
             }
             Err(e) => {
                 error!("Error fetching cron last synced block: {:?}", e);
-                None
             }
         };
     }
 
     // Query ClickHouse for last synced block
-    if let Some(clickhouse) = config.clickhouse {
+    if let Some(clickhouse) = &config.databases.clickhouse {
         #[derive(Row, Deserialize)]
         struct LastBlock {
             last_synced_block: u64,
@@ -532,32 +625,31 @@ pub async fn get_last_synced_cron_block(config: CronSyncConfig<'_>) -> Option<U6
             config.network
         );
 
-        let row = clickhouse.query_one::<LastBlock>(&query).await;
-
-        return match row {
+        match clickhouse.query_one::<LastBlock>(&query).await {
             Ok(row) => {
                 let result = row.last_synced_block;
-                if result == 0 {
-                    None
-                } else {
-                    Some(U64::from(result))
+                if result != 0 {
+                    ch_block = Some(U64::from(result));
                 }
             }
             Err(e) => {
                 error!("Error fetching cron last synced block from clickhouse: {:?}", e);
-                None
             }
         };
     }
 
-    None
+    // Reconcile: resume from min(pg, ch) so the lagging backend catches up.
+    match (pg_block, ch_block) {
+        (Some(pg), Some(ch)) => Some(std::cmp::min(pg, ch)),
+        (Some(pg), None) => Some(pg),
+        (None, Some(ch)) => Some(ch),
+        (None, None) => None,
+    }
 }
 
 /// Update the last synced block for a cron entry in the database.
-#[allow(clippy::too_many_arguments)]
 pub async fn update_last_synced_cron_block(
-    postgres: &Option<Arc<PostgresClient>>,
-    clickhouse: &Option<Arc<ClickhouseClient>>,
+    databases: &DatabaseBackends,
     indexer_name: &str,
     contract_name: &str,
     table_name: &str,
@@ -570,7 +662,7 @@ pub async fn update_last_synced_cron_block(
         indexer_name, contract_name, table_name, cron_index, network, to_block
     );
 
-    if let Some(postgres) = postgres {
+    if let Some(postgres) = &databases.postgres {
         let schema = generate_indexer_contract_schema_name(indexer_name, contract_name);
         let internal_table_name =
             generate_internal_cron_table_name(&schema, table_name, cron_index);
@@ -590,7 +682,7 @@ pub async fn update_last_synced_cron_block(
         debug!("update_last_synced_cron_block: postgres is None");
     }
 
-    if let Some(clickhouse) = clickhouse {
+    if let Some(clickhouse) = &databases.clickhouse {
         let schema = generate_indexer_contract_schema_name(indexer_name, contract_name);
         let internal_table_name =
             generate_internal_cron_table_name_no_shorten(&schema, table_name, cron_index);

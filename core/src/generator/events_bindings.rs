@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+use super::database_bindings::database_tokens;
 use super::{GENERATED_ALLOW_ATTRS, GENERATED_FILE_HEADER};
 use crate::abi::AbiProperty;
 use crate::helpers::{is_irregular_width_solidity_integer_type, is_solidity_static_bytes_type};
@@ -343,13 +344,6 @@ fn generate_event_callback_structs_code(
             lower_name = info.name.to_lowercase(),
             struct_result = info.struct_result(),
             struct_data = info.struct_data(),
-            database = if storage.postgres_enabled() {
-                "database: get_or_init_postgres_client().await,"
-            } else if storage.clickhouse_enabled() {
-                "database: get_or_init_clickhouse_client().await,"
-            } else {
-                ""
-            },
             csv = if csv_enabled { r#"csv: Arc::new(csv),"# } else { "" },
             csv_generator = csv_generator,
             event_callback_events_len =
@@ -368,7 +362,8 @@ fn generate_event_callback_structs_code(
                 )
             } else {
                 "(self.callback)(&result, Arc::clone(&self.context)).await".to_string()
-            }
+            },
+            database = database_tokens(storage).context_initializer,
         );
 
         parts.push(part);
@@ -591,32 +586,14 @@ impl<TExtensions> {event_type_name}<TExtensions> where TExtensions: 'static + Se
     }}
 }}
 "#,
-        postgres_import = if storage.postgres_enabled() {
-            "use super::super::super::super::typings::database::get_or_init_postgres_client;"
-        } else if storage.clickhouse_enabled() {
-            "use super::super::super::super::typings::database::get_or_init_clickhouse_client;"
-        } else {
-            ""
-        },
-        postgres_client_import = if storage.postgres_enabled() {
-            "PostgresClient,"
-        } else if storage.clickhouse_enabled() {
-            "ClickhouseClient,"
-        } else {
-            ""
-        },
+        postgres_import = database_tokens(storage).typings_imports,
+        postgres_client_import = database_tokens(storage).rindexer_import,
         csv_import = if storage.csv_enabled() { "AsyncCsvAppender," } else { "" },
         abigen_file_name = abigen_contract_file_name(contract),
         abigen_name = abigen_contract_name(contract),
         structs = generate_structs(project_path, contract)?,
         event_type_name = &event_type_name,
-        event_context_database = if storage.postgres_enabled() {
-            "pub database: Arc<PostgresClient>,"
-        } else if storage.clickhouse_enabled() {
-            "pub database: Arc<ClickhouseClient>,"
-        } else {
-            ""
-        },
+        event_context_database = database_tokens(storage).context_field,
         event_context_csv =
             if storage.csv_enabled() { "pub csv: Arc<AsyncCsvAppender>," } else { "" },
         event_callback_structs =

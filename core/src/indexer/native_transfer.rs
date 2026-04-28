@@ -15,6 +15,7 @@ use tracing::{debug, error, info, warn};
 use tokio_util::sync::CancellationToken;
 
 use crate::database::clickhouse::client::ClickhouseClient;
+use crate::database::DatabaseBackends;
 use crate::indexer::reorg::{detect_and_handle_reorg, ReorgContext, ReorgCoordinator};
 use crate::is_running;
 use crate::provider::RECOMMENDED_RPC_CHUNK_SIZE;
@@ -233,10 +234,9 @@ pub async fn native_transfer_block_fetch(
     indexing_distance_from_head: U64,
     network: String,
     cancel_token: CancellationToken,
-    postgres: Option<Arc<PostgresClient>>,
+    databases: DatabaseBackends,
     _indexer_name: String,
     reorg_coordinator: Option<Arc<Mutex<ReorgCoordinator>>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
     trace_registry: Arc<TraceCallbackRegistry>,
 ) -> Result<(), ProcessEventError> {
     let mut last_seen_block = start_block;
@@ -267,8 +267,8 @@ pub async fn native_transfer_block_fetch(
                     let tip_parent = latest_block.header.parent_hash;
                     let mut guard = coordinator.lock().await;
                     let ctx = ReorgContext {
-                        postgres: postgres.as_deref(),
-                        clickhouse: clickhouse.as_ref(),
+                        postgres: databases.postgres.as_deref(),
+                        clickhouse: databases.clickhouse.as_ref(),
                         registry: None,
                         trace_registry: Some(trace_registry.as_ref()),
                     };
@@ -321,8 +321,8 @@ pub async fn native_transfer_block_fetch(
                     let outcome = native_transfer_detect_reorg_in_range(
                         publisher.as_ref(),
                         reorg_coordinator.as_ref(),
-                        postgres.as_deref(),
-                        clickhouse.as_ref(),
+                        databases.postgres.as_deref(),
+                        databases.clickhouse.as_ref(),
                         Some(trace_registry.as_ref()),
                         &network,
                         from_block.to::<u64>(),
@@ -736,7 +736,7 @@ mod tests {
             event_name: EVENT_NAME.to_string(),
             network: "ethereum".to_string(),
             progress,
-            postgres: None,
+            databases: DatabaseBackends::default(),
             csv_details: None,
             registry: Arc::new(TraceCallbackRegistry::new()),
             method: TraceProcessingMethod::TraceBlock,
@@ -785,7 +785,7 @@ mod tests {
             event_name: EVENT_NAME.to_string(),
             network: "ethereum".to_string(),
             progress,
-            postgres: None,
+            databases: DatabaseBackends::default(),
             csv_details: None,
             registry: Arc::new(TraceCallbackRegistry::new()),
             method: TraceProcessingMethod::DebugTraceBlockByNumber,
@@ -817,7 +817,7 @@ mod tests {
             event_name: EVENT_NAME.to_string(),
             network: "ethereum".to_string(),
             progress,
-            postgres: None,
+            databases: DatabaseBackends::default(),
             csv_details: None,
             registry: Arc::new(TraceCallbackRegistry::new()),
             method: TraceProcessingMethod::TraceBlock,

@@ -1,7 +1,6 @@
 use std::path::Path;
 
-use serde::de::Error;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::{
@@ -116,7 +115,47 @@ pub struct CsvDetails {
     pub disable_create_headers: Option<bool>,
 }
 
-#[derive(Debug, Serialize, Default, Clone)]
+/// Write policy for multi-backend writes.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum WritePolicy {
+    /// All backends must succeed. Error if any fail. (Default — Phase 1 behavior.)
+    #[default]
+    All,
+    /// Succeed if at least one backend writes. Log failures on others.
+    Any,
+    /// PG is primary (error on PG failure), CH is shadow (log-only on CH failure).
+    PrimaryWithShadow,
+}
+
+/// Circuit breaker configuration for multi-backend writes.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CircuitBreakerConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_failure_threshold")]
+    pub failure_threshold: u32,
+    #[serde(default = "default_cooldown_seconds")]
+    pub cooldown_seconds: u64,
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_failure_threshold() -> u32 {
+    5
+}
+fn default_cooldown_seconds() -> u64 {
+    60
+}
+
+impl Default for CircuitBreakerConfig {
+    fn default() -> Self {
+        Self { enabled: true, failure_threshold: 5, cooldown_seconds: 60 }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct Storage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub postgres: Option<PostgresDetails>,
@@ -126,33 +165,15 @@ pub struct Storage {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub csv: Option<CsvDetails>,
-}
 
-impl<'de> Deserialize<'de> for Storage {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct StorageRaw {
-            #[serde(default)]
-            postgres: Option<PostgresDetails>,
-            #[serde(default)]
-            clickhouse: Option<ClickhouseDetails>,
-            #[serde(default)]
-            csv: Option<CsvDetails>,
-        }
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub write_policy: Option<WritePolicy>,
 
-        let raw = StorageRaw::deserialize(deserializer)?;
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub circuit_breaker: Option<CircuitBreakerConfig>,
 
-        if raw.postgres.is_some() && raw.clickhouse.is_some() {
-            return Err(Error::custom(
-                "cannot specify both `postgres` and `clickhouse` at the same time",
-            ));
-        }
-
-        Ok(Storage { postgres: raw.postgres, clickhouse: raw.clickhouse, csv: raw.csv })
-    }
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_batch_size: Option<usize>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -298,5 +319,102 @@ impl Storage {
         }
 
         Ok((vec![], vec![]))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_policy_serde_uses_snake_case() {
+        // Round-trip every variant through YAML so no future variant rename
+        // silently breaks consumer manifests.
+        for (policy, expected) in [
+            (WritePolicy::All, "all"),
+            (WritePolicy::Any, "any"),
+            (WritePolicy::PrimaryWithShadow, "primary_with_shadow"),
+        ] {
+            let yaml = serde_yaml::to_string(&policy).unwrap();
+            assert_eq!(yaml.trim(), expected);
+            let parsed: WritePolicy = serde_yaml::from_str(expected).unwrap();
+            assert_eq!(parsed, policy);
+        }
+    }
+
+    #[test]
+    fn write_policy_default_is_all() {
+        assert_eq!(WritePolicy::default(), WritePolicy::All);
+    }
+
+    #[test]
+    fn circuit_breaker_config_default_matches_spec() {
+        let cfg = CircuitBreakerConfig::default();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.failure_threshold, 5);
+        assert_eq!(cfg.cooldown_seconds, 60);
+    }
+
+    #[test]
+    fn circuit_breaker_config_uses_field_defaults_when_omitted() {
+        // YAML manifest writers commonly leave individual knobs off — make sure
+        // each defaults independently.
+        let cfg: CircuitBreakerConfig = serde_yaml::from_str("{}").unwrap();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.failure_threshold, 5);
+        assert_eq!(cfg.cooldown_seconds, 60);
+
+        let cfg: CircuitBreakerConfig = serde_yaml::from_str("failure_threshold: 10").unwrap();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.failure_threshold, 10);
+        assert_eq!(cfg.cooldown_seconds, 60);
+    }
+
+    #[test]
+    fn storage_accepts_postgres_and_clickhouse_simultaneously() {
+        // Multi-backend writes are the whole point of this PR — the previous
+        // "either/or" deserialize guard has been removed.
+        let yaml = "
+postgres:
+  enabled: true
+clickhouse:
+  enabled: true
+";
+        let storage: Storage = serde_yaml::from_str(yaml).unwrap();
+        assert!(storage.postgres_enabled());
+        assert!(storage.clickhouse_enabled());
+    }
+
+    #[test]
+    fn storage_carries_new_multi_backend_knobs() {
+        let yaml = "
+postgres:
+  enabled: true
+clickhouse:
+  enabled: true
+write_policy: primary_with_shadow
+circuit_breaker:
+  enabled: true
+  failure_threshold: 3
+  cooldown_seconds: 30
+max_batch_size: 1000
+";
+        let storage: Storage = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(storage.write_policy, Some(WritePolicy::PrimaryWithShadow));
+        let cb = storage.circuit_breaker.unwrap();
+        assert_eq!(cb.failure_threshold, 3);
+        assert_eq!(cb.cooldown_seconds, 30);
+        assert_eq!(storage.max_batch_size, Some(1000));
+    }
+
+    #[test]
+    fn storage_omits_optional_fields_in_serialization() {
+        // skip_serializing_if = "Option::is_none" must keep manifests from
+        // gaining a tower of unused nulls when the user didn't set them.
+        let storage = Storage::default();
+        let yaml = serde_yaml::to_string(&storage).unwrap();
+        assert!(!yaml.contains("write_policy"));
+        assert!(!yaml.contains("circuit_breaker"));
+        assert!(!yaml.contains("max_batch_size"));
     }
 }

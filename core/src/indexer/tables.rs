@@ -164,7 +164,9 @@ use crate::database::generate::generate_indexer_contract_schema_name;
 use crate::database::generate::generate_table_full_name;
 use crate::database::postgres::batch_operations::execute_dynamic_batch_operation;
 use crate::database::postgres::client::PostgresClient;
-use crate::database::postgres::generate::generate_internal_event_table_name;
+use crate::database::postgres::generate::{
+    generate_internal_event_table_name, generate_internal_event_table_name_no_shorten,
+};
 use crate::database::sql_type_wrapper::EthereumSqlTypeWrapper;
 use crate::event::{
     evaluate_arithmetic, filter_by_expression, parse_filter_expression, ComputedValue,
@@ -185,6 +187,7 @@ pub struct ProgressCheckpointConfig {
     pub contract_name: String,
     pub event_name: String,
     pub postgres: Option<Arc<PostgresClient>>,
+    pub clickhouse: Option<Arc<ClickhouseClient>>,
 }
 
 impl ProgressCheckpointConfig {
@@ -193,8 +196,9 @@ impl ProgressCheckpointConfig {
         contract_name: String,
         event_name: String,
         postgres: Option<Arc<PostgresClient>>,
+        clickhouse: Option<Arc<ClickhouseClient>>,
     ) -> Self {
-        Self { indexer_name, contract_name, event_name, postgres }
+        Self { indexer_name, contract_name, event_name, postgres, clickhouse }
     }
 
     /// Save the last synced block for a specific network.
@@ -211,6 +215,23 @@ impl ProgressCheckpointConfig {
                 warn!("Failed to checkpoint progress at block {}: {:?}", block_number, e);
             } else {
                 info!("Checkpointed {}::{} at block {}", self.event_name, network, block_number);
+            }
+        }
+
+        if let Some(clickhouse) = &self.clickhouse {
+            let schema =
+                generate_indexer_contract_schema_name(&self.indexer_name, &self.contract_name);
+            let table_name =
+                generate_internal_event_table_name_no_shorten(&schema, &self.event_name);
+            let query = format!(
+                "INSERT INTO rindexer_internal.{table_name} (network, last_synced_block) VALUES ('{network}', {block_number})"
+            );
+            if let Err(e) = clickhouse.execute(&query).await {
+                tracing::error!(
+                    "Error updating clickhouse checkpoint for table {}: {:?}",
+                    self.event_name,
+                    e
+                );
             }
         }
     }
@@ -1440,7 +1461,7 @@ impl TableRuntime {
 }
 
 /// Data for a single table row to be processed.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TableRowData {
     /// Column values keyed by column name
     pub columns: HashMap<String, EthereumSqlTypeWrapper>,

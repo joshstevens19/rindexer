@@ -7,6 +7,7 @@ use tokio::sync::broadcast::Sender;
 use tokio_util::sync::CancellationToken;
 
 use crate::database::clickhouse::client::ClickhouseClient;
+use crate::database::DatabaseBackends;
 use crate::event::contract_setup::{AddressDetails, IndexingContractSetup};
 use crate::event::factory_event_filter_sync::update_known_factory_deployed_addresses;
 use crate::event::rindexer_event_filter::FactoryFilter;
@@ -45,8 +46,7 @@ pub struct ContractEventProcessingConfig {
     pub end_block: U64,
     pub registry: Arc<EventCallbackRegistry>,
     pub progress: Arc<IndexingEventsProgressState>,
-    pub postgres: Option<Arc<PostgresClient>>,
-    pub clickhouse: Option<Arc<ClickhouseClient>>,
+    pub databases: DatabaseBackends,
     pub csv_details: Option<CsvDetails>,
     pub stream_last_synced_block_file_path: Option<String>,
     pub index_event_in_order: bool,
@@ -96,7 +96,7 @@ impl ContractEventProcessingConfig {
                     indexed_filters.iter().find(|&n| n.event_name == self.event_name)
                 });
 
-                Ok(RindexerEventFilter::Factory(FactoryFilter {
+                Ok(RindexerEventFilter::Factory(Box::new(FactoryFilter {
                     project_path: self.project_path.clone(),
                     indexer_name: self.indexer_name.clone(),
                     factory_contract_name: details.contract_name.clone(),
@@ -106,13 +106,12 @@ impl ContractEventProcessingConfig {
                     network: self.network_contract.network.clone(),
                     topic_id: self.topic_id,
                     topics: index_filter.cloned().map(Into::into).unwrap_or_default(),
-                    clickhouse: self.clickhouse.clone(),
-                    postgres: self.postgres.clone(),
+                    databases: self.databases.clone(),
                     csv_details: self.csv_details.clone(),
 
                     current_block: self.start_block,
                     next_block: self.end_block,
-                }))
+                })))
             }
         }
     }
@@ -137,8 +136,7 @@ pub struct FactoryEventProcessingConfig {
     pub end_block: U64,
     pub registry: Arc<EventCallbackRegistry>,
     pub progress: Arc<IndexingEventsProgressState>,
-    pub postgres: Option<Arc<PostgresClient>>,
-    pub clickhouse: Option<Arc<ClickhouseClient>>,
+    pub databases: DatabaseBackends,
     pub csv_details: Option<CsvDetails>,
     pub stream_last_synced_block_file_path: Option<String>,
     pub index_event_in_order: bool,
@@ -338,15 +336,22 @@ impl EventProcessingConfig {
 
     pub fn postgres(&self) -> Option<Arc<PostgresClient>> {
         match self {
-            Self::ContractEventProcessing(config) => config.postgres.clone(),
-            Self::FactoryEventProcessing(config) => config.postgres.clone(),
+            Self::ContractEventProcessing(config) => config.databases.postgres.clone(),
+            Self::FactoryEventProcessing(config) => config.databases.postgres.clone(),
         }
     }
 
     pub fn clickhouse(&self) -> Option<Arc<ClickhouseClient>> {
         match self {
-            Self::ContractEventProcessing(config) => config.clickhouse.clone(),
-            Self::FactoryEventProcessing(config) => config.clickhouse.clone(),
+            Self::ContractEventProcessing(config) => config.databases.clickhouse.clone(),
+            Self::FactoryEventProcessing(config) => config.databases.clickhouse.clone(),
+        }
+    }
+
+    pub fn databases(&self) -> &DatabaseBackends {
+        match self {
+            Self::ContractEventProcessing(config) => &config.databases,
+            Self::FactoryEventProcessing(config) => &config.databases,
         }
     }
 
@@ -458,7 +463,7 @@ pub struct TraceProcessingConfig {
     pub event_name: String,
     pub network: String,
     pub progress: Arc<IndexingEventsProgressState>,
-    pub postgres: Option<Arc<PostgresClient>>,
+    pub databases: DatabaseBackends,
     pub csv_details: Option<CsvDetails>,
     pub registry: Arc<TraceCallbackRegistry>,
     pub method: TraceProcessingMethod,

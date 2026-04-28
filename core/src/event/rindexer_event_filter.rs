@@ -1,9 +1,9 @@
+use crate::database::DatabaseBackends;
 use crate::event::contract_setup::{AddressDetails, FilterDetails};
 use crate::event::factory_event_filter_sync::{
     get_known_factory_deployed_addresses, GetKnownFactoryDeployedAddressesParams,
 };
 use crate::manifest::storage::CsvDetails;
-use crate::{ClickhouseClient, PostgresClient};
 use alloy::rpc::types::Topic;
 use alloy::{
     primitives::{Address, B256, U64},
@@ -11,7 +11,6 @@ use alloy::{
 };
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 #[derive(thiserror::Error, Debug)]
 pub enum BuildRindexerFilterError {
@@ -62,8 +61,7 @@ pub struct FactoryFilter {
     pub topic_id: B256,
     pub topics: [Topic; 4],
 
-    pub clickhouse: Option<Arc<ClickhouseClient>>,
-    pub postgres: Option<Arc<PostgresClient>>,
+    pub databases: DatabaseBackends,
     pub csv_details: Option<CsvDetails>,
 
     pub current_block: U64,
@@ -113,8 +111,8 @@ impl FactoryFilter {
             event_name: self.factory_event_name.clone(),
             input_names,
             network: self.network.clone(),
-            clickhouse: self.clickhouse.clone(),
-            postgres: self.postgres.clone(),
+            postgres: self.databases.postgres.clone(),
+            clickhouse: self.databases.clickhouse.clone(),
             csv_details: self.csv_details.clone(),
         })
         .await
@@ -127,7 +125,7 @@ impl FactoryFilter {
 pub enum RindexerEventFilter {
     Address(SimpleEventFilter),
     Filter(SimpleEventFilter),
-    Factory(FactoryFilter),
+    Factory(Box<FactoryFilter>),
 }
 
 impl RindexerEventFilter {
@@ -226,7 +224,7 @@ impl RindexerEventFilter {
         match self {
             Self::Address(filter) => Self::Address(filter.set_from_block(block)),
             Self::Filter(filter) => Self::Filter(filter.set_from_block(block)),
-            Self::Factory(filter) => Self::Factory(filter.set_from_block(block)),
+            Self::Factory(filter) => Self::Factory(Box::new(filter.set_from_block(block))),
         }
     }
     pub fn set_to_block<R: Into<U64>>(self, block: R) -> Self {
@@ -238,7 +236,7 @@ impl RindexerEventFilter {
                 RindexerEventFilter::Filter(filter.set_to_block(block.into()))
             }
             RindexerEventFilter::Factory(filter) => {
-                RindexerEventFilter::Factory(filter.set_to_block(block.into()))
+                RindexerEventFilter::Factory(Box::new(filter.set_to_block(block.into())))
             }
         }
     }

@@ -42,6 +42,9 @@ pub enum UpdateKnownFactoryDeployedAddressesError {
 
     #[error("Could not parse logs")]
     LogsParse,
+
+    #[error("No storage backend configured (postgres/clickhouse/csv); cannot persist factory-deployed addresses")]
+    NoStorageConfigured,
 }
 
 #[derive(PartialEq, Eq, Hash)]
@@ -142,7 +145,10 @@ pub async fn update_known_factory_deployed_addresses(
     };
     invalidate_known_factory_deployed_addresses_cache(&key);
 
-    if let Some(postgres) = &config.postgres {
+    // Write to ALL configured database backends (independent blocks, not early-return).
+    let mut wrote_to_db = false;
+
+    if let Some(postgres) = &config.databases.postgres {
         let params = GenerateInternalFactoryEventTableNameParams {
             indexer_name: config.indexer_name.clone(),
             contract_name: config.contract_name.clone(),
@@ -174,10 +180,10 @@ pub async fn update_known_factory_deployed_addresses(
             .await
             .map_err(UpdateKnownFactoryDeployedAddressesError::PostgresWrite)?;
 
-        return Ok(());
+        wrote_to_db = true;
     }
 
-    if let Some(clickhouse) = &config.clickhouse {
+    if let Some(clickhouse) = &config.databases.clickhouse {
         let params = GenerateInternalFactoryEventTableNameParams {
             indexer_name: config.indexer_name.clone(),
             contract_name: config.contract_name.clone(),
@@ -208,10 +214,14 @@ pub async fn update_known_factory_deployed_addresses(
             )
             .await?;
 
-        return Ok(());
+        wrote_to_db = true;
     }
 
-    if let Some(csv_details) = &config.csv_details {
+    // CSV fallback only when no database is configured
+    if !wrote_to_db {
+        let Some(csv_details) = &config.csv_details else {
+            return Err(UpdateKnownFactoryDeployedAddressesError::NoStorageConfigured);
+        };
         let full_path = get_full_path(&config.project_path, &csv_details.path)?;
 
         let csv_path = build_known_factory_address_file(
@@ -240,11 +250,9 @@ pub async fn update_known_factory_deployed_addresses(
                     .collect::<Vec<_>>(),
             )
             .await?;
-
-        return Ok(());
     }
 
-    unreachable!("Can't update known factory deployed addresses without database or csv details")
+    Ok(())
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -275,6 +283,9 @@ pub struct GetKnownFactoryDeployedAddressesParams {
     pub csv_details: Option<CsvDetails>,
 }
 
+/// Read factory-deployed addresses from the first available backend (PG > CH > CSV).
+/// With dual-write, PG is authoritative for reads — both backends receive writes
+/// via `update_known_factory_deployed_addresses`, so PG is always up-to-date.
 pub async fn get_known_factory_deployed_addresses(
     params: &GetKnownFactoryDeployedAddressesParams,
 ) -> Result<Option<HashSet<Address>>, GetKnownFactoryDeployedAddressesError> {
