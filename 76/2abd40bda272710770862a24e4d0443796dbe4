@@ -1,0 +1,23 @@
+core/tests/e2e_reorg_streams.rs
+  97956245be63b630 26-28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "762abd40bda272710770862a24e4d0443796dbe4",
+  "prompts": {
+    "97956245be63b630": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e2cf9886-09bd-4f1e-a4fc-ce8f35098dc7",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 3,
+      "total_deletions": 6,
+      "accepted_lines": 3,
+      "overriden_lines": 0
+    }
+  }
+}
