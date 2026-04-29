@@ -82,3 +82,50 @@ impl Redis {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+    use crate::manifest::stream::{RedisStreamConfig, RedisStreamStreamConfig};
+
+    fn cfg(uri: &str) -> RedisStreamConfig {
+        RedisStreamConfig {
+            connection_uri: uri.to_string(),
+            max_pool_size: 1,
+            streams: vec![RedisStreamStreamConfig {
+                stream_name: "rindexer_unit".to_string(),
+                networks: vec!["ethereum".to_string()],
+                events: vec![],
+                delivery: None,
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn new_returns_error_on_malformed_uri() {
+        // `RedisConnectionManager::new` parses the URI eagerly via
+        // `IntoConnectionInfo`, so a non-redis scheme must fail synchronously
+        // before any pool/PING work runs.
+        let err = Redis::new(&cfg("not-a-valid-uri")).await.expect_err("expected URI parse error");
+        assert!(matches!(err, RedisError::RedisCmdError(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn new_does_not_succeed_against_unreachable_server() {
+        // Port 1 is reserved (tcpmux); no redis can bind there. We bound the
+        // wait with `tokio::time::timeout` rather than letting bb8's default
+        // 30s `connection_timeout` dominate the test runtime — either an
+        // outright `Err` from `Redis::new` or a tokio-level elapsed timeout
+        // is acceptable; the only forbidden outcome is `Ok`.
+        let result =
+            tokio::time::timeout(Duration::from_secs(3), Redis::new(&cfg("redis://127.0.0.1:1")))
+                .await;
+        match result {
+            Err(_elapsed) => {} // bb8 still trying — fine, proves no fast Ok.
+            Ok(Err(_)) => {}    // Redis::new bubbled an error — also fine.
+            Ok(Ok(_)) => panic!("Redis::new must not succeed against an unreachable server"),
+        }
+    }
+}
