@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.dependencies]
-alloy = { version = "2.0.1", features = ["full"] }
+alloy = { version = "2", features = ["full"] }
 alloy-chains = "0.2"
 anyhow = "1"
 clap = { version = "4.5.50", features = ["derive"] }
