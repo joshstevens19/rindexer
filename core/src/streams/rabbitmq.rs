@@ -29,10 +29,21 @@ impl From<RunError<lapin::ErrorKind>> for RabbitMQError {
     }
 }
 
+// TODO: drop the direct `async-rs` dep once bb8-lapin/lapin re-export
+// `DefaultRuntimeKit` publicly. We only depend on async-rs to name
+// `async_rs::Tokio` here; `lapin::runtime::DefaultRuntimeKit` is `pub(crate)`.
 #[derive(Debug, Clone)]
 pub struct RabbitMQ {
     pool: Pool<LapinConnectionManager<async_rs::Tokio>>,
 }
+
+// Compile-time guarantee that `RabbitMQ` stays Send + Sync. A future bb8-lapin
+// trait-bound regression on the pool generic would surface here at build time
+// instead of at the first concurrent publish in production.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<RabbitMQ>();
+};
 
 impl RabbitMQ {
     pub async fn new(uri: &str) -> Result<Self, RabbitMQError> {

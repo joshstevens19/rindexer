@@ -1712,6 +1712,11 @@ mod cron_parsing_tests {
     //! 7-field patterns with an optional year — patterns that errored under
     //! v2. We assert the new behavior explicitly so any future revert is
     //! caught.
+    //!
+    //! TODO: extend coverage if/when documentation/.../tables/index.mdx
+    //! starts advertising additional shorthands (e.g. `@hourly`, `@daily`,
+    //! 6-field with seconds, the new v3 7-field-with-year shape). Today the
+    //! docs only show the two 5-field examples covered here.
     use chrono::{DateTime, TimeZone, Utc};
 
     fn parse(expr: &str) -> Result<croner::Cron, croner::errors::CronError> {

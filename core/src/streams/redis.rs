@@ -119,6 +119,11 @@ mod tests {
         // 30s `connection_timeout` dominate the test runtime — either an
         // outright `Err` from `Redis::new` or a tokio-level elapsed timeout
         // is acceptable; the only forbidden outcome is `Ok`.
+        //
+        // TODO: tighten this — the `Err(Elapsed)` arm currently passes even
+        // if a future bb8 change made the connect succeed instantly against
+        // an unreachable port. A first-pass strengthening: assert no `Ok`
+        // returned within ~50ms before applying the 3s outer bound.
         let result =
             tokio::time::timeout(Duration::from_secs(3), Redis::new(&cfg("redis://127.0.0.1:1")))
                 .await;
