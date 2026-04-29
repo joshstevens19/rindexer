@@ -1,0 +1,25 @@
+core/Cargo.toml
+  97956245be63b630 32,49
+core/src/streams/redis.rs
+  97956245be63b630 85-131
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "ffc9381b6357d531a738fcf7ede6d136f09640e7",
+  "prompts": {
+    "97956245be63b630": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e2cf9886-09bd-4f1e-a4fc-ce8f35098dc7",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 59,
+      "total_deletions": 12,
+      "accepted_lines": 49,
+      "overriden_lines": 0
+    }
+  }
+}
