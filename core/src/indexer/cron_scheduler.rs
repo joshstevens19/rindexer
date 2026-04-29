@@ -1741,18 +1741,18 @@ mod cron_parsing_tests {
     #[test]
     fn five_field_basic_patterns_parse() {
         for expr in [
-            "* * * * *",       // every minute
-            "0 0 * * *",       // midnight daily
-            "30 2 * * *",      // 02:30 daily
-            "0 12 1 * *",      // noon on day 1 of every month
-            "0 9 * * 1-5",     // 09:00 on weekdays (numeric range)
-            "0 9 * * MON-FRI", // 09:00 on weekdays (named range)
-            "*/15 * * * *",    // every 15 minutes (step)
+            "* * * * *",          // every minute
+            "0 0 * * *",          // midnight daily
+            "30 2 * * *",         // 02:30 daily
+            "0 12 1 * *",         // noon on day 1 of every month
+            "0 9 * * 1-5",        // 09:00 on weekdays (numeric range)
+            "0 9 * * MON-FRI",    // 09:00 on weekdays (named range)
+            "*/15 * * * *",       // every 15 minutes (step)
             "0,15,30,45 * * * *", // every quarter hour (list)
-            "0 0 1,15 * *",    // 1st & 15th at midnight (DOM list)
-            "0 0 * 1,7 *",     // Jan & Jul at midnight (month list)
-            "0 0 * 1-3 *",     // Jan-Mar at midnight (month range)
-            "59 23 31 12 *",   // last minute of the year
+            "0 0 1,15 * *",       // 1st & 15th at midnight (DOM list)
+            "0 0 * 1,7 *",        // Jan & Jul at midnight (month list)
+            "0 0 * 1-3 *",        // Jan-Mar at midnight (month range)
+            "59 23 31 12 *",      // last minute of the year
         ] {
             assert!(parse(expr).is_ok(), "expected `{expr}` to parse");
         }
@@ -1761,15 +1761,15 @@ mod cron_parsing_tests {
     #[test]
     fn invalid_patterns_reject() {
         for expr in [
-            "",                // empty
-            "not a cron",      // garbage
-            "60 * * * *",      // minute out of range (0-59)
-            "* 24 * * *",      // hour out of range (0-23)
-            "* * 32 * *",      // DOM out of range (1-31)
-            "* * * 13 *",      // month out of range (1-12)
-            "* * * * 8",       // DOW out of range (0-7 / 0-6 with both Sun)
-            "* * *",           // too few fields
-            "*/0 * * * *",     // zero step is nonsense
+            "",            // empty
+            "not a cron",  // garbage
+            "60 * * * *",  // minute out of range (0-59)
+            "* 24 * * *",  // hour out of range (0-23)
+            "* * 32 * *",  // DOM out of range (1-31)
+            "* * * 13 *",  // month out of range (1-12)
+            "* * * * 8",   // DOW out of range (0-7 / 0-6 with both Sun)
+            "* * *",       // too few fields
+            "*/0 * * * *", // zero step is nonsense
         ] {
             assert!(parse(expr).is_err(), "expected `{expr}` to fail to parse");
         }
