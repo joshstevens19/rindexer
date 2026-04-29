@@ -1,0 +1,29 @@
+core/src/indexer/cron_scheduler.rs
+  97956245be63b630 1715-1719
+core/src/streams/redis.rs
+  97956245be63b630 122-126
+core/src/streams/clients.rs
+  97956245be63b630 170-174
+core/src/streams/rabbitmq.rs
+  97956245be63b630 32-34,40-46
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "a6ab70dbdb6ecb60249cd1cc137f562117898b24",
+  "prompts": {
+    "97956245be63b630": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e2cf9886-09bd-4f1e-a4fc-ce8f35098dc7",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 38,
+      "total_deletions": 0,
+      "accepted_lines": 38,
+      "overriden_lines": 0
+    }
+  }
+}
