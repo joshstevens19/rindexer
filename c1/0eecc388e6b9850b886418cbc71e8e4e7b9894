@@ -1,0 +1,29 @@
+core/src/indexer/cron_scheduler.rs
+  97956245be63b630 301,1697-1862
+core/Cargo.toml
+  97956245be63b630 36,40,44-45,72,81-84,87
+core/src/manifest/yaml.rs
+  97956245be63b630 732
+core/src/event/filter/parsing.rs
+  97956245be63b630 178-179,181-200
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "c10eecc388e6b9850b886418cbc71e8e4e7b9894",
+  "prompts": {
+    "97956245be63b630": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e2cf9886-09bd-4f1e-a4fc-ce8f35098dc7",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 199,
+      "total_deletions": 23,
+      "accepted_lines": 198,
+      "overriden_lines": 0
+    }
+  }
+}
