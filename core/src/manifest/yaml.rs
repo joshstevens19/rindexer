@@ -729,7 +729,7 @@ fn validate_manifest(
                             }
                             (None, Some(schedule)) => {
                                 // Validate cron expression using croner crate
-                                if let Err(e) = croner::Cron::new(schedule).parse() {
+                                if let Err(e) = schedule.parse::<croner::Cron>() {
                                     return Err(ValidateManifestError::InvalidCronSchedule(
                                         schedule.clone(),
                                         table.name.clone(),
