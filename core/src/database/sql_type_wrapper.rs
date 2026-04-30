@@ -1613,9 +1613,16 @@ fn map_log_token_to_ethereum_wrapper(
         }
         DynSolValue::Bool(b) => vec![EthereumSqlTypeWrapper::Bool(*b)],
         DynSolValue::String(s) => vec![EthereumSqlTypeWrapper::String(s.clone())],
-        DynSolValue::FixedBytes(bytes, _) => {
-            vec![EthereumSqlTypeWrapper::Bytes(Bytes::from(*bytes))]
-        }
+        DynSolValue::FixedBytes(bytes, _) => match abi_input.type_.as_str() {
+            // Indexed strings are emitted in log
+            // topics as keccak256(value), not the original plaintext. Alloy surfaces
+            // those as fixed bytes, so storing raw bytes into a TEXT column causes
+            // invalid UTF-8 errors in Postgres. Persist the topic hash as a hex string instead.
+            "string" => {
+                vec![EthereumSqlTypeWrapper::String(format!("0x{}", hex::encode(bytes)))]
+            }
+            _ => vec![EthereumSqlTypeWrapper::Bytes(Bytes::from(*bytes))],
+        },
         DynSolValue::Bytes(bytes) => {
             vec![EthereumSqlTypeWrapper::Bytes(Bytes::from(bytes.clone()))]
         }
@@ -2329,6 +2336,22 @@ mod tests {
                 assert_eq!(arr[1]["accountAddress"], "0xDEF456");
             }
             other => panic!("Expected JSONB wrapper, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_indexed_string_topic_hash_maps_to_hex_string() {
+        let abi_input = make_abi_input("_salt", "string", None);
+        let token = DynSolValue::FixedBytes([0xd6; 32].into(), 32);
+
+        let result = map_log_token_to_ethereum_wrapper(&abi_input, &token);
+
+        assert_eq!(result.len(), 1);
+        match &result[0] {
+            EthereumSqlTypeWrapper::String(value) => {
+                assert_eq!(value, &format!("0x{}", "d6".repeat(32)));
+            }
+            other => panic!("Expected String wrapper, got {:?}", other),
         }
     }
 

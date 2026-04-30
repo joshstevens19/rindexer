@@ -1,0 +1,28 @@
+[
+  {
+    "type": "function",
+    "name": "emitMessage",
+    "inputs": [],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "event",
+    "name": "MessageEmitted",
+    "inputs": [
+      {
+        "name": "indexedMessage",
+        "type": "string",
+        "indexed": true,
+        "internalType": "string"
+      },
+      {
+        "name": "unindexedMessage",
+        "type": "string",
+        "indexed": false,
+        "internalType": "string"
+      }
+    ],
+    "anonymous": false
+  }
+]
