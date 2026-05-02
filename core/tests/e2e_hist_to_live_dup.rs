@@ -18,8 +18,23 @@
 //!
 //! Requires Docker. Run via nextest so each test gets its own process:
 //!   cargo nextest run -q -p rindexer --test e2e_hist_to_live_dup
+//!
+//! # Isolation invariant
+//!
+//! This test mutates process-global state (`DATABASE_URL` env var,
+//! `_test_reset_shutdown_flag()` AtomicBool in `rindexer::system_state`).
+//! It MUST run in its own process. `.github/workflows/ci.yml` pins
+//! `cargo nextest run` everywhere including coverage, and nextest's default
+//! `run-as-child = true` fork-per-test guarantees isolation.
+//!
+//! `TestEnv::new` enforces the invariant at runtime via a per-process
+//! `AtomicBool`: constructing a second `TestEnv` in the same process panics.
+//! This surfaces a broken test harness immediately if someone either (a)
+//! adds a second `#[tokio::test]` to this file and runs under plain
+//! `cargo test`, or (b) removes the nextest requirement from CI.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use alloy::primitives::Address;
@@ -209,8 +224,21 @@ struct TestEnv {
     _anvil_container: testcontainers::ContainerAsync<GenericImage>,
 }
 
+/// Tripped when `TestEnv::new` sets `DATABASE_URL`. Constructing a second
+/// `TestEnv` in the same process panics — see the module-level "Isolation
+/// invariant" docs for rationale.
+static TEST_ENV_ALREADY_INITIALIZED: AtomicBool = AtomicBool::new(false);
+
 impl TestEnv {
     async fn new() -> Self {
+        assert!(
+            !TEST_ENV_ALREADY_INITIALIZED.swap(true, Ordering::SeqCst),
+            "TestEnv::new called more than once in the same process — this test \
+             mutates process-global state (DATABASE_URL, shutdown flag) and MUST \
+             run under `cargo nextest run` so each test gets its own process. \
+             See the `// Isolation invariant` module docs."
+        );
+
         let _ = rustls::crypto::ring::default_provider().install_default();
 
         let pg_container =

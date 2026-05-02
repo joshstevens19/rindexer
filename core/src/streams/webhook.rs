@@ -29,7 +29,11 @@ impl Webhook {
         shared_secret: &str,
         message: &Value,
     ) -> Result<(), WebhookError> {
-        publish_with_retry("webhook", endpoint, || {
+        // Use a bounded host[:port] label instead of the raw URL — the raw
+        // URL is unbounded and would explode Prometheus cardinality on
+        // `STREAM_PUBLISH_DROPPED_TOTAL` for multi-tenant webhook fanouts.
+        let target = webhook_target_label(endpoint);
+        publish_with_retry("webhook", &target, || {
             self.publish_once(id, endpoint, shared_secret, message)
         })
         .await
@@ -63,10 +67,51 @@ impl Webhook {
     }
 }
 
+/// Stable low-cardinality label for `STREAM_PUBLISH_DROPPED_TOTAL` on
+/// webhooks. The raw endpoint URL is unbounded — multi-tenant deployments
+/// with many distinct webhook URLs would blow Prometheus TSDB cardinality.
+/// Extracting `host[:port]` bounds the label set to the number of distinct
+/// destination hosts (typically a handful) while still letting operators
+/// identify which host is dropping events.
+fn webhook_target_label(endpoint: &str) -> String {
+    const UNKNOWN: &str = "unknown";
+    match reqwest::Url::parse(endpoint) {
+        Ok(url) => match (url.host_str(), url.port()) {
+            (Some(host), Some(port)) => format!("{host}:{port}"),
+            (Some(host), None) => host.to_string(),
+            (None, _) => UNKNOWN.to_string(),
+        },
+        Err(_) => UNKNOWN.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn webhook_target_label_strips_path_query_and_scheme() {
+        // Raw URLs have unbounded path/query combinations; the label must
+        // reduce to a stable host[:port] so Prometheus cardinality is
+        // bounded by the number of distinct destination hosts.
+        assert_eq!(
+            webhook_target_label("https://api.example.com/hooks/xyz?token=abc"),
+            "api.example.com"
+        );
+        assert_eq!(webhook_target_label("http://127.0.0.1:8080/hook"), "127.0.0.1:8080");
+        // Non-standard default port preserved when explicit.
+        assert_eq!(
+            webhook_target_label("https://events.example.com:8443/path"),
+            "events.example.com:8443"
+        );
+    }
+
+    #[test]
+    fn webhook_target_label_falls_back_on_unparseable() {
+        assert_eq!(webhook_target_label("not a url"), "unknown");
+        assert_eq!(webhook_target_label(""), "unknown");
+    }
 
     #[tokio::test]
     async fn publish_sends_correct_headers() {

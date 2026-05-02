@@ -276,6 +276,40 @@ pub static STREAM_FINALIZED_BUFFER_OVERFLOW_TOTAL: Lazy<CounterVec> = Lazy::new(
     .expect("failed to register STREAM_FINALIZED_BUFFER_OVERFLOW_TOTAL")
 });
 
+/// Current number of events sitting in a finalized-delivery buffer for a
+/// `(stream_type, network)` pair, summed across all `config_index`es and
+/// `event_name`s on that pair. Complements `STREAM_FINALIZED_BUFFER_OVERFLOW_TOTAL`
+/// — overflow answers "did the buffer ever breach the soft cap?" while this
+/// gauge answers "is the buffer draining?". Alert if this stays non-zero and
+/// non-decreasing across consecutive scrapes.
+///
+/// The gauge updates when an event leaves the in-memory buffer (post-drain),
+/// not when its downstream publish completes — events in flight after a
+/// flush are not reflected. Pair with `STREAM_PUBLISH_DROPPED_TOTAL` and the
+/// `record_finalized_flush_duration` histogram for the publish-side picture.
+///
+/// Labels: stream_type, network
+pub static STREAM_FINALIZED_BUFFER_DEPTH: Lazy<GaugeVec> = Lazy::new(|| {
+    register_gauge_vec!(
+        "rindexer_stream_finalized_buffer_depth",
+        "Current events buffered for finalized delivery per (stream_type, network)",
+        &["stream_type", "network"]
+    )
+    .expect("failed to register STREAM_FINALIZED_BUFFER_DEPTH")
+});
+
+/// End-to-end duration of a `flush_finalized(network, head)` call. Captures
+/// lock acquire + drain-decision + publisher fanout. Labels: network.
+pub static STREAM_FINALIZED_FLUSH_DURATION: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "rindexer_stream_finalized_flush_duration_seconds",
+        "End-to-end finalized-buffer flush duration in seconds per network",
+        &["network"],
+        vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0]
+    )
+    .expect("failed to register STREAM_FINALIZED_FLUSH_DURATION")
+});
+
 /// Terminal publish failures — a message hit `publish_with_retry`'s final
 /// attempt and was not delivered. In Instant delivery mode this is a lost
 /// message from the consumer's point of view. Alert on any sustained non-zero

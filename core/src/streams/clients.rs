@@ -141,8 +141,9 @@ pub struct StreamsClients {
     /// `flush_finalized` and invalidation via `discard_finalized`.
     finalized_buffers: AsyncMutex<HashMap<BufferKey, FinalizedBuffer>>,
     /// Per-network `reorg_safe_distance`. Populated at startup by
-    /// `register_network_reorg_distance`. `FinalizedBuffer::new` needs this to
-    /// know how far behind the chain head a block must be before flushing.
+    /// `register_network_reorg_distance` and re-read at every
+    /// `flush_finalized` call so post-insertion re-registration takes
+    /// effect (see `FinalizedBuffer::flush`).
     reorg_safe_distances: StdMutex<HashMap<String, u64>>,
 }
 
@@ -298,7 +299,7 @@ impl StreamsClients {
             event_signature_hash: B256::ZERO,
         };
         let mut map = self.finalized_buffers.lock().await;
-        let buf = map.entry(key).or_insert_with(|| FinalizedBuffer::new(distance));
+        let buf = map.entry(key).or_insert_with(FinalizedBuffer::new);
         for &b in blocks {
             buf.add(b, vec![serde_json::json!({"block": b})]);
         }
@@ -475,17 +476,20 @@ impl StreamsClients {
     }
 
     /// Returns `true` when the dispatch should be routed into the
-    /// `FinalizedBuffer` instead of publishing immediately. Reorg notifications
-    /// (`force_send_network_wide`) and trace events always bypass the buffer;
-    /// `block_number == 0` is a sentinel for synthetic messages that likewise
-    /// never buffer.
+    /// `FinalizedBuffer` instead of publishing immediately. Reorg
+    /// notifications (`force_send_network_wide`) and synthetic messages
+    /// (`block_number == 0`) bypass the buffer. Trace (native-transfer)
+    /// events DO buffer when the user opts into `Finalized` delivery —
+    /// `finalized_buffer_distance_for_network` already accounts for
+    /// `manifest.native_transfers.reorg_safe_distance`, and the flush path's
+    /// `filter_chunk_event_data_by_conditions` passes trace chunks through
+    /// unfiltered when no explicit stream_event is configured.
     fn should_buffer(
         delivery: Option<&crate::manifest::stream::StreamDeliveryMode>,
         event_message: &EventMessage,
-        is_trace_event: bool,
         force_send_network_wide: bool,
     ) -> bool {
-        if force_send_network_wide || is_trace_event {
+        if force_send_network_wide {
             return false;
         }
         if event_message.block_number == 0 {
@@ -504,7 +508,6 @@ impl StreamsClients {
         config_index: usize,
         event_message: &EventMessage,
     ) {
-        let distance = self.reorg_safe_distance_for(&event_message.network);
         let key = BufferKey {
             stream_type,
             config_index,
@@ -513,7 +516,7 @@ impl StreamsClients {
             event_signature_hash: event_message.event_signature_hash,
         };
         let mut map = self.finalized_buffers.lock().await;
-        let buffer = map.entry(key).or_insert_with(|| FinalizedBuffer::new(distance));
+        let buffer = map.entry(key).or_insert_with(FinalizedBuffer::new);
         if let Value::Array(data) = &event_message.event_data {
             buffer.add(event_message.block_number, data.clone());
         }
@@ -528,6 +531,7 @@ impl StreamsClients {
             );
             stream_metrics::record_finalized_buffer_overflow(stream_type, &event_message.network);
         }
+        Self::refresh_depth_gauge_under_lock(&map, &event_message.network);
     }
 
     fn should_send_for_config(
@@ -882,7 +886,6 @@ impl StreamsClients {
                         if Self::should_buffer(
                             config.delivery.as_ref(),
                             event_message,
-                            is_trace_event,
                             force_send_network_wide,
                         ) {
                             self.buffer_event(stream_type::SNS, idx, event_message).await;
@@ -912,7 +915,6 @@ impl StreamsClients {
                         if Self::should_buffer(
                             config.delivery.as_ref(),
                             event_message,
-                            is_trace_event,
                             force_send_network_wide,
                         ) {
                             self.buffer_event(stream_type::WEBHOOK, idx, event_message).await;
@@ -942,7 +944,6 @@ impl StreamsClients {
                         if Self::should_buffer(
                             config.delivery.as_ref(),
                             event_message,
-                            is_trace_event,
                             force_send_network_wide,
                         ) {
                             self.buffer_event(stream_type::RABBITMQ, idx, event_message).await;
@@ -973,7 +974,6 @@ impl StreamsClients {
                         if Self::should_buffer(
                             config.delivery.as_ref(),
                             event_message,
-                            is_trace_event,
                             force_send_network_wide,
                         ) {
                             self.buffer_event(stream_type::KAFKA, idx, event_message).await;
@@ -1003,7 +1003,6 @@ impl StreamsClients {
                         if Self::should_buffer(
                             config.delivery.as_ref(),
                             event_message,
-                            is_trace_event,
                             force_send_network_wide,
                         ) {
                             self.buffer_event(stream_type::REDIS, idx, event_message).await;
@@ -1033,7 +1032,6 @@ impl StreamsClients {
                         if Self::should_buffer(
                             config.delivery.as_ref(),
                             event_message,
-                            is_trace_event,
                             force_send_network_wide,
                         ) {
                             self.buffer_event(stream_type::CLOUDFLARE_QUEUES, idx, event_message)
@@ -1177,6 +1175,8 @@ impl StreamsClients {
         network: &str,
         head_block: u64,
     ) -> Result<usize, StreamError> {
+        let distance = self.reorg_safe_distance_for(network);
+        let flush_start = Instant::now();
         let mut ready_by_key: Vec<FinalizedDeliveryBuffer> = Vec::new();
         {
             let mut map = self.finalized_buffers.lock().await;
@@ -1184,18 +1184,60 @@ impl StreamsClients {
                 if key.network != network {
                     continue;
                 }
-                let ready = buffer.flush(head_block);
+                let ready = buffer.flush(head_block, distance);
                 if !ready.is_empty() {
                     ready_by_key.push((key.clone(), ready));
                 }
             }
+            Self::refresh_depth_gauge_under_lock(&map, network);
         }
 
+        // Continue-on-error across keys: a persistent publish failure on one
+        // stream-type/config must NOT cause the remaining keys' already-drained
+        // events to be dropped. Per-key dispatch already reports drops via
+        // `STREAM_PUBLISH_DROPPED_TOTAL` after the retry budget is exhausted;
+        // here we surface the first error (so callers see something went
+        // wrong) while letting every other key's events reach their backend.
         let mut total_sent = 0;
+        let mut first_err: Option<StreamError> = None;
         for (key, ready) in ready_by_key {
-            total_sent += self.dispatch_flushed(&key, ready).await?;
+            match self.dispatch_flushed(&key, ready).await {
+                Ok(n) => total_sent += n,
+                Err(e) => {
+                    if first_err.is_none() {
+                        first_err = Some(e);
+                    }
+                }
+            }
+        }
+        stream_metrics::record_finalized_flush_duration(
+            network,
+            flush_start.elapsed().as_secs_f64(),
+        );
+        if let Some(e) = first_err {
+            return Err(e);
         }
         Ok(total_sent)
+    }
+
+    /// Sum the buffer size per `(stream_type, network)` for `network` across
+    /// every entry in `map` and push the result into the depth gauge. Assumes
+    /// the caller holds `finalized_buffers` lock. Iterates every
+    /// `stream_type::ALL` label so a buffer that just fully drained does not
+    /// leave its previous gauge value stuck — Prometheus gauges otherwise
+    /// retain the last `set` value indefinitely.
+    fn refresh_depth_gauge_under_lock(map: &HashMap<BufferKey, FinalizedBuffer>, network: &str) {
+        let mut totals: HashMap<&'static str, u64> = HashMap::new();
+        for (key, buf) in map.iter() {
+            if key.network != network {
+                continue;
+            }
+            *totals.entry(key.stream_type).or_default() += buf.len() as u64;
+        }
+        for &st in stream_type::ALL {
+            let depth = totals.remove(st).unwrap_or(0);
+            stream_metrics::set_finalized_buffer_depth(st, network, depth as f64);
+        }
     }
 
     /// Remove buffered events for `network` whose source block falls in the
@@ -1210,6 +1252,7 @@ impl StreamsClients {
             }
             buffer.discard_range(fork_point, detection_point);
         }
+        Self::refresh_depth_gauge_under_lock(&map, network);
     }
 
     /// Re-publish a block's worth of previously-buffered events through the
@@ -1318,13 +1361,30 @@ impl StreamsClients {
             all_tasks.extend(tasks);
         }
 
+        // Mirrors `flush_finalized`'s cross-key continue-on-error: tasks in
+        // `join_all` already executed in parallel by the time we iterate, so
+        // a per-task `return Err` would short-circuit the count rather than
+        // the work. Accumulate `total_sent` across every successful task and
+        // surface the first observed error after the loop.
         let mut total_sent = 0;
+        let mut first_err: Option<StreamError> = None;
         for result in join_all(all_tasks).await {
             match result {
                 Ok(Ok(n)) => total_sent += n,
-                Ok(Err(e)) => return Err(e),
-                Err(e) => return Err(StreamError::JoinError(e)),
+                Ok(Err(e)) => {
+                    if first_err.is_none() {
+                        first_err = Some(e);
+                    }
+                }
+                Err(e) => {
+                    if first_err.is_none() {
+                        first_err = Some(StreamError::JoinError(e));
+                    }
+                }
             }
+        }
+        if let Some(e) = first_err {
+            return Err(e);
         }
         Ok(total_sent)
     }
@@ -1334,29 +1394,40 @@ impl StreamsClients {
 /// source block number. Used by `StreamDeliveryMode::Finalized` to delay
 /// dispatch until a block is deeper than the chain's `reorg_safe_distance`.
 ///
-/// `flush(current_head)` drains every bucket whose block is `<= current_head -
-/// reorg_safe_distance`; `discard_range(fork_point, detection_point)` removes
-/// buckets in an invalidated range when a reorg is detected.
+/// `flush(current_head, reorg_safe_distance)` drains every bucket whose block
+/// is `<= current_head - reorg_safe_distance`; `discard_range(fork_point,
+/// detection_point)` removes buckets in an invalidated range when a reorg is
+/// detected.
+///
+/// The `reorg_safe_distance` is NOT stored on the buffer — it is passed at
+/// flush time from `StreamsClients::reorg_safe_distances`. Caching the
+/// distance on first insert would silently pin a stale value if the manifest
+/// (or test wiring) later re-registered a new distance for the same network.
 #[derive(Debug)]
 pub(crate) struct FinalizedBuffer {
     buffer: BTreeMap<u64, Vec<Value>>,
-    reorg_safe_distance: u64,
 }
 
 impl FinalizedBuffer {
-    pub fn new(reorg_safe_distance: u64) -> Self {
-        Self { buffer: BTreeMap::new(), reorg_safe_distance }
+    pub fn new() -> Self {
+        Self { buffer: BTreeMap::new() }
     }
 
     pub fn add(&mut self, block_number: u64, events: Vec<Value>) {
         self.buffer.entry(block_number).or_default().extend(events);
     }
 
-    pub fn flush(&mut self, current_head: u64) -> Vec<(u64, Vec<Value>)> {
-        let finality_threshold = current_head.saturating_sub(self.reorg_safe_distance);
-        let ready_keys: Vec<u64> =
-            self.buffer.keys().copied().filter(|&k| k <= finality_threshold).collect();
-        ready_keys.into_iter().filter_map(|k| self.buffer.remove(&k).map(|v| (k, v))).collect()
+    pub fn flush(&mut self, current_head: u64, reorg_safe_distance: u64) -> Vec<(u64, Vec<Value>)> {
+        let finality_threshold = current_head.saturating_sub(reorg_safe_distance);
+        // BTreeMap::split_off keeps keys < arg in self, returns keys >= arg.
+        // We want to drain keys ≤ threshold and retain keys > threshold, so
+        // split at `threshold + 1`: the high half (returned) becomes the new
+        // buffer, the original low half drains. Single O(log n + drained)
+        // pass, no per-key remove.
+        let cutoff = finality_threshold.saturating_add(1);
+        let keep = self.buffer.split_off(&cutoff);
+        let drained = std::mem::replace(&mut self.buffer, keep);
+        drained.into_iter().collect()
     }
 
     pub fn discard_range(&mut self, fork_point: u64, detection_point: u64) {
@@ -1793,6 +1864,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stream_trace_event_with_finalized_delivery_buffers_instead_of_sending() {
+        let mut server = mockito::Server::new_async().await;
+        // Expect exactly one POST after the deferred flush, and zero before
+        // it — the buffered_blocks assertion below proves the pre-flush
+        // count is zero, so a passing mock.assert_async() at the end is
+        // strictly the post-flush hit.
+        let mock = server.mock("POST", "/hook").with_status(200).expect(1).create_async().await;
+
+        let config = WebhookStreamConfig {
+            endpoint: format!("{}/hook", server.url()),
+            shared_secret: "s".to_string(),
+            networks: vec!["ethereum".to_string()],
+            events: vec![stream_event("Transfer")], // no NativeTransfer entry
+            delivery: Some(crate::manifest::stream::StreamDeliveryMode::Finalized),
+        };
+
+        let clients = webhook_clients(vec![config]);
+        clients.register_network_reorg_distance("ethereum".to_string(), 10);
+
+        let msg = EventMessage {
+            event_name: "NativeTransfer".to_string(),
+            event_data: json!([{"from": "0x1", "to": "0x2", "value": "1000"}]),
+            event_signature_hash: B256::ZERO,
+            network: "ethereum".to_string(),
+            block_number: 100,
+        };
+
+        let sent = clients.stream("id".to_string(), &msg, false, true).await.unwrap();
+
+        assert_eq!(sent, 0, "finalized trace event must not dispatch instantly");
+        assert_eq!(
+            buffered_blocks(&clients, "ethereum").await,
+            vec![100],
+            "event must be parked in the finalized buffer for later flush"
+        );
+
+        // Drive a flush so the event traverses the dispatch path. Catches
+        // regressions in `filter_chunk_event_data_by_conditions`'s
+        // EVENT_NAME passthrough — without it, the flushed dispatch would
+        // panic via the `expect("Failed to find stream event ...")`.
+        let flushed = clients.flush_finalized("ethereum", 200).await.unwrap();
+        assert_eq!(flushed, 1, "buffered native-transfer event must flush once safe");
+        assert!(
+            buffered_blocks(&clients, "ethereum").await.is_empty(),
+            "buffer must drain after flush"
+        );
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn stream_multiple_webhooks() {
         let mut server = mockito::Server::new_async().await;
         let mock = server.mock("POST", "/hook").with_status(200).expect(2).create_async().await;
@@ -2020,43 +2141,43 @@ mod tests {
 
     #[test]
     fn finalized_buffer_flushes_only_below_threshold() {
-        let mut buf = FinalizedBuffer::new(10);
+        let mut buf = FinalizedBuffer::new();
         buf.add(100, vec![json!({"event": "a"})]);
         buf.add(105, vec![json!({"event": "b"})]);
 
-        let flushed = buf.flush(112); // threshold = 102
+        let flushed = buf.flush(112, 10); // threshold = 102
         assert_eq!(flushed.len(), 1);
         assert_eq!(flushed[0].0, 100);
 
-        let flushed2 = buf.flush(120);
+        let flushed2 = buf.flush(120, 10);
         assert_eq!(flushed2.len(), 1);
         assert_eq!(flushed2[0].0, 105);
     }
 
     #[test]
     fn finalized_buffer_discards_range_inclusive() {
-        let mut buf = FinalizedBuffer::new(10);
+        let mut buf = FinalizedBuffer::new();
         buf.add(98, vec![json!({"event": "a"})]);
         buf.add(99, vec![json!({"event": "b"})]);
         buf.add(100, vec![json!({"event": "c"})]);
 
         buf.discard_range(99, 100);
 
-        let flushed = buf.flush(200);
+        let flushed = buf.flush(200, 10);
         assert_eq!(flushed.len(), 1);
         assert_eq!(flushed[0].0, 98);
     }
 
     #[test]
     fn finalized_buffer_discard_on_empty_is_noop() {
-        let mut buf = FinalizedBuffer::new(10);
+        let mut buf = FinalizedBuffer::new();
         buf.discard_range(5, 10);
         assert_eq!(buf.len(), 0);
     }
 
     #[test]
     fn finalized_buffer_add_merges_same_block() {
-        let mut buf = FinalizedBuffer::new(10);
+        let mut buf = FinalizedBuffer::new();
         buf.add(50, vec![json!({"a": 1})]);
         buf.add(50, vec![json!({"a": 2})]);
         assert_eq!(buf.len(), 2);
@@ -2086,7 +2207,7 @@ mod tests {
             event_signature_hash: B256::ZERO,
         };
         let mut map = clients.finalized_buffers.lock().await;
-        let buf = map.entry(key).or_insert_with(|| FinalizedBuffer::new(distance));
+        let buf = map.entry(key).or_insert_with(FinalizedBuffer::new);
         for &b in blocks {
             buf.add(b, vec![json!({"block": b})]);
         }
@@ -2242,5 +2363,198 @@ mod tests {
 
         assert_eq!(sent, 0);
         assert_eq!(buffered_blocks(&clients, "ethereum").await, vec![1, 2, 5]);
+    }
+
+    async fn seed_buffer_for_config(
+        clients: &StreamsClients,
+        stream_type: &'static str,
+        config_index: usize,
+        network: &str,
+        event_name: &str,
+        blocks: &[u64],
+        distance: u64,
+    ) {
+        clients.register_network_reorg_distance(network.to_string(), distance);
+        let key = BufferKey {
+            stream_type,
+            config_index,
+            network: network.to_string(),
+            event_name: event_name.to_string(),
+            event_signature_hash: B256::ZERO,
+        };
+        let mut map = clients.finalized_buffers.lock().await;
+        let buf = map.entry(key).or_insert_with(FinalizedBuffer::new);
+        for &b in blocks {
+            buf.add(b, vec![json!({"block": b})]);
+        }
+    }
+
+    #[tokio::test]
+    async fn flush_finalized_healthy_backend_delivers_when_other_backend_fails() {
+        // A persistent publish error on backend A must not cause backend B's
+        // already-drained events to be dropped — the per-key dispatch loop
+        // intentionally records the failure, continues, and surfaces the
+        // first error after every key has had a chance to publish.
+        let mut server = mockito::Server::new_async().await;
+        let bad =
+            server.mock("POST", "/bad").with_status(500).expect_at_least(1).create_async().await;
+        let good = server.mock("POST", "/good").with_status(200).expect(1).create_async().await;
+
+        let bad_cfg = WebhookStreamConfig {
+            endpoint: format!("{}/bad", server.url()),
+            shared_secret: "s".to_string(),
+            networks: vec!["ethereum".to_string()],
+            events: vec![stream_event("Transfer")],
+            delivery: None,
+        };
+        let good_cfg = WebhookStreamConfig {
+            endpoint: format!("{}/good", server.url()),
+            shared_secret: "s".to_string(),
+            networks: vec!["ethereum".to_string()],
+            events: vec![stream_event("Transfer")],
+            delivery: None,
+        };
+        let clients = webhook_clients(vec![bad_cfg, good_cfg]);
+
+        // Two BufferKey entries — same network/event, differing config_index —
+        // so the dispatch loop has to traverse both and the bug surfaces
+        // when /bad iterates first under HashMap's nondeterministic order.
+        seed_buffer_for_config(
+            &clients,
+            stream_type::WEBHOOK,
+            0,
+            "ethereum",
+            "Transfer",
+            &[100],
+            10,
+        )
+        .await;
+        seed_buffer_for_config(
+            &clients,
+            stream_type::WEBHOOK,
+            1,
+            "ethereum",
+            "Transfer",
+            &[100],
+            10,
+        )
+        .await;
+
+        let result = clients.flush_finalized("ethereum", 110).await;
+
+        assert!(
+            matches!(result, Err(StreamError::WebhookCouldNotPublish(_))),
+            "expected webhook err surfaced, got {:?}",
+            result
+        );
+        good.assert_async().await;
+        bad.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn flush_finalized_respects_re_registered_larger_distance() {
+        // The scary direction: a distance re-registered LARGER after the
+        // buffer exists must take effect on the next flush, otherwise
+        // events ship too early relative to the newly-configured
+        // reorg-safe window — a silent correctness deviation.
+        let mut server = mockito::Server::new_async().await;
+        let mock = server.mock("POST", "/hook").expect(0).create_async().await;
+
+        let config = WebhookStreamConfig {
+            endpoint: format!("{}/hook", server.url()),
+            shared_secret: "s".to_string(),
+            networks: vec!["ethereum".to_string()],
+            events: vec![stream_event("Transfer")],
+            delivery: None,
+        };
+        let clients = webhook_clients(vec![config]);
+
+        // Seed under distance=10 (block 100 would be ready at head 110).
+        seed_buffer(&clients, "ethereum", "Transfer", &[100], 10).await;
+        // Re-register larger; head=110 - 50 = 60 < 100, so 100 must stay parked.
+        clients.register_network_reorg_distance("ethereum".to_string(), 50);
+        let sent = clients.flush_finalized("ethereum", 110).await.unwrap();
+
+        assert_eq!(sent, 0, "flush must honor the newly-registered larger distance");
+        assert_eq!(
+            buffered_blocks(&clients, "ethereum").await,
+            vec![100],
+            "block 100 must remain buffered under the re-registered distance of 50"
+        );
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn flush_finalized_respects_re_registered_smaller_distance() {
+        // Symmetric to the larger-distance regression: a distance re-registered
+        // SMALLER must also take effect — otherwise a buffer seeded with a
+        // generous distance would keep events parked even when the user has
+        // since reduced the safe window. Catches a regression that re-cached
+        // the distance only in one direction.
+        let mut server = mockito::Server::new_async().await;
+        let mock = server.mock("POST", "/hook").with_status(200).expect(1).create_async().await;
+
+        let config = WebhookStreamConfig {
+            endpoint: format!("{}/hook", server.url()),
+            shared_secret: "s".to_string(),
+            networks: vec!["ethereum".to_string()],
+            events: vec![stream_event("Transfer")],
+            delivery: None,
+        };
+        let clients = webhook_clients(vec![config]);
+
+        // Seed under distance=50 (so block 100 would NOT be ready at head 110:
+        // 110 - 50 = 60 < 100). Pre-fix: distance pinned at 50 forever.
+        seed_buffer(&clients, "ethereum", "Transfer", &[100], 50).await;
+        // Re-register smaller; head=110 - 5 = 105 >= 100, so 100 must flush.
+        clients.register_network_reorg_distance("ethereum".to_string(), 5);
+        let sent = clients.flush_finalized("ethereum", 110).await.unwrap();
+
+        assert_eq!(sent, 1, "flush must honor the newly-registered smaller distance");
+        assert!(
+            buffered_blocks(&clients, "ethereum").await.is_empty(),
+            "block 100 must drain under the re-registered distance of 5"
+        );
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn finalized_buffer_depth_gauge_tracks_add_and_flush() {
+        // Operators alert on "buffer not draining" via this gauge — verify
+        // it actually moves with add and flush. The unique network label
+        // isolates this test from process-wide metric emissions.
+        use crate::metrics::definitions::STREAM_FINALIZED_BUFFER_DEPTH;
+
+        let network = "depth_gauge_test_network";
+
+        let mut server = mockito::Server::new_async().await;
+        let mock = server.mock("POST", "/hook").with_status(200).expect(1).create_async().await;
+        let config = WebhookStreamConfig {
+            endpoint: format!("{}/hook", server.url()),
+            shared_secret: "s".to_string(),
+            networks: vec![network.to_string()],
+            events: vec![stream_event("Transfer")],
+            delivery: None,
+        };
+        let clients = webhook_clients(vec![config]);
+
+        let before =
+            STREAM_FINALIZED_BUFFER_DEPTH.with_label_values(&[stream_type::WEBHOOK, network]).get();
+        assert_eq!(before, 0.0, "depth gauge must start at zero");
+
+        seed_buffer(&clients, network, "Transfer", &[100], 10).await;
+        // head=50 < threshold(100), so flush drains nothing but still
+        // refreshes the gauge from the post-seed map state.
+        let _ = clients.flush_finalized(network, 50).await.unwrap();
+        let after_seed =
+            STREAM_FINALIZED_BUFFER_DEPTH.with_label_values(&[stream_type::WEBHOOK, network]).get();
+        assert_eq!(after_seed, 1.0, "depth gauge must track buffered event count");
+
+        let sent = clients.flush_finalized(network, 110).await.unwrap();
+        assert_eq!(sent, 1);
+        let after_flush =
+            STREAM_FINALIZED_BUFFER_DEPTH.with_label_values(&[stream_type::WEBHOOK, network]).get();
+        assert_eq!(after_flush, 0.0, "depth gauge must return to zero after a complete drain");
+        mock.assert_async().await;
     }
 }
