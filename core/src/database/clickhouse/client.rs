@@ -2,10 +2,11 @@ use std::collections::HashSet;
 use std::{env, time::Instant};
 
 use clickhouse::{Client, Row};
-use dotenv::dotenv;
+use dotenvy::dotenv;
 use serde::Deserialize;
 use tracing::info;
 
+use crate::database::clickhouse::types::ClickhouseHash;
 use crate::metrics::database::{self as db_metrics, ops};
 use crate::EthereumSqlTypeWrapper;
 
@@ -100,7 +101,7 @@ impl ClickhouseClient {
 
     pub async fn query_one<T>(&self, sql: &str) -> Result<T, ClickhouseError>
     where
-        T: Row + for<'b> Deserialize<'b>,
+        T: for<'a> Row<Value<'a> = T> + for<'b> Deserialize<'b> + 'static,
     {
         let start = Instant::now();
         let result = self.conn.query(sql).fetch_one().await;
@@ -111,7 +112,7 @@ impl ClickhouseClient {
 
     pub async fn query<T>(&self, sql: &str) -> Result<T, ClickhouseError>
     where
-        T: Row + for<'b> Deserialize<'b>,
+        T: for<'a> Row<Value<'a> = T> + for<'b> Deserialize<'b> + 'static,
     {
         let start = Instant::now();
         let result = self.conn.query(sql).fetch_one().await;
@@ -122,7 +123,7 @@ impl ClickhouseClient {
 
     pub async fn query_all<T>(&self, sql: &str) -> Result<Vec<T>, ClickhouseError>
     where
-        T: Row + for<'b> Deserialize<'b>,
+        T: for<'a> Row<Value<'a> = T> + for<'b> Deserialize<'b> + 'static,
     {
         let start = Instant::now();
         let result = self.conn.query(sql).fetch_all().await;
@@ -133,7 +134,7 @@ impl ClickhouseClient {
 
     pub async fn query_optional<T>(&self, sql: &str) -> Result<Option<T>, ClickhouseError>
     where
-        T: Row + for<'b> Deserialize<'b>,
+        T: for<'a> Row<Value<'a> = T> + for<'b> Deserialize<'b> + 'static,
     {
         let start = Instant::now();
         let result = self.conn.query(sql).fetch_optional().await;
@@ -245,7 +246,7 @@ impl ClickhouseClient {
         #[derive(Row, Deserialize)]
         struct CountAndHashes {
             c: u64,
-            hashes: Vec<String>,
+            hashes: Vec<ClickhouseHash>,
         }
 
         // Step 1: Rewind checkpoint tables first — on restart, the indexer will
@@ -282,7 +283,7 @@ impl ClickhouseClient {
             );
             let row: CountAndHashes = self.conn.query(&sql).fetch_one().await?;
             total_deleted += row.c;
-            all_tx_hashes.extend(row.hashes);
+            all_tx_hashes.extend(row.hashes.into_iter().map(ClickhouseHash::into_string));
         }
 
         // Step 3: Delete stale events (synchronous — mutations_sync = 1 in delete_by_block_range).

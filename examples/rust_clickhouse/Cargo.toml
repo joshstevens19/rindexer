@@ -5,8 +5,8 @@ edition = "2024"
 
 [dependencies]
 rindexer = { path = "../../core" }
-tokio = { version = "1", features = ["full"] }
-alloy = { version = "1.0.41", features = ["full"] }
+tokio = { workspace = true }
+alloy = { workspace = true }
 
 [features]
 reth = ["rindexer/reth"]

@@ -23,9 +23,9 @@
 //! a localstack container, create the topic via the AWS SDK, then construct
 //! `StreamsClients` with the matching topic ARN.
 //!
-//! All tests are `#[ignore]` and require a working Docker daemon. Run with:
-//!   cargo test -q -p rindexer --test e2e_reorg_streams -- --ignored
-//!   cargo test -q -p rindexer --test e2e_reorg_streams --features kafka -- --ignored
+//! These tests require a working Docker daemon and run by default in CI.
+//! Locally without Docker, skip them via:
+//!   cargo nextest run -p rindexer --test e2e_reorg_streams -E '!test(/^stream_reorg_reaches_/)'
 
 use std::time::Duration;
 
@@ -96,7 +96,6 @@ fn assert_reorg_envelope(payload: &Value) {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn stream_reorg_reaches_redis() {
     use bb8_redis::redis::{cmd, AsyncCommands, Value as RedisValue};
     use testcontainers::runners::AsyncRunner;
@@ -178,7 +177,6 @@ async fn stream_reorg_reaches_redis() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn stream_reorg_reaches_rabbitmq() {
     use futures::StreamExt;
     use lapin::{
@@ -208,7 +206,7 @@ async fn stream_reorg_reaches_rabbitmq() {
 
     channel
         .exchange_declare(
-            exchange,
+            exchange.into(),
             ExchangeKind::Direct,
             ExchangeDeclareOptions::default(),
             FieldTable::default(),
@@ -217,15 +215,15 @@ async fn stream_reorg_reaches_rabbitmq() {
         .expect("exchange_declare");
 
     channel
-        .queue_declare(queue_name, QueueDeclareOptions::default(), FieldTable::default())
+        .queue_declare(queue_name.into(), QueueDeclareOptions::default(), FieldTable::default())
         .await
         .expect("queue_declare");
 
     channel
         .queue_bind(
-            queue_name,
-            exchange,
-            routing_key,
+            queue_name.into(),
+            exchange.into(),
+            routing_key.into(),
             QueueBindOptions::default(),
             FieldTable::default(),
         )
@@ -234,8 +232,8 @@ async fn stream_reorg_reaches_rabbitmq() {
 
     let mut consumer = channel
         .basic_consume(
-            queue_name,
-            "e2e-reorg-consumer",
+            queue_name.into(),
+            "e2e-reorg-consumer".into(),
             BasicConsumeOptions::default(),
             FieldTable::default(),
         )
@@ -286,7 +284,6 @@ async fn stream_reorg_reaches_rabbitmq() {
 
 #[cfg(feature = "kafka")]
 #[tokio::test]
-#[ignore = "requires Docker"]
 async fn stream_reorg_reaches_kafka() {
     use futures::StreamExt;
     use rdkafka::{

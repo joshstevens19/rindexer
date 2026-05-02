@@ -7,7 +7,7 @@ use std::{
 use bb8::{Pool, PooledConnection, RunError};
 use bb8_postgres::PostgresConnectionManager;
 use bytes::Buf;
-use dotenv::dotenv;
+use dotenvy::dotenv;
 use futures::pin_mut;
 use rust_decimal::Decimal;
 use tokio::{task, time::timeout};

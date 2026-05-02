@@ -168,10 +168,19 @@ impl StreamsClients {
         });
 
         #[allow(clippy::manual_map)]
+        // TODO: replace this `panic!` with proper error propagation up to the
+        // CLI/manifest start path. A transient broker outage at startup
+        // currently aborts the indexer process even if the broker would
+        // recover seconds later. The same critique applies to the Kafka
+        // `unwrap_or_else(panic)` below — fix both together.
         let rabbitmq = if let Some(config) = stream_config.rabbitmq.as_ref() {
             Some(RabbitMQStream {
                 config: config.clone(),
-                client: Arc::new(RabbitMQ::new(&config.url).await),
+                client: Arc::new(
+                    RabbitMQ::new(&config.url)
+                        .await
+                        .unwrap_or_else(|e| panic!("Failed to create RabbitMQ client: {e:?}")),
+                ),
             })
         } else {
             None
@@ -2276,8 +2285,8 @@ mod tests {
         // Both event buckets for block 101 are gone; block 100 survives in both.
         let map = clients.finalized_buffers.lock().await;
         for (_key, buf) in map.iter() {
-            assert!(buf.buffer.get(&100).is_some(), "block 100 must survive");
-            assert!(buf.buffer.get(&101).is_none(), "block 101 must be discarded");
+            assert!(buf.buffer.contains_key(&100), "block 100 must survive");
+            assert!(!buf.buffer.contains_key(&101), "block 101 must be discarded");
         }
     }
 

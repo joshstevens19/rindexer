@@ -1,6 +1,6 @@
 use std::{fs, fs::File, io::Write, path::Path, process::Command};
 
-use dotenv::{dotenv, from_path};
+use dotenvy::{dotenv, from_path};
 
 /// Formats all Rust source files in the given folder using `cargo fmt`.
 pub fn format_all_files_for_project<P: AsRef<Path>>(project_path: P) {

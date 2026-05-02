@@ -298,7 +298,7 @@ impl CronScheduler {
                             }
                         }
                     } else if let Some(cron_expr) = &cron_entry.schedule {
-                        match croner::Cron::new(cron_expr).parse() {
+                        match cron_expr.parse::<croner::Cron>() {
                             Ok(cron) => CronSchedule::Cron(Box::new(cron)),
                             Err(e) => {
                                 error!(
@@ -1693,4 +1693,175 @@ fn extract_cron_value_sync(
 /// Check if any tables in the manifest have cron triggers.
 pub fn manifest_has_cron_tables(manifest: &Manifest) -> bool {
     manifest.contracts.iter().filter_map(|c| c.tables.as_ref()).flatten().any(|t| t.has_cron())
+}
+
+#[cfg(test)]
+mod cron_parsing_tests {
+    //! Locks down the croner contract we depend on, in particular the v2→v3
+    //! migration. Our user-facing docs (`documentation/.../tables/index.mdx`)
+    //! only advertise standard 5-field cron expressions and reference these
+    //! examples verbatim:
+    //!
+    //!   - `"*/5 * * * *"` — every 5 minutes
+    //!   - `"0 * * * *"`   — every hour at minute 0
+    //!
+    //! These tests pin (a) parsing of the documented surface and (b) the
+    //! `find_next_occurrence` semantics the scheduler relies on at runtime.
+    //!
+    //! v3 default-config note: croner 3.0 widened the parser to also accept
+    //! 7-field patterns with an optional year — patterns that errored under
+    //! v2. We assert the new behavior explicitly so any future revert is
+    //! caught.
+    //!
+    //! TODO: extend coverage if/when documentation/.../tables/index.mdx
+    //! starts advertising additional shorthands (e.g. `@hourly`, `@daily`,
+    //! 6-field with seconds, the new v3 7-field-with-year shape). Today the
+    //! docs only show the two 5-field examples covered here.
+    use chrono::{DateTime, TimeZone, Utc};
+
+    fn parse(expr: &str) -> Result<croner::Cron, croner::errors::CronError> {
+        expr.parse::<croner::Cron>()
+    }
+
+    fn at(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(y, mo, d, h, mi, s).unwrap()
+    }
+
+    // ---- Parsing: documented patterns ---------------------------------------
+
+    #[test]
+    fn docs_example_every_5_minutes_parses() {
+        // Verbatim from documentation/.../tables/index.mdx.
+        assert!(parse("*/5 * * * *").is_ok());
+    }
+
+    #[test]
+    fn docs_example_hourly_parses() {
+        // Verbatim from documentation/.../tables/index.mdx.
+        assert!(parse("0 * * * *").is_ok());
+    }
+
+    // ---- Parsing: full 5-field surface --------------------------------------
+
+    #[test]
+    fn five_field_basic_patterns_parse() {
+        for expr in [
+            "* * * * *",          // every minute
+            "0 0 * * *",          // midnight daily
+            "30 2 * * *",         // 02:30 daily
+            "0 12 1 * *",         // noon on day 1 of every month
+            "0 9 * * 1-5",        // 09:00 on weekdays (numeric range)
+            "0 9 * * MON-FRI",    // 09:00 on weekdays (named range)
+            "*/15 * * * *",       // every 15 minutes (step)
+            "0,15,30,45 * * * *", // every quarter hour (list)
+            "0 0 1,15 * *",       // 1st & 15th at midnight (DOM list)
+            "0 0 * 1,7 *",        // Jan & Jul at midnight (month list)
+            "0 0 * 1-3 *",        // Jan-Mar at midnight (month range)
+            "59 23 31 12 *",      // last minute of the year
+        ] {
+            assert!(parse(expr).is_ok(), "expected `{expr}` to parse");
+        }
+    }
+
+    #[test]
+    fn invalid_patterns_reject() {
+        for expr in [
+            "",            // empty
+            "not a cron",  // garbage
+            "60 * * * *",  // minute out of range (0-59)
+            "* 24 * * *",  // hour out of range (0-23)
+            "* * 32 * *",  // DOM out of range (1-31)
+            "* * * 13 *",  // month out of range (1-12)
+            "* * * * 8",   // DOW out of range (0-7 / 0-6 with both Sun)
+            "* * *",       // too few fields
+            "*/0 * * * *", // zero step is nonsense
+        ] {
+            assert!(parse(expr).is_err(), "expected `{expr}` to fail to parse");
+        }
+    }
+
+    // ---- Parsing: 6- and 7-field shapes -------------------------------------
+
+    #[test]
+    fn six_field_with_seconds_parses() {
+        // 6-field (with seconds) was supported in v2 and remains valid in v3.
+        assert!(parse("0 */5 * * * *").is_ok());
+        assert!(parse("30 0 12 * * *").is_ok());
+    }
+
+    #[test]
+    fn seven_field_with_year_parses_in_v3() {
+        // Behavior change vs. croner v2: the 7-field pattern (seconds + year)
+        // was rejected by v2 and is now accepted by default in v3.
+        // We don't advertise this in docs, but we lock in the new parser
+        // behavior so a future regression is caught.
+        assert!(
+            parse("0 30 23 * * FRI 2026-2030").is_ok(),
+            "croner v3 default config should accept 7-field patterns with year",
+        );
+    }
+
+    // ---- Runtime: find_next_occurrence --------------------------------------
+
+    #[test]
+    fn next_occurrence_every_5_minutes() {
+        // From 12:01:00 the next */5 boundary is 12:05:00.
+        let cron = parse("*/5 * * * *").unwrap();
+        let now = at(2026, 5, 1, 12, 1, 0);
+        let next = cron.find_next_occurrence(&now, false).unwrap();
+        assert_eq!(next, at(2026, 5, 1, 12, 5, 0));
+    }
+
+    #[test]
+    fn next_occurrence_hourly_on_zero() {
+        // From 14:30:00 the next "0 * * * *" boundary is 15:00:00.
+        let cron = parse("0 * * * *").unwrap();
+        let now = at(2026, 5, 1, 14, 30, 0);
+        let next = cron.find_next_occurrence(&now, false).unwrap();
+        assert_eq!(next, at(2026, 5, 1, 15, 0, 0));
+    }
+
+    #[test]
+    fn next_occurrence_weekday_morning() {
+        // 0 9 * * MON-FRI from a Saturday should land on the following Monday.
+        let cron = parse("0 9 * * MON-FRI").unwrap();
+        // 2026-05-02 is a Saturday.
+        let saturday = at(2026, 5, 2, 12, 0, 0);
+        let next = cron.find_next_occurrence(&saturday, false).unwrap();
+        // Monday 2026-05-04 09:00:00 UTC.
+        assert_eq!(next, at(2026, 5, 4, 9, 0, 0));
+    }
+
+    #[test]
+    fn next_occurrence_inclusive_flag_returns_now_when_matching() {
+        // The `inclusive=true` flag: if `now` itself matches, return `now`.
+        // The scheduler currently passes `inclusive=false`, but we lock in
+        // both semantics so a flip in croner defaults would surface here.
+        let cron = parse("0 * * * *").unwrap();
+        let on_the_hour = at(2026, 5, 1, 14, 0, 0);
+        assert_eq!(cron.find_next_occurrence(&on_the_hour, true).unwrap(), on_the_hour);
+        // With `inclusive=false`, we should advance to the next hour.
+        assert_eq!(
+            cron.find_next_occurrence(&on_the_hour, false).unwrap(),
+            at(2026, 5, 1, 15, 0, 0),
+        );
+    }
+
+    #[test]
+    fn next_occurrence_advances_across_month_boundary() {
+        // "0 0 1 * *" from 31 Jan 2026 23:59:59 should jump to 1 Feb 2026 00:00.
+        let cron = parse("0 0 1 * *").unwrap();
+        let now = at(2026, 1, 31, 23, 59, 59);
+        let next = cron.find_next_occurrence(&now, false).unwrap();
+        assert_eq!(next, at(2026, 2, 1, 0, 0, 0));
+    }
+
+    #[test]
+    fn next_occurrence_advances_across_year_boundary() {
+        // From 31 Dec 2026 23:55, `*/10 * * * *` next fires at 1 Jan 2027 00:00.
+        let cron = parse("*/10 * * * *").unwrap();
+        let now = at(2026, 12, 31, 23, 55, 0);
+        let next = cron.find_next_occurrence(&now, false).unwrap();
+        assert_eq!(next, at(2027, 1, 1, 0, 0, 0));
+    }
 }

@@ -7,6 +7,7 @@ use clickhouse::Row;
 use serde::Deserialize;
 
 use crate::database::clickhouse::client::ClickhouseClient;
+use crate::database::clickhouse::types::ClickhouseHash;
 use crate::database::postgres::client::PostgresClient;
 
 use super::window::BlockChainWindow;
@@ -77,8 +78,8 @@ impl ReorgBlockHashPersistence {
             #[derive(Row, Deserialize)]
             struct ReorgBlockHashRow {
                 block_number: u64,
-                block_hash: String,
-                parent_hash: String,
+                block_hash: ClickhouseHash,
+                parent_hash: ClickhouseHash,
             }
 
             let query = format!(
@@ -95,13 +96,13 @@ impl ReorgBlockHashPersistence {
                 .context("Failed to load reorg_block_hashes from clickhouse")?;
 
             for row in rows {
-                let block_hash = B256::from_str(&row.block_hash).with_context(|| {
+                let block_hash = B256::from_str(row.block_hash.as_str()).with_context(|| {
                     format!(
                         "Failed to parse block_hash '{}' at block {}",
                         row.block_hash, row.block_number
                     )
                 })?;
-                let parent_hash = B256::from_str(&row.parent_hash).with_context(|| {
+                let parent_hash = B256::from_str(row.parent_hash.as_str()).with_context(|| {
                     format!(
                         "Failed to parse parent_hash '{}' at block {}",
                         row.parent_hash, row.block_number

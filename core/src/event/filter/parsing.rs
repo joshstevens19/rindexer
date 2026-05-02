@@ -175,23 +175,29 @@ fn parse_base_variable_name<'a>(input: &mut Input<'a>) -> ParserResult<(&'a str,
             // Purely numeric identifier
             (
                 digit1,
+                // winnow 1.0 caps `alt` at 10 alternatives — nest the 15
+                // delimiter checks into two groups so the trait still resolves.
                 peek(alt((
-                    // Peek ensures it's properly delimited for an LHS base
-                    literal('['),
-                    literal('.'),
-                    space1,
-                    eof,
-                    literal("=="),
-                    literal("!="),
-                    literal(">="),
-                    literal("<="),
-                    literal(">"),
-                    literal("<"),
-                    literal("+"),
-                    literal("-"),
-                    literal("*"),
-                    literal("/"),
-                    literal(")"),
+                    alt((
+                        // Peek ensures it's properly delimited for an LHS base
+                        literal('['),
+                        literal('.'),
+                        space1,
+                        eof,
+                        literal("=="),
+                        literal("!="),
+                        literal(">="),
+                        literal("<="),
+                    )),
+                    alt((
+                        literal(">"),
+                        literal("<"),
+                        literal("+"),
+                        literal("-"),
+                        literal("*"),
+                        literal("/"),
+                        literal(")"),
+                    )),
                 ))),
             )
                 .take(),

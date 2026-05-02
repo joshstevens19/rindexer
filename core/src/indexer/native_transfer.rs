@@ -863,6 +863,7 @@ mod tests {
             inner: recovered,
             block_hash: Some(block_hash),
             block_number: Some(block_number),
+            block_timestamp: None,
             transaction_index: Some(0),
             effective_gas_price: None,
         }));
