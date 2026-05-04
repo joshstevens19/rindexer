@@ -11,6 +11,7 @@
 - fix: ClickHouse hash serialization so String are stored as proper strings instead of corrupted scientific-notation values.
 - fix: native-transfer indexing no longer panics on trace batches containing only block entries (empty blocks).
 - fix: **Live-indexing heartbeat log replaced** — the previous `"No new blocks published in the last 5 minutes"` info log fired spuriously whenever the RPC provider returned a cached tip (every ~half block-time) and could not distinguish a healthy cache hit from a genuinely stuck RPC. It is replaced with a new tip-advance heartbeat that emits either `"Indexing alive - chain tip X"` (info) when the tip has advanced within the interval, or `"RPC tip has not advanced past block X in the last 5 minutes"` (warn) when the tip is genuinely stuck. Log-based alerts that grepped the old message must be updated to match the new warn text.
+- fix: use correct type sql type wrapper for strings and bytes
 
 ### Features
 -------------------------------------------------
