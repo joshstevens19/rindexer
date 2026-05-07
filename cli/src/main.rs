@@ -92,9 +92,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             load_env_from_project_path(&resolved_path);
             handle_codegen_command(resolved_path, subcommand).await
         }
-        Commands::Start { subcommand, path, yes, watch } => {
+        Commands::Start { subcommand, path, yes, watch, ignore_prune_warnings } => {
             let resolved_path = resolve_path(path).inspect_err(|e| print_error_message(e))?;
             load_env_from_project_path(&resolved_path);
+            // Set environment variable for prune warning check
+            // Default is to check (flag not present), flag skips the check
+            if *ignore_prune_warnings {
+                std::env::set_var("RINDEXER_IGNORE_PRUNE_WARNINGS", "1");
+            }
             start(resolved_path, subcommand, *yes, *watch).await
         }
         Commands::Delete { path } => {
