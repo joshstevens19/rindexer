@@ -1,11 +1,15 @@
 use anyhow::Result;
+use ethers::middleware::MiddlewareBuilder;
+use ethers::providers::{Http, Middleware, Provider};
+use ethers::signers::{LocalWallet, Signer};
+use ethers::types::TransactionRequest;
 use ethers::types::U256;
 use std::future::Future;
 use std::pin::Pin;
 use tracing::info;
 
-use crate::anvil_setup::ANVIL_DEPLOYER_ADDRESS;
-use crate::test_suite::TestContext;
+use crate::anvil_setup::{ANVIL_DEFAULT_PRIVATE_KEY, ANVIL_DEPLOYER_ADDRESS};
+use crate::test_suite::{ContractConfig, ContractDetail, EventConfig, PostgresConfig, TestContext};
 use crate::tests::helpers::{self, format_address, generate_test_address};
 use crate::tests::registry::{TestDefinition, TestModule};
 
@@ -13,12 +17,20 @@ pub struct PostgresE2ETests;
 
 impl TestModule for PostgresE2ETests {
     fn get_tests() -> Vec<TestDefinition> {
-        vec![TestDefinition::new(
-            "test_postgres_field_accuracy",
-            "Postgres: deploy+5 transfers, validate every field in DB matches chain state",
-            postgres_field_accuracy_test,
-        )
-        .with_timeout(240)]
+        vec![
+            TestDefinition::new(
+                "test_postgres_field_accuracy",
+                "Postgres: deploy+5 transfers, validate every field in DB matches chain state",
+                postgres_field_accuracy_test,
+            )
+            .with_timeout(240),
+            TestDefinition::new(
+                "test_postgres_indexed_string_topic_hash",
+                "Postgres: verify indexed string topics are stored as keccak hex strings",
+                postgres_indexed_string_topic_hash_test,
+            )
+            .with_timeout(240),
+        ]
     }
 }
 
@@ -251,4 +263,208 @@ fn postgres_field_accuracy_test(
         );
         Ok(())
     })
+}
+
+fn postgres_indexed_string_topic_hash_test(
+    context: &mut TestContext,
+) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
+    Box::pin(async move {
+        info!("Running Postgres Indexed String Topic Hash Test");
+
+        let (container_name, pg_port) = match crate::docker::start_postgres_container().await {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(crate::tests::test_runner::SkipTest(format!(
+                    "Docker not available: {}",
+                    e
+                ))
+                .into());
+            }
+        };
+        context.register_container(container_name.clone());
+        crate::docker::wait_for_postgres_ready(pg_port, 10).await?;
+
+        let contract_address = context.anvil.deploy_contract("MessageEmitter").await?;
+
+        let mut expected_rows = Vec::new();
+        for _ in 0..3 {
+            let tx_hash = send_emit_message(context, &contract_address).await?;
+            context.anvil.mine_block().await?;
+            let receipt = context.anvil.get_receipt(&tx_hash).await?;
+            expected_rows.push(receipt);
+        }
+
+        let end_block = context.anvil.get_block_number().await?;
+
+        let mut config = context.create_minimal_config();
+        config.name = "message_emitter_test".to_string();
+        config.storage.postgres = Some(PostgresConfig { enabled: true });
+        config.storage.csv.enabled = false;
+        config.contracts = vec![ContractConfig {
+            name: "MessageEmitter".to_string(),
+            details: vec![ContractDetail {
+                network: "anvil".to_string(),
+                address: contract_address.clone(),
+                start_block: "0".to_string(),
+                end_block: Some(end_block.to_string()),
+            }],
+            abi: Some("./abis/MessageEmitter.abi.json".to_string()),
+            reorg_safe_distance: None,
+            include_events: Some(vec![EventConfig { name: "MessageEmitted".to_string() }]),
+            tables: None,
+            streams: None,
+        }];
+
+        let mut r = crate::rindexer_client::RindexerInstance::new(
+            &context.rindexer_binary,
+            context.project_path.clone(),
+        );
+        for (k, v) in crate::docker::postgres_env_vars(pg_port) {
+            r = r.with_env(&k, &v);
+        }
+
+        helpers::copy_abis_to_project(&context.project_path)?;
+        let config_path = context.project_path.join("rindexer.yaml");
+        let yaml = serde_yaml::to_string(&config)?;
+        std::fs::write(&config_path, yaml)?;
+        r.start_indexer().await?;
+
+        context.rindexer = Some(r);
+        context.wait_for_sync_completion(60).await?;
+
+        let conn_str = format!(
+            "host=localhost port={} user=postgres password=postgres dbname=postgres",
+            pg_port
+        );
+        let (client, connection) =
+            tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
+        tokio::spawn(async move {
+            let _ = connection.await;
+        });
+
+        let rows = client
+            .query(
+                "SELECT contract_address, indexed_message, unindexed_message, \
+                 tx_hash, block_number::BIGINT, block_hash, log_index, network \
+                 FROM message_emitter_test_message_emitter.message_emitted \
+                 ORDER BY block_number ASC, log_index ASC",
+                &[],
+            )
+            .await?;
+
+        if rows.len() != expected_rows.len() {
+            return Err(anyhow::anyhow!(
+                "Expected {} rows in Postgres, got {}",
+                expected_rows.len(),
+                rows.len()
+            ));
+        }
+
+        let expected_topic_hash =
+            format!("0x{}", hex::encode(ethers::utils::keccak256("a message")));
+        for (i, (row, receipt)) in rows.iter().zip(expected_rows.iter()).enumerate() {
+            let stored_contract_address: String = row.get("contract_address");
+            let indexed_message: String = row.get("indexed_message");
+            let unindexed_message: String = row.get("unindexed_message");
+            let tx_hash: String = row.get("tx_hash");
+            let block_number: i64 = row.get("block_number");
+            let block_hash: String = row.get("block_hash");
+            let log_index: String = row.get("log_index");
+            let network: String = row.get("network");
+
+            if stored_contract_address.to_lowercase() != contract_address.to_lowercase() {
+                return Err(anyhow::anyhow!(
+                    "Row {}: wrong contract_address: {}",
+                    i,
+                    stored_contract_address
+                ));
+            }
+            if indexed_message != expected_topic_hash {
+                return Err(anyhow::anyhow!(
+                    "Row {}: indexed_message should be {}, got {}",
+                    i,
+                    expected_topic_hash,
+                    indexed_message
+                ));
+            }
+            if unindexed_message != "a message" {
+                return Err(anyhow::anyhow!(
+                    "Row {}: unindexed_message should be 'a message', got {}",
+                    i,
+                    unindexed_message
+                ));
+            }
+            if tx_hash != receipt.transaction_hash {
+                return Err(anyhow::anyhow!(
+                    "Row {}: tx_hash should be {}, got {}",
+                    i,
+                    receipt.transaction_hash,
+                    tx_hash
+                ));
+            }
+            if block_number != receipt.block_number as i64 {
+                return Err(anyhow::anyhow!(
+                    "Row {}: block_number should be {}, got {}",
+                    i,
+                    receipt.block_number,
+                    block_number
+                ));
+            }
+            if block_hash != receipt.block_hash {
+                return Err(anyhow::anyhow!(
+                    "Row {}: block_hash should be {}, got {}",
+                    i,
+                    receipt.block_hash,
+                    block_hash
+                ));
+            }
+            if log_index != receipt.log_index_start.to_string() {
+                return Err(anyhow::anyhow!(
+                    "Row {}: log_index should be {}, got {}",
+                    i,
+                    receipt.log_index_start,
+                    log_index
+                ));
+            }
+            if network != "anvil" {
+                return Err(anyhow::anyhow!(
+                    "Row {}: network should be 'anvil', got {}",
+                    i,
+                    network
+                ));
+            }
+        }
+
+        info!(
+            "Postgres Indexed String Topic Hash Test PASSED: {} rows, indexed string stored as keccak hex",
+            rows.len()
+        );
+        Ok(())
+    })
+}
+
+async fn send_emit_message(context: &TestContext, contract_address: &str) -> Result<String> {
+    let base_provider = Provider::<Http>::try_from(&context.anvil.rpc_url)?;
+    let chain_id = base_provider.get_chainid().await?.as_u64();
+
+    let wallet: LocalWallet = ANVIL_DEFAULT_PRIVATE_KEY.parse()?;
+    let wallet = wallet.with_chain_id(chain_id);
+    let signer_address = wallet.address();
+    let provider = base_provider.with_signer(wallet);
+
+    let contract_addr: ethers::types::Address = contract_address.parse()?;
+    let nonce = provider.get_transaction_count(signer_address, None).await?;
+    let tx = TransactionRequest {
+        from: Some(signer_address),
+        to: Some(contract_addr.into()),
+        data: Some(vec![0xa1, 0x21, 0xff, 0x51].into()),
+        gas: Some(100000u64.into()),
+        nonce: Some(nonce),
+        gas_price: Some(20000000000u128.into()),
+        value: None,
+        chain_id: None,
+    };
+
+    let pending = provider.send_transaction(tx, None).await?;
+    Ok(format!("{:?}", pending.tx_hash()).to_lowercase())
 }
