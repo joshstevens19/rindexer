@@ -1072,6 +1072,8 @@ async fn main() {
                     enabled: enable_graphql,
                     override_port: port,
                 },
+                cron_scheduler_handle: None,
+                watch: false,
             })
             .await;
 
@@ -1179,6 +1181,8 @@ async fn main() {
                     enabled: false,
                     override_port: None,
                 },
+                cron_scheduler_handle: None,
+                watch: false,
             })
             .await;
 
