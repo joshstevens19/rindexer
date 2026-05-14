@@ -501,12 +501,14 @@ impl AnvilInstance {
         }
     }
 
-    /// Deploy a test contract using forge. Returns the contract address.
-    pub async fn deploy_test_contract(&self) -> Result<String> {
-        info!("Deploying SimpleERC20 test contract...");
+    /// Deploy a contract from `contracts/{contract_name}.sol:{contract_name}` using forge.
+    /// Returns the deployed contract address.
+    pub async fn deploy_contract(&self, contract_name: &str) -> Result<String> {
+        info!("Deploying {} test contract...", contract_name);
 
         let e2e_tests_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let contract_path = e2e_tests_dir.join("contracts/SimpleERC20.sol:SimpleERC20");
+        let contract_path =
+            e2e_tests_dir.join(format!("contracts/{}.sol:{}", contract_name, contract_name));
         let output = std::process::Command::new("forge")
             .args([
                 "create",
@@ -537,8 +539,13 @@ impl AnvilInstance {
             .last()
             .ok_or_else(|| anyhow::anyhow!("Could not parse contract address"))?;
 
-        info!("Test contract deployed at: {}", address);
+        info!("{} deployed at: {}", contract_name, address);
         Ok(address.to_string())
+    }
+
+    /// Deploy the default ERC20 test contract using forge. Returns the contract address.
+    pub async fn deploy_test_contract(&self) -> Result<String> {
+        self.deploy_contract("SimpleERC20").await
     }
 
     /// Gracefully stop the Anvil process.

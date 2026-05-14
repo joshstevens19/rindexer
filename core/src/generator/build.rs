@@ -579,6 +579,7 @@ serde = {{ version = "1.0", features = ["derive"] }}
                                 override_port: port,
                             },
                             cron_scheduler_handle: None,
+                            watch: false,
                         })
                         .await;
 
@@ -601,4 +602,60 @@ serde = {{ version = "1.0", features = ["derive"] }}
 
     generate_rindexer_typings_and_handlers(&manifest_location)
         .map_err(GenerateRustProjectError::GenerateError)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generate_file_location_appends_rs_extension() {
+        let output = Path::new("/some/output");
+        let result = generate_file_location(output, "networks");
+        assert_eq!(result, PathBuf::from("/some/output/networks.rs"));
+    }
+
+    #[test]
+    fn generate_file_location_handles_nested_location() {
+        let output = Path::new("/some/output");
+        let result = generate_file_location(output, "my_indexer/events/transfer");
+        assert_eq!(result, PathBuf::from("/some/output/my_indexer/events/transfer.rs"));
+    }
+
+    #[test]
+    fn write_global_replaces_existing_file() {
+        let dir = tempfile::tempdir().expect("could not create temp dir");
+        let stale_path = dir.path().join("global_contracts.rs");
+        fs::write(&stale_path, "// stale content").expect("could not write stale file");
+        assert!(stale_path.exists());
+
+        write_global(dir.path(), &[], &[]).expect("write_global failed");
+
+        let content = fs::read_to_string(&stale_path).expect("global_contracts.rs was not created");
+        assert!(!content.contains("stale content"), "old file content should have been replaced");
+    }
+
+    #[test]
+    fn write_networks_creates_file_with_network_name() {
+        let dir = tempfile::tempdir().expect("could not create temp dir");
+        let network = Network {
+            name: "ethereum".to_string(),
+            chain_id: 1,
+            rpc: "https://eth.example.com".to_string(),
+            block_poll_frequency: None,
+            compute_units_per_second: None,
+            max_block_range: None,
+            get_logs_settings: None,
+            disable_logs_bloom_checks: None,
+            multicall3_address: None,
+            reth: None,
+            reorg_handling: None,
+        };
+
+        write_networks(dir.path(), &[network]).expect("write_networks failed");
+
+        let written = fs::read_to_string(dir.path().join("networks.rs"))
+            .expect("networks.rs was not created");
+        assert!(written.contains("ethereum"), "expected network name in generated file");
+    }
 }
