@@ -89,12 +89,19 @@ Options:
   -w, --watch
           Watch rindexer.yaml for changes and hot-reload (no-code projects only).
 
+  --ignore-prune-warnings
+          Skip pruned RPC detection warnings and proceed anyway.
+
   -h, --help
           Print help (see a summary with '-h')
 ```
 
 :::info
 The `--watch` flag must come **before** the subcommand: `rindexer start --watch all`, not `rindexer start all --watch`. See the [Hot Reload](/docs/start-building/hot-reload) documentation for details.
+:::
+
+:::info
+On startup, rindexer checks if each network's RPC can serve historical data from the configured `start_block`. If the RPC appears to be pruned (unable to serve historical blocks), indexing will fail with a helpful error message. Use `--ignore-prune-warnings` to bypass this check, or set the `RINDEXER_IGNORE_PRUNE_WARNINGS=1` environment variable.
 :::
 
 :::info
