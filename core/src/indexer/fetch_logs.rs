@@ -1343,7 +1343,11 @@ async fn live_indexing_stream(
                         } else {
                             let contract_address = current_filter.contract_addresses().await;
 
-                            let to_block = safe_block_number;
+                            let to_block = if let Some(max_block_range) = original_max_limit {
+                                (from_block + max_block_range).min(safe_block_number)
+                            } else {
+                                safe_block_number
+                            };
                             // The bloom-filter shortcut only applies when the
                             // single block we're about to fetch IS `latest_block`.
                             // With `reorg_safe_distance > 0` the processed block
@@ -1995,9 +1999,130 @@ mod tests {
     use crate::blockclock::BlockClock;
     use crate::event::RindexerEventFilter;
     use crate::provider::mock::MockChainProvider;
+    use crate::provider::ChainProvider;
+    use alloy::network::{AnyHeader, AnyRpcBlock, AnyRpcHeader, AnyTransactionReceipt};
     use alloy::primitives::Log as PrimitiveLog;
+    use alloy::primitives::{Address, Bytes, TxHash};
+    use alloy::rpc::types::trace::parity::LocalizedTransactionTrace;
+    use alloy::rpc::types::BlockTransactions;
     use alloy::rpc::types::Log;
+    use std::sync::{Arc, Mutex as StdMutex};
     use tokio::sync::mpsc;
+    use tokio_util::sync::CancellationToken;
+
+    #[derive(Debug)]
+    struct RecordingLiveProvider {
+        inner: MockChainProvider,
+        // Capture the exact `(from_block, to_block)` windows requested by the
+        // live loop so the test can assert against the RPC range calculation
+        // directly.
+        queried_ranges: Arc<StdMutex<Vec<(u64, u64)>>>,
+        cancel_token: CancellationToken,
+    }
+
+    impl RecordingLiveProvider {
+        fn new(
+            inner: MockChainProvider,
+            queried_ranges: Arc<StdMutex<Vec<(u64, u64)>>>,
+            cancel_token: CancellationToken,
+        ) -> Self {
+            Self { inner, queried_ranges, cancel_token }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ChainProvider for RecordingLiveProvider {
+        fn chain(&self) -> alloy_chains::Chain {
+            self.inner.chain()
+        }
+
+        fn max_block_range(&self) -> Option<U64> {
+            self.inner.max_block_range()
+        }
+
+        fn chain_state_notification(
+            &self,
+        ) -> Option<tokio::sync::broadcast::Sender<crate::notifications::ChainStateNotification>>
+        {
+            self.inner.chain_state_notification()
+        }
+
+        async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
+            self.inner.get_latest_block().await
+        }
+
+        async fn get_block_number(&self) -> Result<U64, ProviderError> {
+            self.inner.get_block_number().await
+        }
+
+        async fn get_logs(
+            &self,
+            event_filter: &RindexerEventFilter,
+        ) -> Result<Vec<Log>, ProviderError> {
+            self.queried_ranges
+                .lock()
+                .expect("recorded ranges mutex poisoned")
+                .push((event_filter.from_block().to::<u64>(), event_filter.to_block().to::<u64>()));
+            // Stop the live loop after the first recorded request. This keeps
+            // the test narrowly focused on the initial live window calculation
+            // instead of letting the polling loop continue indefinitely.
+            self.cancel_token.cancel();
+            self.inner.get_logs(event_filter).await
+        }
+
+        async fn get_block_by_number_batch(
+            &self,
+            block_numbers: &[U64],
+            include_txs: bool,
+        ) -> Result<Vec<AnyRpcBlock>, ProviderError> {
+            self.inner.get_block_by_number_batch(block_numbers, include_txs).await
+        }
+
+        async fn get_block_by_number_batch_with_size(
+            &self,
+            block_numbers: &[U64],
+            include_txs: bool,
+            rpc_batch_size: Option<usize>,
+        ) -> Result<Vec<AnyRpcBlock>, ProviderError> {
+            self.inner
+                .get_block_by_number_batch_with_size(block_numbers, include_txs, rpc_batch_size)
+                .await
+        }
+
+        async fn get_tx_receipts_batch(
+            &self,
+            hashes: &[TxHash],
+        ) -> Result<Vec<AnyTransactionReceipt>, ProviderError> {
+            self.inner.get_tx_receipts_batch(hashes).await
+        }
+
+        async fn trace_block(
+            &self,
+            block_number: U64,
+        ) -> Result<Vec<LocalizedTransactionTrace>, ProviderError> {
+            self.inner.trace_block(block_number).await
+        }
+
+        async fn debug_trace_block_by_number(
+            &self,
+            block_number: U64,
+        ) -> Result<Vec<LocalizedTransactionTrace>, ProviderError> {
+            self.inner.debug_trace_block_by_number(block_number).await
+        }
+
+        async fn eth_call(
+            &self,
+            to: Address,
+            data: Bytes,
+            block_number: u64,
+        ) -> Result<String, ProviderError> {
+            self.inner.eth_call(to, data, block_number).await
+        }
+
+        async fn eth_call_latest(&self, to: Address, data: Bytes) -> Result<String, ProviderError> {
+            self.inner.eth_call_latest(to, data).await
+        }
+    }
 
     #[test]
     fn to_block_no_limit() {
@@ -2064,6 +2189,18 @@ mod tests {
             log_index: None,
             removed: false,
         }
+    }
+
+    fn make_block(number: u64) -> AnyRpcBlock {
+        AnyRpcBlock::new(
+            alloy::rpc::types::Block::new(
+                AnyRpcHeader::from_sealed(
+                    AnyHeader { number, ..Default::default() }.seal(alloy::primitives::B256::ZERO),
+                ),
+                BlockTransactions::Full(vec![]),
+            )
+            .into(),
+        )
     }
 
     #[tokio::test]
@@ -2245,6 +2382,56 @@ mod tests {
         // next from = 201, next to = 201 + 50 = 251
         assert_eq!(result.next.from_block(), U64::from(201));
         assert_eq!(result.next.to_block(), U64::from(251));
+    }
+
+    #[tokio::test]
+    async fn live_indexing_respects_max_block_range() {
+        let cancel_token = CancellationToken::new();
+        let queried_ranges = Arc::new(StdMutex::new(Vec::new()));
+        let configured_max_block_range = U64::from(5);
+        let live_start_block = U64::from(1);
+        let provider = Arc::new(RecordingLiveProvider::new(
+            MockChainProvider::new(1)
+                .with_blocks(vec![make_block(100)])
+                .with_max_block_range(configured_max_block_range.to::<u64>()),
+            queried_ranges.clone(),
+            cancel_token.clone(),
+        ));
+        let block_clock = BlockClock::new(None, None, provider.clone());
+        let (tx, _rx) = mpsc::channel(4);
+
+        live_indexing_stream(
+            false,
+            block_clock,
+            provider,
+            &tx,
+            U64::ZERO,
+            &B256::ZERO,
+            &U64::ZERO,
+            RindexerEventFilter::empty_for_test()
+                .set_from_block(live_start_block)
+                .set_to_block(live_start_block),
+            "test",
+            "test",
+            true,
+            Some(configured_max_block_range),
+            cancel_token,
+            None,
+            None,
+            None,
+            &EventCallbackRegistry::default(),
+            None,
+        )
+        .await;
+
+        let queried_ranges = queried_ranges.lock().expect("should lock");
+        let expected_live_to_block = live_start_block + configured_max_block_range;
+        assert_eq!(queried_ranges.len(), 1, "expected exactly one live get_logs request");
+        assert_eq!(
+            queried_ranges[0],
+            (live_start_block.to::<u64>(), expected_live_to_block.to::<u64>()),
+            "live indexing should cap the first get_logs request to from_block + max_block_range",
+        );
     }
 
     // --- retry_with_block_range tests ---
