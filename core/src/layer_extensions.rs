@@ -1,4 +1,7 @@
-use crate::{adaptive_concurrency::ADAPTIVE_CONCURRENCY, rindexer_error, rindexer_info};
+use crate::{
+    adaptive_concurrency::{is_rate_limited_or_unavailable, ADAPTIVE_CONCURRENCY},
+    rindexer_error, rindexer_info,
+};
 use alloy::{
     rpc::json_rpc::{RequestPacket, ResponsePacket},
     transports::TransportError,
@@ -108,10 +111,11 @@ where
                         if error_str.contains("timeout") || error_str.contains("timed out") {
                             rindexer_error!("RPC TIMEOUT (free public nodes do this a lot consider a using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, error: {:?}",
                                            chain_id, method_name, duration, rpc_url, err);
-                        } else if error_str.contains("429") || error_str.contains("rate limit") {
-                            // Notify adaptive concurrency to scale down
+                        } else if is_rate_limited_or_unavailable(&error_str) {
+                            // Scale down + grow backoff. The pre-request wait above then
+                            // throttles every later call (incl. the retry layer's own retries).
                             ADAPTIVE_CONCURRENCY.record_rate_limit();
-                            rindexer_info!("RPC RATE LIMITED (free public nodes do this a lot consider using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, backoff: {}ms, batch_size: {}, rate_limit_count: {}",
+                            rindexer_info!("RPC RATE LIMITED / UNAVAILABLE (free public nodes do this a lot consider using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, backoff: {}ms, batch_size: {}, rate_limit_count: {}",
                                           chain_id, method_name, duration, rpc_url,
                                           ADAPTIVE_CONCURRENCY.current_backoff_ms(),
                                           ADAPTIVE_CONCURRENCY.current_batch_size(),

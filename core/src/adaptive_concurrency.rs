@@ -222,6 +222,30 @@ impl AdaptiveConcurrency {
     }
 }
 
+/// True if the error means the provider is rate-limiting us *or* is
+/// temporarily unavailable (HTTP 429/503, Alchemy `-32001`, etc.). Both warrant
+/// backing off rather than hammering the node. Matches specific tokens (e.g.
+/// `"http error 503"`, not bare `"503"`) so block numbers don't false-positive.
+pub fn is_rate_limited_or_unavailable(error_message: &str) -> bool {
+    let msg = error_message.to_lowercase();
+
+    // Classic rate-limit / throttle signals.
+    msg.contains("429")
+        || msg.contains("rate limit")
+        || msg.contains("rate-limit")
+        || msg.contains("rate exceeded")
+        || msg.contains("too many requests")
+        || msg.contains("quota")
+        || msg.contains("throttle")
+        // Temporary unavailability / overload — back off the same way.
+        || msg.contains("http error 503")
+        || msg.contains("status: 503")
+        || msg.contains("service unavailable")
+        || msg.contains("temporarily unavailable")
+        || msg.contains("unable to complete request")
+        || msg.contains("-32001")
+}
+
 /// Global adaptive concurrency controller for RPC batches. Used by the RPC
 /// layer, indexer, and parallel fetch workers.
 ///

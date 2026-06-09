@@ -1,4 +1,6 @@
-use crate::adaptive_concurrency::{AdaptiveConcurrency, ADAPTIVE_CONCURRENCY};
+use crate::adaptive_concurrency::{
+    is_rate_limited_or_unavailable, AdaptiveConcurrency, ADAPTIVE_CONCURRENCY,
+};
 use crate::blockclock::BlockClock;
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::event::callback_registry::{EventCallbackRegistry, TraceCallbackRegistry};
@@ -522,6 +524,29 @@ async fn fetch_historic_logs_stream<P: ChainProvider>(
             }
         }
         Err(err) => {
+            // Rate-limit / unavailability errors aren't block-range problems, so don't
+            // shrink: back off and retry the same range (bounded by the snapshot, so valid).
+            if classify_fetch_error(&err) == FetchErrorKind::RateLimit {
+                ADAPTIVE_CONCURRENCY.record_rate_limit();
+                let backoff_ms = ADAPTIVE_CONCURRENCY.current_backoff_ms();
+                warn!(
+                    "{} - {} - Provider rate-limited/unavailable fetching logs in range {} - {}; backing off {}ms before retrying: {:?}",
+                    info_log_name,
+                    IndexingEventProgressStatus::syncing_log(),
+                    from_block,
+                    to_block,
+                    backoff_ms,
+                    err
+                );
+                if backoff_ms > 0 {
+                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                }
+                return Some(ProcessHistoricLogsStreamResult {
+                    next: current_filter.set_from_block(from_block).set_to_block(to_block),
+                    max_block_range_limitation,
+                });
+            }
+
             // This is fundamental to the rindexer flow. We intentionally fetch a large block range
             // to get information on what the ideal block range should be.
             if let Some(retry_result) = retry_with_block_range(
@@ -559,6 +584,7 @@ async fn fetch_historic_logs_stream<P: ChainProvider>(
                 });
             }
 
+            ADAPTIVE_CONCURRENCY.record_error();
             let halved_to_block = halved_block_number(to_block, from_block);
 
             // Handle deserialization, networking, and other non-rpc related errors.
@@ -875,12 +901,11 @@ async fn parallel_worker(
     // goes out of scope here, keeping the cleanup path single-sourced.
 }
 
-/// Classification of a recoverable fetch error. Rate-limit errors warrant
-/// the aggressive -50% scale-down + backoff in `record_rate_limit`; other
-/// errors only warrant the gentler -10% in `record_error`. Raw HTTP 429s are
-/// intercepted at the RPC layer (`layer_extensions.rs`), but provider-specific
-/// throttle phrasings ("too many requests", "quota exceeded", etc.) can reach
-/// the worker as generic errors — this is the safety net for those.
+/// Classification of a recoverable fetch error. `RateLimit` triggers the
+/// aggressive -50% scale-down + backoff (`record_rate_limit`); `Other` only the
+/// gentler -10% (`record_error`). Backstops the RPC layer for throttle/
+/// availability errors that reach the app as JSON-RPC error responses (e.g.
+/// Alchemy `-32001`) rather than the HTTP `Err` path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FetchErrorKind {
     RateLimit,
@@ -888,14 +913,7 @@ enum FetchErrorKind {
 }
 
 fn classify_fetch_error(err: &ProviderError) -> FetchErrorKind {
-    let s = err.to_string().to_lowercase();
-    if s.contains("429")
-        || s.contains("rate limit")
-        || s.contains("rate-limit")
-        || s.contains("too many requests")
-        || s.contains("quota")
-        || s.contains("throttle")
-    {
+    if is_rate_limited_or_unavailable(&err.to_string()) {
         FetchErrorKind::RateLimit
     } else {
         FetchErrorKind::Other
@@ -1599,7 +1617,40 @@ async fn live_indexing_stream(
                                         }
                                     }
                                     Err(err) => {
-                                        if let Some(retry_result) = retry_with_block_range(
+                                        // Don't shrink the range for rate-limit/unavailability
+                                        // errors: at the head (from == to) halving to from+2 fetches
+                                        // ahead of head -> -32000 -> tight zero-delay loop. Back off
+                                        // instead.
+                                        if classify_fetch_error(&err) == FetchErrorKind::RateLimit {
+                                            ADAPTIVE_CONCURRENCY.record_rate_limit();
+                                            let backoff_ms =
+                                                ADAPTIVE_CONCURRENCY.current_backoff_ms();
+
+                                            warn!(
+                                                "{} - {} - Provider rate-limited/unavailable fetching logs in range {} - {}; backing off {}ms before retrying: {:?}",
+                                                info_log_name,
+                                                IndexingEventProgressStatus::live_log(),
+                                                from_block,
+                                                to_block,
+                                                backoff_ms,
+                                                err
+                                            );
+
+                                            if backoff_ms > 0 {
+                                                tokio::time::sleep(Duration::from_millis(
+                                                    backoff_ms,
+                                                ))
+                                                .await;
+                                            }
+
+                                            // Retry against the freshly-polled tip (from_block
+                                            // untouched, no blocks skipped). Must be None, not
+                                            // Some(to_block): with reorg_safe_distance > 0 a pinned
+                                            // value ratchets down each retry and, once below
+                                            // from_block, wedges live indexing (only reset on a
+                                            // successful send, which never happens here).
+                                            log_response_to_large_to_block = None;
+                                        } else if let Some(retry_result) = retry_with_block_range(
                                             info_log_name,
                                             &err,
                                             from_block,
@@ -1620,6 +1671,7 @@ async fn live_indexing_stream(
 
                                             log_response_to_large_to_block = Some(retry_result.to);
                                         } else {
+                                            ADAPTIVE_CONCURRENCY.record_error();
                                             let halved_to_block =
                                                 halved_block_number(to_block, from_block);
 
@@ -2344,6 +2396,14 @@ mod tests {
             "Too Many Requests",
             "monthly quota exceeded",
             "request throttled by upstream",
+            // Temporary-unavailability signals — treated the same as rate limits
+            // so we back off instead of hammering the node (see the Alchemy
+            // outage incident).
+            "HTTP error 503 with body: service unavailable",
+            "Service Unavailable",
+            "node temporarily unavailable",
+            r#"ErrorResp(ErrorPayload { code: -32001, message: "Unable to complete request at this time." })"#,
+            "Max retries exceeded HTTP error 503",
         ] {
             let err = ProviderError::CustomError(msg.to_string());
             assert_eq!(
@@ -2361,6 +2421,9 @@ mod tests {
             "response is too big",
             "error decoding response body",
             "connection reset",
+            // Block numbers containing "503" must not be mistaken for an HTTP
+            // 503 — we match "http error 503"/"status: 503", not a bare "503".
+            "invalid block range params: 50312000 - 50312500",
         ] {
             let err = ProviderError::CustomError(msg.to_string());
             assert_eq!(
