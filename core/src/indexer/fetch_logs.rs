@@ -1285,6 +1285,15 @@ async fn live_indexing_stream(
                         }
                     }
 
+                    // a shrunk to-block cap at or below last_seen can never be fetched
+                    // again, so keeping it would pin this loop in the no-new-blocks
+                    // branch forever; drop it as stale
+                    if log_response_to_large_to_block
+                        .is_some_and(|cap| cap <= last_seen_block_number)
+                    {
+                        log_response_to_large_to_block = None;
+                    }
+
                     let latest_block_number = log_response_to_large_to_block
                         .unwrap_or(U64::from(latest_block.header.number));
 
@@ -1390,6 +1399,9 @@ async fn live_indexing_stream(
                                 current_filter =
                                     current_filter.set_from_block(to_block + U64::from(1));
                                 last_seen_block_number = to_block;
+                                // the capped range completed without a fetch; clear it like
+                                // the successful get_logs path does
+                                log_response_to_large_to_block = None;
                             } else {
                                 current_filter = current_filter.set_to_block(to_block);
 
