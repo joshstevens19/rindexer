@@ -316,15 +316,25 @@ pub async fn update_progress_and_last_synced_task(
             generate_indexer_contract_schema_name(&config.indexer_name(), &config.contract_name());
         let table_name = generate_internal_event_table_name(&schema, &config.event_name());
         let network = &config.network_contract().network;
-        let query = format!(
-            "UPDATE rindexer_internal.{table_name} SET last_synced_block = {to_block} WHERE network = '{network}' AND {to_block} > last_synced_block;
-             UPDATE rindexer_internal.latest_block SET block = {latest} WHERE network = '{network}' AND {latest} > block;"
+        // run these as two separate auto-commit statements rather than one
+        // batch_execute. a multi-statement simple query runs in a single
+        // implicit transaction, holding the per-event cursor row lock and the
+        // shared latest_block row lock together. with every event stream
+        // doing this concurrently it deadlocks against anything acquiring
+        // those locks in a different order (observed in production against
+        // the index drop/recreate path which takes AccessExclusiveLock).
+        let cursor_query = format!(
+            "UPDATE rindexer_internal.{table_name} SET last_synced_block = {to_block} WHERE network = '{network}' AND {to_block} > last_synced_block"
         );
-
-        let result = postgres.batch_execute(&query).await;
-
-        if let Err(e) = result {
+        if let Err(e) = postgres.batch_execute(&cursor_query).await {
             error!("Error updating db last synced block: {:?}", e);
+        }
+
+        let latest_query = format!(
+            "UPDATE rindexer_internal.latest_block SET block = {latest} WHERE network = '{network}' AND {latest} > block"
+        );
+        if let Err(e) = postgres.batch_execute(&latest_query).await {
+            error!("Error updating db latest block: {:?}", e);
         }
     } else if let Some(clickhouse) = &config.clickhouse() {
         let schema =
