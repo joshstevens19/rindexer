@@ -109,6 +109,63 @@ pub static RPC_REQUESTS_IN_FLIGHT: Lazy<GaugeVec> = Lazy::new(|| {
     .expect("failed to register RPC_REQUESTS_IN_FLIGHT")
 });
 
+/// RPC errors by category (kind: rate_limited/timeout/connection/other), observed
+/// at the transport layer so it covers every method. `rate_limited` includes
+/// 429/503/`-32001`. Counts each attempt, so it rises with retry volume.
+/// Labels: network, method, kind.
+pub static RPC_ERRORS_TOTAL: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
+        "rindexer_rpc_errors_total",
+        "RPC errors by category, observed at the transport layer",
+        &["network", "method", "kind"]
+    )
+    .expect("failed to register RPC_ERRORS_TOTAL")
+});
+
+/// RPC calls that completed but took >= 10s. Labels: network, method.
+pub static RPC_SLOW_CALLS_TOTAL: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
+        "rindexer_rpc_slow_calls_total",
+        "RPC calls that completed but took >= 10 seconds",
+        &["network", "method"]
+    )
+    .expect("failed to register RPC_SLOW_CALLS_TOTAL")
+});
+
+/// Running total of adaptive-concurrency rate-limit/unavailability events (global).
+pub static RPC_RATE_LIMIT_EVENTS_TOTAL: Lazy<Gauge> = Lazy::new(|| {
+    register_gauge!(
+        "rindexer_rpc_rate_limit_events_total",
+        "Total adaptive-concurrency rate-limit/unavailability events"
+    )
+    .expect("failed to register RPC_RATE_LIMIT_EVENTS_TOTAL")
+});
+
+/// Adaptive backoff before each RPC request, ms (global). 0 healthy, ramps to
+/// 30000 during an incident — the clearest "provider degraded" signal.
+pub static RPC_ADAPTIVE_BACKOFF_MS: Lazy<Gauge> = Lazy::new(|| {
+    register_gauge!(
+        "rindexer_rpc_adaptive_backoff_ms",
+        "Current adaptive backoff applied before RPC requests, in milliseconds"
+    )
+    .expect("failed to register RPC_ADAPTIVE_BACKOFF_MS")
+});
+
+/// Current adaptive concurrency limit (global). Scales down on rate limits.
+pub static RPC_ADAPTIVE_CONCURRENCY: Lazy<Gauge> = Lazy::new(|| {
+    register_gauge!(
+        "rindexer_rpc_adaptive_concurrency",
+        "Current adaptive concurrency limit for RPC batches"
+    )
+    .expect("failed to register RPC_ADAPTIVE_CONCURRENCY")
+});
+
+/// Current adaptive RPC batch size (global). Scales down on rate limits.
+pub static RPC_ADAPTIVE_BATCH_SIZE: Lazy<Gauge> = Lazy::new(|| {
+    register_gauge!("rindexer_rpc_adaptive_batch_size", "Current adaptive RPC batch size")
+        .expect("failed to register RPC_ADAPTIVE_BATCH_SIZE")
+});
+
 // =============================================================================
 // Database Metrics
 // =============================================================================

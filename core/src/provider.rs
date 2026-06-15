@@ -1122,6 +1122,13 @@ pub enum RetryClientError {
     RethNodeStartError(String, String),
 }
 
+/// Max retries the alloy `RetryBackoffLayer` makes per request. Its backoff is
+/// effectively flat, so a huge cap turns an outage into a self-logging retry
+/// loop (an Alchemy 503 outage once produced 10k+ log lines in 25 min). Kept
+/// bounded; the `adaptive_concurrency` controller owns the real exponential
+/// backoff for sustained outages.
+const MAX_RPC_RATE_LIMIT_RETRIES: u32 = 10;
+
 #[allow(clippy::too_many_arguments)]
 pub async fn create_client(
     rpc_url: &str,
@@ -1137,8 +1144,11 @@ pub async fn create_client(
 
     let (client, provider) = if rpc_url.ends_with(".ipc") {
         let ipc = IpcConnect::new(rpc_url.to_string());
-        let retry_layer =
-            RetryBackoffLayer::new(5000, 1000, compute_units_per_second.unwrap_or(660));
+        let retry_layer = RetryBackoffLayer::new(
+            MAX_RPC_RATE_LIMIT_RETRIES,
+            1000,
+            compute_units_per_second.unwrap_or(660),
+        );
         let logging_layer = RpcLoggingLayer::new(chain_id, rpc_url.to_string());
 
         let rpc_client =
@@ -1165,8 +1175,11 @@ pub async fn create_client(
 
         let logging_layer = RpcLoggingLayer::new(chain_id, rpc_url.to_string());
         let http = Http::with_client(client_with_auth, rpc_url);
-        let retry_layer =
-            RetryBackoffLayer::new(5000, 1000, compute_units_per_second.unwrap_or(660));
+        let retry_layer = RetryBackoffLayer::new(
+            MAX_RPC_RATE_LIMIT_RETRIES,
+            1000,
+            compute_units_per_second.unwrap_or(660),
+        );
         let rpc_client =
             RpcClient::builder().layer(retry_layer).layer(logging_layer).transport(http, false);
         let provider =
