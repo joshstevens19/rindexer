@@ -153,7 +153,7 @@ use serde_json::{json, Value};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use crate::adaptive_concurrency::ADAPTIVE_CONCURRENCY;
+use crate::adaptive_concurrency::{is_rate_limited_or_unavailable, ADAPTIVE_CONCURRENCY};
 use crate::database::batch_operations::{
     BatchOperationAction, BatchOperationColumnBehavior, BatchOperationSqlType, BatchOperationType,
     DynamicColumnDefinition,
@@ -677,11 +677,7 @@ async fn prefetch_view_calls(
                         ADAPTIVE_CONCURRENCY.record_success();
                     }
                     Err(e) => {
-                        let err_str = e.to_string().to_lowercase();
-                        if err_str.contains("429")
-                            || err_str.contains("rate limit")
-                            || err_str.contains("too many")
-                        {
+                        if is_rate_limited_or_unavailable(&e.to_string()) {
                             ADAPTIVE_CONCURRENCY.record_rate_limit();
                         } else {
                             ADAPTIVE_CONCURRENCY.record_error();
@@ -889,11 +885,7 @@ async fn prefetch_static_calls_via_multicall(
                         ADAPTIVE_CONCURRENCY.record_success();
                     }
                     Err(e) => {
-                        let err_str = e.to_string().to_lowercase();
-                        if err_str.contains("429")
-                            || err_str.contains("rate limit")
-                            || err_str.contains("too many")
-                        {
+                        if is_rate_limited_or_unavailable(&e.to_string()) {
                             ADAPTIVE_CONCURRENCY.record_rate_limit();
                         } else {
                             ADAPTIVE_CONCURRENCY.record_error();
@@ -1327,11 +1319,7 @@ async fn prefetch_block_timestamps(
                         Some((network_clone, blocks))
                     }
                     Err(e) => {
-                        let err_str = e.to_string().to_lowercase();
-                        if err_str.contains("429")
-                            || err_str.contains("rate limit")
-                            || err_str.contains("too many")
-                        {
+                        if is_rate_limited_or_unavailable(&e.to_string()) {
                             ADAPTIVE_CONCURRENCY.record_rate_limit();
                         } else {
                             ADAPTIVE_CONCURRENCY.record_error();

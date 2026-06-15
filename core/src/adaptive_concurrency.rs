@@ -3,6 +3,7 @@
 //! This module provides centralized rate limiting and adaptive scaling for RPC requests.
 //! It's used by both the RPC layer (layer_extensions.rs) and the indexer (tables.rs).
 
+use crate::metrics::rpc as rpc_metrics;
 use once_cell::sync::Lazy;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -67,6 +68,17 @@ impl AdaptiveConcurrency {
     /// Get total rate limit count
     pub fn rate_limit_count(&self) -> u64 {
         self.rate_limit_count.load(Ordering::Relaxed)
+    }
+
+    /// Publish current controller state to Prometheus gauges. Called after every
+    /// state transition so alerts see backoff/scale-down in near real time.
+    fn publish_metrics(&self) {
+        rpc_metrics::set_adaptive_state(
+            self.current.load(Ordering::Relaxed),
+            self.batch_size.load(Ordering::Relaxed),
+            self.backoff_ms.load(Ordering::Relaxed),
+        );
+        rpc_metrics::set_rate_limit_events(self.rate_limit_count.load(Ordering::Relaxed));
     }
 
     /// Wait for the backoff delay if one is active.
@@ -144,6 +156,8 @@ impl AdaptiveConcurrency {
                 }
             }
         }
+
+        self.publish_metrics();
     }
 
     /// Record a rate limit error - scale down aggressively and increase backoff
@@ -198,6 +212,8 @@ impl AdaptiveConcurrency {
                 self.min, self.min_batch_size, new_backoff, count
             );
         }
+
+        self.publish_metrics();
     }
 
     /// Record a general error - scale down slightly
@@ -219,7 +235,33 @@ impl AdaptiveConcurrency {
                 );
             }
         }
+
+        self.publish_metrics();
     }
+}
+
+/// True if the error means the provider is rate-limiting us *or* is
+/// temporarily unavailable (HTTP 429/503, Alchemy `-32001`, etc.). Both warrant
+/// backing off rather than hammering the node. Matches specific tokens (e.g.
+/// `"http error 503"`, not bare `"503"`) so block numbers don't false-positive.
+pub fn is_rate_limited_or_unavailable(error_message: &str) -> bool {
+    let msg = error_message.to_lowercase();
+
+    // Classic rate-limit / throttle signals.
+    msg.contains("429")
+        || msg.contains("rate limit")
+        || msg.contains("rate-limit")
+        || msg.contains("rate exceeded")
+        || msg.contains("too many requests")
+        || msg.contains("quota")
+        || msg.contains("throttle")
+        // Temporary unavailability / overload — back off the same way.
+        || msg.contains("http error 503")
+        || msg.contains("status: 503")
+        || msg.contains("service unavailable")
+        || msg.contains("temporarily unavailable")
+        || msg.contains("unable to complete request")
+        || msg.contains("-32001")
 }
 
 /// Global adaptive concurrency controller for RPC batches. Used by the RPC

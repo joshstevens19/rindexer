@@ -1,8 +1,13 @@
-use crate::{adaptive_concurrency::ADAPTIVE_CONCURRENCY, rindexer_error, rindexer_info};
+use crate::{
+    adaptive_concurrency::{is_rate_limited_or_unavailable, ADAPTIVE_CONCURRENCY},
+    metrics::rpc as rpc_metrics,
+    rindexer_error, rindexer_info,
+};
 use alloy::{
     rpc::json_rpc::{RequestPacket, ResponsePacket},
     transports::TransportError,
 };
+use alloy_chains::Chain;
 use std::{
     future::Future,
     pin::Pin,
@@ -15,12 +20,14 @@ use tower::{Layer, Service};
 #[derive(Clone)]
 pub struct RpcLoggingLayer {
     chain_id: u64,
+    /// Chain name used as the `network` metric label (matches `provider.rs`).
+    network: String,
     rpc_url: String,
 }
 
 impl RpcLoggingLayer {
     pub fn new(chain_id: u64, rpc_url: String) -> Self {
-        Self { chain_id, rpc_url }
+        Self { chain_id, network: Chain::from(chain_id).to_string(), rpc_url }
     }
 }
 
@@ -28,7 +35,12 @@ impl<S> Layer<S> for RpcLoggingLayer {
     type Service = RpcLoggingService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        RpcLoggingService { inner, chain_id: self.chain_id, rpc_url: self.rpc_url.clone() }
+        RpcLoggingService {
+            inner,
+            chain_id: self.chain_id,
+            network: self.network.clone(),
+            rpc_url: self.rpc_url.clone(),
+        }
     }
 }
 
@@ -36,6 +48,7 @@ impl<S> Layer<S> for RpcLoggingLayer {
 pub struct RpcLoggingService<S> {
     inner: S,
     chain_id: u64,
+    network: String,
     rpc_url: String,
 }
 
@@ -55,6 +68,7 @@ where
     fn call(&mut self, req: RequestPacket) -> Self::Future {
         let start_time = Instant::now();
         let chain_id = self.chain_id;
+        let network = self.network.clone();
         let rpc_url = self.rpc_url.clone();
 
         let method_name = match &req {
@@ -87,6 +101,7 @@ where
                     let duration = start_time.elapsed();
 
                     if duration.as_secs() >= 10 {
+                        rpc_metrics::record_slow_call(&network, &method_name);
                         rindexer_info!(
                             "SLOW RPC call - chain_id: {}, method: {}, duration: {:?}, url: {}",
                             chain_id,
@@ -106,12 +121,23 @@ where
 
                     if !is_known_error {
                         if error_str.contains("timeout") || error_str.contains("timed out") {
+                            rpc_metrics::record_rpc_error_kind(
+                                &network,
+                                &method_name,
+                                rpc_metrics::error_kind::TIMEOUT,
+                            );
                             rindexer_error!("RPC TIMEOUT (free public nodes do this a lot consider a using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, error: {:?}",
                                            chain_id, method_name, duration, rpc_url, err);
-                        } else if error_str.contains("429") || error_str.contains("rate limit") {
-                            // Notify adaptive concurrency to scale down
+                        } else if is_rate_limited_or_unavailable(&error_str) {
+                            // Scale down + grow backoff. The pre-request wait above then
+                            // throttles every later call (incl. the retry layer's own retries).
                             ADAPTIVE_CONCURRENCY.record_rate_limit();
-                            rindexer_info!("RPC RATE LIMITED (free public nodes do this a lot consider using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, backoff: {}ms, batch_size: {}, rate_limit_count: {}",
+                            rpc_metrics::record_rpc_error_kind(
+                                &network,
+                                &method_name,
+                                rpc_metrics::error_kind::RATE_LIMITED,
+                            );
+                            rindexer_info!("RPC RATE LIMITED / UNAVAILABLE (free public nodes do this a lot consider using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, backoff: {}ms, batch_size: {}, rate_limit_count: {}",
                                           chain_id, method_name, duration, rpc_url,
                                           ADAPTIVE_CONCURRENCY.current_backoff_ms(),
                                           ADAPTIVE_CONCURRENCY.current_batch_size(),
@@ -120,9 +146,19 @@ where
                             || error_str.contains("network")
                             || error_str.contains("sending request")
                         {
+                            rpc_metrics::record_rpc_error_kind(
+                                &network,
+                                &method_name,
+                                rpc_metrics::error_kind::CONNECTION,
+                            );
                             rindexer_error!("RPC CONNECTION ERROR (free public nodes do this a lot consider a using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, error: {:?}",
                                            chain_id, method_name, duration, rpc_url, err);
                         } else {
+                            rpc_metrics::record_rpc_error_kind(
+                                &network,
+                                &method_name,
+                                rpc_metrics::error_kind::OTHER,
+                            );
                             rindexer_error!("RPC ERROR (free public nodes do this a lot consider a using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, error: {:?}",
                                            chain_id, method_name, duration, rpc_url, err);
                         }
