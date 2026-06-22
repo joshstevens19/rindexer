@@ -23,6 +23,19 @@ fn ch_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('\'', "\\'")
 }
 
+fn serialize_bytea_array<'a>(
+    values: impl IntoIterator<Item = &'a [u8]>,
+    ty: &PgType,
+    out: &mut BytesMut,
+) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
+    let values: Vec<&[u8]> = values.into_iter().collect();
+    if values.is_empty() {
+        Ok(IsNull::Yes)
+    } else {
+        values.to_sql(ty, out)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum EthereumSqlTypeWrapper {
     // Boolean
@@ -858,16 +871,9 @@ impl ToSql for EthereumSqlTypeWrapper {
                 }
             }
             EthereumSqlTypeWrapper::VecU256Bytes(values) => {
-                if values.is_empty() {
-                    Ok(IsNull::Yes)
-                } else {
-                    for value in values {
-                        let bytes: [u8; 32] = value.to_be_bytes();
-                        let bytes = Bytes::from(bytes);
-                        out.extend_from_slice(&bytes);
-                    }
-                    Ok(IsNull::No)
-                }
+                let bytes: Vec<[u8; 32]> =
+                    values.iter().map(|value| value.to_be_bytes::<32>()).collect();
+                serialize_bytea_array(bytes.iter().map(|value| value.as_slice()), ty, out)
             }
             EthereumSqlTypeWrapper::VecU256Numeric(values) => {
                 Self::serialize_numeric_u256_array(values, out, |v| (*v, false))
@@ -917,16 +923,9 @@ impl ToSql for EthereumSqlTypeWrapper {
                 }
             }
             EthereumSqlTypeWrapper::VecI256Bytes(values) => {
-                if values.is_empty() {
-                    Ok(IsNull::Yes)
-                } else {
-                    for value in values {
-                        let bytes: [u8; 32] = value.to_be_bytes();
-                        let bytes = Bytes::from(bytes);
-                        out.extend_from_slice(&bytes);
-                    }
-                    Ok(IsNull::No)
-                }
+                let bytes: Vec<[u8; 32]> =
+                    values.iter().map(|value| value.to_be_bytes::<32>()).collect();
+                serialize_bytea_array(bytes.iter().map(|value| value.as_slice()), ty, out)
             }
             EthereumSqlTypeWrapper::U512(value) => {
                 let value = value.to_string();
@@ -989,15 +988,7 @@ impl ToSql for EthereumSqlTypeWrapper {
                 }
             }
             EthereumSqlTypeWrapper::VecB256Bytes(values) => {
-                if values.is_empty() {
-                    Ok(IsNull::Yes)
-                } else {
-                    for value in values {
-                        let bytes = Bytes::from(value.0);
-                        out.extend_from_slice(&bytes);
-                    }
-                    Ok(IsNull::No)
-                }
+                serialize_bytea_array(values.iter().map(B256::as_slice), ty, out)
             }
             EthereumSqlTypeWrapper::B512(value) => {
                 let hex = format!("{value:?}");
@@ -1047,15 +1038,7 @@ impl ToSql for EthereumSqlTypeWrapper {
                 }
             }
             EthereumSqlTypeWrapper::VecAddressBytes(values) => {
-                if values.is_empty() {
-                    Ok(IsNull::Yes)
-                } else {
-                    for value in values {
-                        let bytes = Bytes::from(value.0);
-                        out.extend_from_slice(&bytes);
-                    }
-                    Ok(IsNull::No)
-                }
+                serialize_bytea_array(values.iter().map(|value| value.0.as_slice()), ty, out)
             }
             EthereumSqlTypeWrapper::Bool(value) => bool::to_sql(value, ty, out),
             EthereumSqlTypeWrapper::VecBool(values) => {
@@ -1117,14 +1100,7 @@ impl ToSql for EthereumSqlTypeWrapper {
                 Ok(IsNull::No)
             }
             EthereumSqlTypeWrapper::VecBytes(values) => {
-                if values.is_empty() {
-                    Ok(IsNull::Yes)
-                } else {
-                    for value in values {
-                        out.extend_from_slice(value);
-                    }
-                    Ok(IsNull::No)
-                }
+                serialize_bytea_array(values.iter().map(|value| value.as_ref()), ty, out)
             }
             EthereumSqlTypeWrapper::U32(value) => {
                 let int_value: i32 = *value as i32;
