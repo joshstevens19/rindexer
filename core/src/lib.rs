@@ -71,7 +71,9 @@ pub use events::{RindexerEvent, RindexerEventStream};
 // export 3rd party dependencies
 pub use async_trait::async_trait;
 pub use colored::Colorize as RindexerColorize;
-pub use database::sql_type_wrapper::EthereumSqlTypeWrapper;
+pub use database::sql_type_wrapper::{
+    solidity_type_to_ethereum_sql_type_wrapper, EthereumSqlTypeWrapper,
+};
 pub use futures::FutureExt;
 pub use indexer::no_code::resolve_table_column_types;
 pub use lazy_static::lazy_static;

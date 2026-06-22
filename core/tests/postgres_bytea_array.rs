@@ -4,7 +4,7 @@
 //!   cargo test -p rindexer --test postgres_bytea_array
 
 use alloy::primitives::Bytes;
-use rindexer::EthereumSqlTypeWrapper;
+use rindexer::{EthereumSqlTypeWrapper, PgType, solidity_type_to_ethereum_sql_type_wrapper};
 use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres::Postgres;
 
@@ -33,10 +33,17 @@ async fn vec_bytes_inserts_into_postgres_bytea_array() {
 
     let first = vec![1u8; 32];
     let second = vec![2u8; 32];
-    let ids = EthereumSqlTypeWrapper::VecBytes(vec![
-        Bytes::copy_from_slice(&first),
-        Bytes::copy_from_slice(&second),
-    ]);
+    let mut mapped_ids = match solidity_type_to_ethereum_sql_type_wrapper("bytes32[]")
+        .expect("bytes32[] should map to a SQL wrapper")
+    {
+        EthereumSqlTypeWrapper::VecBytes(values) => values,
+        other => panic!("bytes32[] should map to VecBytes, got {other:?}"),
+    };
+    mapped_ids.push(Bytes::copy_from_slice(&first));
+    mapped_ids.push(Bytes::copy_from_slice(&second));
+
+    let ids = EthereumSqlTypeWrapper::VecBytes(mapped_ids);
+    assert_eq!(ids.to_type(), PgType::BYTEA_ARRAY);
 
     client
         .execute("INSERT INTO bytea_array_roundtrip (ids) VALUES ($1)", &[&ids])
