@@ -226,6 +226,19 @@ struct ReversalSnapshot {
     set_clauses: Vec<String>,
 }
 
+/// Quote a SQL identifier for Postgres (double quotes), escaping any embedded
+/// quotes. Required because user-defined event/derived columns can collide with
+/// SQL reserved words (e.g. `to`, `from`).
+fn quote_pg_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// Quote a SQL identifier for ClickHouse (backticks), escaping any embedded
+/// backticks. Mirrors `quote_pg_ident` for the ClickHouse backend.
+fn quote_ch_ident(name: &str) -> String {
+    format!("`{}`", name.replace('`', "\\`"))
+}
+
 impl ReorgTask {
     /// Returns ` AND network = '<network>'` when not cross-chain, empty string otherwise.
     fn network_filter(&self, cross_chain: bool) -> String {
@@ -250,7 +263,10 @@ impl ReorgTask {
 
         for dt in &self.derived_tables {
             for op in &dt.rollback_ops {
-                let mut agg_columns: Vec<String> = Vec::new();
+                // (is_counter, source event column) per reversible column. The
+                // SELECT aggregate is assembled per-backend so each can quote
+                // identifiers with its own convention.
+                let mut agg_specs: Vec<(bool, String)> = Vec::new();
                 let mut set_clauses: Vec<String> = Vec::new();
 
                 for col in &op.columns {
@@ -264,12 +280,7 @@ impl ReorgTask {
                         continue;
                     };
 
-                    let agg_expr = if col.action.is_counter_action() {
-                        format!("COUNT(*) AS {}_agg", col.event_column)
-                    } else {
-                        format!("SUM({}) AS {}_agg", col.event_column, col.event_column)
-                    };
-                    agg_columns.push(agg_expr);
+                    agg_specs.push((col.action.is_counter_action(), col.event_column.clone()));
 
                     let op_symbol = match reversed {
                         SetAction::Add | SetAction::Increment => "+",
@@ -280,17 +291,19 @@ impl ReorgTask {
                             col.derived_column,
                         ),
                     };
+                    // Aggregate aliases (`<col>_agg`) are synthesized names kept
+                    // unquoted so the ClickHouse set-clause token rewriter can parse them.
                     set_clauses.push(format!(
                         "{} = dt.{} {} snap.{}_agg",
                         col.derived_column, col.derived_column, op_symbol, col.event_column
                     ));
                 }
 
-                if set_clauses.is_empty() || agg_columns.is_empty() {
+                if set_clauses.is_empty() || agg_specs.is_empty() {
                     continue;
                 }
 
-                let group_cols: Vec<&str> =
+                let where_ev_cols: Vec<&str> =
                     op.where_columns.iter().map(|(_, ev_col)| ev_col.as_str()).collect();
 
                 let network_filter = self.network_filter(dt.cross_chain);
@@ -310,23 +323,44 @@ impl ReorgTask {
                 );
                 snap_idx += 1;
 
-                // Build the SELECT portion independently so PG and CH can wrap it
-                // in their own CREATE TABLE syntax without fragile string stripping.
-                let select_sql = format!(
-                    "SELECT {}, {} FROM {} WHERE block_number >= {} AND block_number <= {}{}{} GROUP BY {}",
-                    group_cols.join(", "),
-                    agg_columns.join(", "),
-                    op.event_table,
-                    self.fork_point,
-                    self.detection_point,
-                    network_filter,
-                    condition_filter,
-                    group_cols.join(", "),
-                );
+                // Build the SELECT per-backend. Group/where and aggregate-source
+                // columns are user-controlled identifiers that may collide with SQL
+                // reserved words (e.g. `to`, `from`), so each backend quotes them with
+                // its own convention (Postgres double quotes, ClickHouse backticks).
+                let build_select = |quote: &dyn Fn(&str) -> String| {
+                    let group =
+                        where_ev_cols.iter().map(|c| quote(c)).collect::<Vec<_>>().join(", ");
+                    let aggs = agg_specs
+                        .iter()
+                        .map(|(is_counter, ev)| {
+                            if *is_counter {
+                                format!("COUNT(*) AS {}_agg", ev)
+                            } else {
+                                format!("SUM({}) AS {}_agg", quote(ev), ev)
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!(
+                        "SELECT {}, {} FROM {} WHERE block_number >= {} AND block_number <= {}{}{} GROUP BY {}",
+                        group,
+                        aggs,
+                        op.event_table,
+                        self.fork_point,
+                        self.detection_point,
+                        network_filter,
+                        condition_filter,
+                        group,
+                    )
+                };
 
                 if let Some(pg) = pg {
                     let pg_temp = format!("{}_pg", temp_base);
-                    let pg_create = format!("CREATE TEMP TABLE {} AS {}", pg_temp, select_sql);
+                    let pg_create = format!(
+                        "CREATE TEMP TABLE {} AS {}",
+                        pg_temp,
+                        build_select(&quote_pg_ident)
+                    );
                     pg.batch_execute(&pg_create).await.with_context(|| {
                         format!(
                             "Failed to create PG reorg reversal snapshot for {}",
@@ -352,13 +386,13 @@ impl ReorgTask {
                     // aggregates via joinGet(). ClickHouse mutations don't
                     // support correlated subqueries the way Postgres does, so
                     // we cannot use `(SELECT ... WHERE snap.k = dt.k LIMIT 1)`.
-                    let ch_snap_keys: Vec<&str> =
-                        op.where_columns.iter().map(|(_, ev_col)| ev_col.as_str()).collect();
+                    let ch_snap_keys: Vec<String> =
+                        where_ev_cols.iter().map(|ev_col| quote_ch_ident(ev_col)).collect();
                     let ch_create = format!(
                         "CREATE TABLE IF NOT EXISTS {} ENGINE = Join(ANY, LEFT, {}) AS {}",
                         ch_temp,
                         ch_snap_keys.join(", "),
-                        select_sql,
+                        build_select(&quote_ch_ident),
                     );
                     ch.execute(&ch_create).await.with_context(|| {
                         format!(
@@ -393,7 +427,9 @@ impl ReorgTask {
             let where_join: Vec<String> = snap
                 .where_columns
                 .iter()
-                .map(|(dt_col, ev_col)| format!("dt.{} = snap.{}", dt_col, ev_col))
+                .map(|(dt_col, ev_col)| {
+                    format!("dt.{} = snap.{}", quote_pg_ident(dt_col), quote_pg_ident(ev_col))
+                })
                 .collect();
 
             let network_join = if snap.cross_chain {
@@ -433,8 +469,11 @@ impl ReorgTask {
                     // ClickHouse ALTER TABLE ... UPDATE with per-row aggregate lookups
                     // against a Join-engine snapshot table. joinGet() is the mutation-
                     // safe equivalent of PG's correlated subquery.
-                    let dt_keys: Vec<&str> =
-                        snap.where_columns.iter().map(|(dt_col, _)| dt_col.as_str()).collect();
+                    let dt_keys: Vec<String> = snap
+                        .where_columns
+                        .iter()
+                        .map(|(dt_col, _)| quote_ch_ident(dt_col))
+                        .collect();
                     let join_get_keys = dt_keys.join(", ");
 
                     // Build CH set clauses by replacing known "snap.X_agg" tokens with
@@ -477,7 +516,12 @@ impl ReorgTask {
                         .where_columns
                         .iter()
                         .map(|(dt_col, ev_col)| {
-                            format!("{} IN (SELECT {} FROM {})", dt_col, ev_col, snap.temp_table)
+                            format!(
+                                "{} IN (SELECT {} FROM {})",
+                                quote_ch_ident(dt_col),
+                                quote_ch_ident(ev_col),
+                                snap.temp_table
+                            )
                         })
                         .collect();
                     let ch_scope = if ch_exists_filter.is_empty() {

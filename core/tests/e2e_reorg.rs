@@ -2155,6 +2155,116 @@ async fn test_reorg_reversal_add() {
 }
 
 // ---------------------------------------------------------------------------
+// Test: Reversal works when the grouping/where column is a SQL reserved word
+// (e.g. `to` from an ERC20 Transfer). Regression for unquoted identifiers in
+// the reorg reversal SQL producing `syntax error at or near "to"`.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_reorg_reversal_reserved_word_column() {
+    let env = TestEnv::new().await;
+    let pg = env.pg_client().await;
+    env.setup_base_tables(&pg).await;
+
+    // Event table grows a `to` column — a Postgres reserved word — mirroring an
+    // ERC20 Transfer recipient used as the aggregation key.
+    pg.batch_execute("ALTER TABLE test_schema.ping_pong_ping ADD COLUMN \"to\" CHAR(42);")
+        .await
+        .unwrap();
+
+    // Derived table keyed on the recipient.
+    pg.batch_execute(
+        "CREATE TABLE IF NOT EXISTS test_schema.holder_balances (
+             network VARCHAR(50) NOT NULL,
+             holder CHAR(42) NOT NULL,
+             total_received NUMERIC NOT NULL DEFAULT 0,
+             rindexer_block_number BIGINT NOT NULL,
+             PRIMARY KEY (network, holder)
+         );",
+    )
+    .await
+    .unwrap();
+
+    let (contract, _) = deploy_ping_pong(&env.http, &env.rpc_url, env.deployer).await;
+    let block1 = send_ping(&env.http, &env.rpc_url, env.deployer, contract, 1).await;
+    let block2 = send_ping(&env.http, &env.rpc_url, env.deployer, contract, 2).await;
+    let block3 = send_ping(&env.http, &env.rpc_url, env.deployer, contract, 3).await;
+
+    let network = "dev";
+    let holder = format!("{:#x}", env.deployer);
+    let zero_tx = "0x0000000000000000000000000000000000000000000000000000000000000000";
+
+    // +100, +50, +30 across blocks 1..3, all to the same recipient.
+    for (amount, block) in [(100u64, block1), (50, block2), (30, block3)] {
+        env.insert_event(&pg, network, amount, block, zero_tx).await;
+    }
+    pg.batch_execute(&format!("UPDATE test_schema.ping_pong_ping SET \"to\" = '{}';", holder))
+        .await
+        .unwrap();
+    env.insert_block_hashes(&pg, network, block1, block3).await;
+
+    // Derived state: total_received = 100 + 50 + 30 = 180.
+    pg.execute(
+        "INSERT INTO test_schema.holder_balances (network, holder, total_received, rindexer_block_number) \
+         VALUES ($1, $2, $3, $4)",
+        &[&network, &holder.as_str(), &rust_decimal::Decimal::from(180u64), &(block3 as i64)],
+    )
+    .await
+    .unwrap();
+
+    trigger_reorg(&env.http, &env.rpc_url, 2).await; // invalidates block2, block3
+
+    let task = ReorgTask {
+        network: network.to_string(),
+        fork_point: block2,
+        detection_point: block3,
+        event_tables: vec![EventTableInfo::try_new(
+            "test_schema".to_string(),
+            "ping_pong_ping".to_string(),
+            "test_schema_ping".to_string(),
+            "test_indexer".to_string(),
+            "PingPong".to_string(),
+            "Ping".to_string(),
+        )
+        .unwrap()],
+        derived_tables: vec![DerivedTableInfo {
+            full_table_name: "test_schema.holder_balances".to_string(),
+            cross_chain: false,
+            rollback_ops: vec![DerivedTableRollbackOp {
+                event_table: "test_schema.ping_pong_ping".to_string(),
+                where_columns: vec![("holder".to_string(), "to".to_string())],
+                columns: vec![DerivedColumnRollback {
+                    derived_column: "total_received".to_string(),
+                    event_column: "id".to_string(),
+                    action: SetAction::Add,
+                }],
+                condition: None,
+            }],
+            journal_columns: vec![],
+        }],
+        canonical_blocks: vec![],
+    };
+
+    let rindexer_pg = env.rindexer_pg().await;
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
+
+    task.execute(&mut task_window, Some(&rindexer_pg), None, None)
+        .await
+        .expect("reserved-word reversal reorg task failed");
+
+    // 180 - (50 + 30) = 100 after reversing blocks 2 and 3.
+    let total: rust_decimal::Decimal = pg
+        .query_one(
+            "SELECT total_received FROM test_schema.holder_balances WHERE network = $1 AND holder = $2",
+            &[&network, &holder.as_str()],
+        )
+        .await
+        .expect("holder row should still exist after reversal")
+        .get(0);
+    assert_eq!(total, rust_decimal::Decimal::from(100u64), "total should be 180 - 80 = 100");
+}
+
+// ---------------------------------------------------------------------------
 // Test: Subtract action is reversed (added back) during reorg
 // ---------------------------------------------------------------------------
 
