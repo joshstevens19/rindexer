@@ -8,10 +8,75 @@ use futures::pin_mut;
 use rindexer::{EthereumSqlTypeWrapper, PgType};
 use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres::Postgres;
-use tokio_postgres::{binary_copy::BinaryCopyInWriter, types::ToSql, Client};
+use tokio_postgres::{binary_copy::BinaryCopyInWriter, types::ToSql};
 
 #[tokio::test]
-async fn bytea_array_wrappers_insert_and_copy_into_postgres_bytea_array() {
+async fn vec_bytes_insert_and_copy_into_postgres_bytea_array() {
+    assert_bytea_array_roundtrip(
+        "VecBytes",
+        EthereumSqlTypeWrapper::VecBytes(vec![
+            Bytes::copy_from_slice(&[1u8; 32]),
+            Bytes::copy_from_slice(&[2u8; 32]),
+        ]),
+        vec![vec![1u8; 32], vec![2u8; 32]],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn vec_address_bytes_insert_and_copy_into_postgres_bytea_array() {
+    assert_bytea_array_roundtrip(
+        "VecAddressBytes",
+        EthereumSqlTypeWrapper::VecAddressBytes(vec![
+            Address::from([3u8; 20]),
+            Address::from([4u8; 20]),
+        ]),
+        vec![vec![3u8; 20], vec![4u8; 20]],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn vec_b256_bytes_insert_and_copy_into_postgres_bytea_array() {
+    assert_bytea_array_roundtrip(
+        "VecB256Bytes",
+        EthereumSqlTypeWrapper::VecB256Bytes(vec![B256::from([5u8; 32]), B256::from([6u8; 32])]),
+        vec![vec![5u8; 32], vec![6u8; 32]],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn vec_u256_bytes_insert_and_copy_into_postgres_bytea_array() {
+    let values = vec![U256::from(42u64), U256::from(99u64)];
+    let expected_ids = values.iter().map(|value| value.to_be_bytes::<32>().to_vec()).collect();
+
+    assert_bytea_array_roundtrip(
+        "VecU256Bytes",
+        EthereumSqlTypeWrapper::VecU256Bytes(values),
+        expected_ids,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn vec_i256_bytes_insert_and_copy_into_postgres_bytea_array() {
+    let values = vec![I256::try_from(42i64).unwrap(), I256::try_from(-99i64).unwrap()];
+    let expected_ids = values.iter().map(|value| value.to_be_bytes::<32>().to_vec()).collect();
+
+    assert_bytea_array_roundtrip(
+        "VecI256Bytes",
+        EthereumSqlTypeWrapper::VecI256Bytes(values),
+        expected_ids,
+    )
+    .await;
+}
+
+async fn assert_bytea_array_roundtrip(
+    name: &str,
+    wrapper: EthereumSqlTypeWrapper,
+    expected_ids: Vec<Vec<u8>>,
+) {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     let pg_container = Postgres::default().start().await.expect("failed to start postgres");
@@ -28,77 +93,18 @@ async fn bytea_array_wrappers_insert_and_copy_into_postgres_bytea_array() {
         }
     });
 
+    assert_eq!(wrapper.to_type(), PgType::BYTEA_ARRAY, "{name}");
+
     client
         .batch_execute(
             "CREATE TABLE bytea_array_insert_roundtrip (ids BYTEA[] NOT NULL);
              CREATE TABLE bytea_array_copy_roundtrip (ids BYTEA[] NOT NULL);",
         )
         .await
-        .expect("failed to create test tables");
-
-    let u256_values = vec![U256::from(42u64), U256::from(99u64)];
-    let i256_values = vec![I256::try_from(42i64).unwrap(), I256::try_from(-99i64).unwrap()];
-
-    let cases = vec![
-        (
-            "VecBytes",
-            EthereumSqlTypeWrapper::VecBytes(vec![
-                Bytes::copy_from_slice(&[1u8; 32]),
-                Bytes::copy_from_slice(&[2u8; 32]),
-            ]),
-            vec![vec![1u8; 32], vec![2u8; 32]],
-        ),
-        (
-            "VecAddressBytes",
-            EthereumSqlTypeWrapper::VecAddressBytes(vec![
-                Address::from([3u8; 20]),
-                Address::from([4u8; 20]),
-            ]),
-            vec![vec![3u8; 20], vec![4u8; 20]],
-        ),
-        (
-            "VecB256Bytes",
-            EthereumSqlTypeWrapper::VecB256Bytes(vec![
-                B256::from([5u8; 32]),
-                B256::from([6u8; 32]),
-            ]),
-            vec![vec![5u8; 32], vec![6u8; 32]],
-        ),
-        (
-            "VecU256Bytes",
-            EthereumSqlTypeWrapper::VecU256Bytes(u256_values.clone()),
-            u256_values.iter().map(|value| value.to_be_bytes::<32>().to_vec()).collect(),
-        ),
-        (
-            "VecI256Bytes",
-            EthereumSqlTypeWrapper::VecI256Bytes(i256_values.clone()),
-            i256_values.iter().map(|value| value.to_be_bytes::<32>().to_vec()).collect(),
-        ),
-    ];
-
-    for (name, wrapper, expected_ids) in cases {
-        assert_bytea_array_roundtrip(&client, name, &wrapper, expected_ids).await;
-    }
-}
-
-async fn assert_bytea_array_roundtrip(
-    client: &Client,
-    name: &str,
-    wrapper: &EthereumSqlTypeWrapper,
-    expected_ids: Vec<Vec<u8>>,
-) {
-    assert_eq!(wrapper.to_type(), PgType::BYTEA_ARRAY, "{name}");
+        .unwrap_or_else(|error| panic!("{name}: failed to create test tables: {error}"));
 
     client
-        .batch_execute(
-            "TRUNCATE bytea_array_insert_roundtrip;
-             TRUNCATE bytea_array_copy_roundtrip;",
-        )
-        .await
-        .unwrap_or_else(|error| panic!("{name}: failed to truncate test tables: {error}"));
-
-    client
-        .execute("INSERT INTO bytea_array_insert_roundtrip (ids) VALUES ($1)", &[wrapper])
+        .execute("INSERT INTO bytea_array_insert_roundtrip (ids) VALUES ($1)", &[&wrapper])
         .await
         .unwrap_or_else(|error| panic!("{name}: failed to insert bytea array: {error}"));
 
@@ -117,7 +123,7 @@ async fn assert_bytea_array_roundtrip(
     let writer = BinaryCopyInWriter::new(sink, &[PgType::BYTEA_ARRAY]);
     pin_mut!(writer);
 
-    let row: [&(dyn ToSql + Sync); 1] = [wrapper];
+    let row: [&(dyn ToSql + Sync); 1] = [&wrapper];
     writer
         .as_mut()
         .write(&row)
