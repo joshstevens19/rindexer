@@ -367,12 +367,25 @@ async fn stream_reorg_reaches_kafka() {
     let streamed = publish_reorg(&clients).await;
     assert_eq!(streamed, 1);
 
+    // Even with the topic explicitly created up front, a consumer can briefly
+    // observe transient metadata errors (e.g. UnknownTopicOrPartition) before
+    // partition leadership/metadata settles. Keep polling within the timeout
+    // rather than treating the first error event as fatal.
     let mut stream = consumer.stream();
-    let msg = tokio::time::timeout(Duration::from_secs(30), stream.next())
-        .await
-        .expect("kafka consumer timed out")
-        .expect("no message")
-        .expect("kafka delivery error");
+    let msg = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            match stream.next().await {
+                Some(Ok(m)) => break m,
+                Some(Err(e)) => {
+                    eprintln!("transient kafka consume error, retrying: {e}");
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+                None => panic!("kafka stream ended before delivering a message"),
+            }
+        }
+    })
+    .await
+    .expect("kafka consumer timed out");
 
     let body = msg.payload().expect("message payload");
     let payload: Value = serde_json::from_slice(body).expect("kafka payload JSON");
