@@ -2,6 +2,22 @@
 
 ### Breaking changes
 -------------------------------------------------
+
+### Bug fixes
+-------------------------------------------------
+
+### Features
+-------------------------------------------------
+
+## Releases
+-------------------------------------------------
+
+all release branches are deployed through `release/VERSION_NUMBER` branches
+
+# 0.41.0-beta - 23rd June 2026
+
+### Breaking changes
+-------------------------------------------------
 - breaking: **Generated code uses `Arc<dyn ChainProvider>` instead of `Arc<JsonRpcCachedProvider>`** — Rust-mode projects that call concrete-type methods (e.g. `get_inner_provider()`) through the generated provider binding will need to use the network-specific accessors (`get_ethereum_provider_cache()`, etc.) which still return the concrete type. After upgrading, run `rindexer codegen typings` to regenerate.
 
 ### Bug fixes
@@ -33,12 +49,7 @@
 - feat: **Enriched `__rindexer_reorg` payload** — adds `events_deleted` total and `affected_events` array (`{indexer, contract, event, schema, table, rows_deleted}` per source table). Additive JSON.
 - feat: **Reorg notifications fan out across all streams on a network** — `__rindexer_reorg` reaches every configured stream on the network regardless of which pipeline detected the reorg. Dispatched in parallel.
 
-## Releases
--------------------------------------------------
-
-all release branches are deployed through `release/VERSION_NUMBER` branches
-
-# 0.39.0-beta - 14th April 2026
+# 0.39.0-beta - 0.40.0-beta - 14th April 2026
 
 github branch - https://github.com/joshstevens19/rindexer/tree/release/0.39.0
 
