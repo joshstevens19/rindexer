@@ -111,7 +111,7 @@ fn generate_event_table_clickhouse(abi_inputs: &[EventInfo], schema_name: &str) 
                     {}
                     tx_hash FixedString(66),
                     block_number UInt64,
-                    block_timestamp Nullable(DateTime('UTC')),
+                    block_timestamp DateTime('UTC'),
                     block_hash FixedString(66),
                     network String,
                     tx_index UInt64,

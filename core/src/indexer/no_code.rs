@@ -1,6 +1,7 @@
 use alloy::{
     dyn_abi::DynSolValue,
     json_abi::{Event, JsonAbi},
+    primitives::U256,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -417,6 +418,39 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
             // table operations data: (log_params, network, tx_metadata)
             let mut table_events_data: Vec<(Vec<LogParam>, String, TxMetadata)> = Vec::new();
 
+            // Hydrate block_timestamp from the BLOCK_TIMESTAMP_CACHE for events
+            // missing it on tx_information. RPC providers that omit `blockTimestamp`
+            // in eth_getLogs leave tx_information.block_timestamp = None — without
+            // this hydration, the row would emit DateTimeNullable(None), which on
+            // a NOT NULL schema fails the insert and kicks the outer retry loop.
+            // Snapshot is taken once before the sync filter_map, so lookups stay sync.
+            let block_ts_snapshot: std::collections::HashMap<(String, u64), u64> = {
+                let pairs: Vec<(String, u64)> = match &results {
+                    CallbackResult::Event(events) => events
+                        .iter()
+                        .filter(|r| r.tx_information.block_timestamp.is_none())
+                        .map(|r| {
+                            (r.tx_information.network.to_string(), r.tx_information.block_number)
+                        })
+                        .collect(),
+                    CallbackResult::Trace(events) => events
+                        .iter()
+                        .filter_map(|r| match r {
+                            TraceResult::NativeTransfer { tx_information, .. } => {
+                                tx_information.block_timestamp.is_none().then(|| {
+                                    (
+                                        tx_information.network.to_string(),
+                                        tx_information.block_number,
+                                    )
+                                })
+                            }
+                            TraceResult::Block { .. } => None,
+                        })
+                        .collect(),
+                };
+                crate::indexer::tables::snapshot_cached_block_timestamps(&pairs).await
+            };
+
             let owned_results = match &results {
                 CallbackResult::Event(events) => events
                     .iter()
@@ -426,9 +460,14 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                         let address = result.tx_information.address;
                         let transaction_hash = result.tx_information.transaction_hash;
                         let block_number = result.tx_information.block_number;
-                        let block_timestamp = result
-                            .tx_information
-                            .block_timestamp
+                        // Hydrate from snapshot when tx_information lacks the timestamp.
+                        let block_ts_u256 = result.tx_information.block_timestamp.or_else(|| {
+                            block_ts_snapshot
+                                .get(&(result.tx_information.network.to_string(), block_number))
+                                .copied()
+                                .map(U256::from)
+                        });
+                        let block_timestamp = block_ts_u256
                             .and_then(|ts| chrono::DateTime::from_timestamp(ts.to(), 0));
                         let block_hash = result.tx_information.block_hash;
                         let network = result.tx_information.network.to_string();
@@ -489,11 +528,16 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                                 let address = tx_information.address;
                                 let transaction_hash = tx_information.transaction_hash;
                                 let block_number = tx_information.block_number;
-                                let block_timestamp = tx_information
-                                    .block_timestamp
+                                let network = tx_information.network.to_string();
+                                let block_ts_u256 = tx_information.block_timestamp.or_else(|| {
+                                    block_ts_snapshot
+                                        .get(&(network.clone(), block_number))
+                                        .copied()
+                                        .map(U256::from)
+                                });
+                                let block_timestamp = block_ts_u256
                                     .and_then(|ts| chrono::DateTime::from_timestamp(ts.to(), 0));
                                 let block_hash = tx_information.block_hash;
-                                let network = tx_information.network.to_string();
                                 let chain_id = tx_information.chain_id;
                                 let transaction_index = tx_information.transaction_index;
                                 let log_index = tx_information.log_index;

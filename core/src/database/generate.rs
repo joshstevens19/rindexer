@@ -39,7 +39,7 @@ fn generate_event_table_sql_with_comments(
                     {event_columns} \
                     tx_hash CHAR(66) NOT NULL, \
                     block_number NUMERIC NOT NULL, \
-                    block_timestamp TIMESTAMPTZ, \
+                    block_timestamp TIMESTAMPTZ NOT NULL, \
                     block_hash CHAR(66) NOT NULL, \
                     network VARCHAR(50) NOT NULL, \
                     tx_index NUMERIC NOT NULL, \
