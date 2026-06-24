@@ -165,6 +165,9 @@ fi
 if [ -f "$BIN_PATH" ]; then
     chmod +x "$BIN_PATH"
     log "Binary found and permissions set at $BIN_PATH"
+    if [[ "$PLATFORM" == "win32" ]]; then
+        log "Note: native Windows binaries are built without Reth/ExEx support. Use Linux, macOS, Docker, or WSL/Linux for Reth mode."
+    fi
 else
     error_log "Error: Binary not found at $BIN_PATH"
     exit 1
