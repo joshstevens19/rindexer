@@ -708,12 +708,7 @@ async fn live_indexing_for_contract_event_dependencies(
                     .lock()
                     .await = ordering_live_indexing_details;
 
-                update_progress_and_last_synced_task(
-                    Arc::clone(config),
-                    to_block,
-                    indexing_event_processed,
-                )
-                .await;
+                update_progress_and_last_synced_task(Arc::clone(config), to_block, || {}).await;
                 continue;
             }
 
