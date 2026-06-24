@@ -4,6 +4,10 @@
 Reth mode requires running a Reth archive node and is intended for advanced users. If you're just getting started, you should be using [Standard Mode](/docs/start-building/create-new-project/standard) instead.
 :::
 
+:::warning
+The native Windows CLI release is built without the `reth` feature because upstream Reth no longer provides Windows build/release support. Use Linux, macOS, Docker, or WSL/Linux for Reth mode.
+:::
+
 :::info
 Make sure you have the CLI installed before starting a new project.
 You can find the installation instructions [here](/docs/introduction/installation).
@@ -42,6 +46,8 @@ rindexer new no-code --reth -- --datadir /custom/path --http true
 
 :::info
 Starting rust projects with Reth mode will add the `reth` feature to your project, which automatically installs the dependencies for Reth. The user does not need to install Reth separately.
+
+The CLI binary itself must also be built with the `reth` feature. Official native Windows release binaries are built without this feature.
 :::
 
 ### Example New with Reth

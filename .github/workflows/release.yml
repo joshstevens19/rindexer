@@ -233,7 +233,9 @@ jobs:
           target="${{ matrix.target }}"
           flags=()
 
-          if [[ "$target" != *msvc* && "$target" != "aarch64-unknown-linux-gnu" ]]; then
+          if [[ "$target" == *msvc* ]]; then
+            echo "Building Windows without the reth feature"
+          elif [[ "$target" != "aarch64-unknown-linux-gnu" ]]; then
             flags+=(--features jemalloc,reth)
           else
             flags+=(--features reth)
