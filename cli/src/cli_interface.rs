@@ -77,6 +77,10 @@ pub enum Commands {
         /// Watch rindexer.yaml for changes and hot-reload (no-code projects only).
         #[clap(long, short = 'w')]
         watch: bool,
+
+        /// Skip pruned RPC detection warnings and proceed anyway.
+        #[clap(long)]
+        ignore_prune_warnings: bool,
     },
 
     /// Add elements such as contracts to the rindexer.yaml file.

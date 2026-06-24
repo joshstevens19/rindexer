@@ -44,6 +44,9 @@ use crate::{
     },
     manifest::{contract::ReorgSafeDistance, core::Manifest},
     provider::{ChainProvider, ProviderError},
+    prune_detection::{
+        check_rpc_pruning_status, log_prune_result, should_ignore_prune_warnings, PruneCheckResult,
+    },
     PostgresClient,
 };
 
@@ -91,6 +94,9 @@ pub enum StartIndexingError {
 
     #[error("Encountered unknown error: {0}")]
     UnknownError(String),
+
+    #[error("RPC node appears to be pruned: {0}")]
+    PrunedRpcError(String),
 
     #[error("Invalid configuration: {0}")]
     ConfigError(#[from] anyhow::Error),
@@ -1226,6 +1232,109 @@ pub async fn start_live_indexing(
     .await
 }
 
+/// Check all networks for pruning status before indexing begins.
+/// Returns an error if any network appears to be pruned (unless ignored via env var).
+async fn check_all_networks_for_pruning(
+    registry: &EventCallbackRegistry,
+    trace_registry: &TraceCallbackRegistry,
+) -> Result<(), StartIndexingError> {
+    if should_ignore_prune_warnings() {
+        info!("Prune detection skipped (RINDEXER_IGNORE_PRUNE_WARNINGS is set)");
+        return Ok(());
+    }
+
+    // Collect unique (network, start_block) combinations
+    let mut checked: std::collections::HashSet<(String, u64)> = std::collections::HashSet::new();
+    let mut pruned_warnings: Vec<String> = Vec::new();
+
+    // Check contract events
+    for event in &registry.events {
+        for network_contract in &event.contract.details {
+            let key = (
+                network_contract.network.clone(),
+                network_contract.start_block.map(|b| b.to::<u64>()).unwrap_or(0),
+            );
+
+            if checked.contains(&key) {
+                continue;
+            }
+            checked.insert(key.clone());
+
+            // Only check if there's a start_block configured (historical indexing)
+            if let Some(start_block) = network_contract.start_block {
+                let provider = network_contract.cached_provider.clone();
+                match check_rpc_pruning_status(&provider, start_block, &network_contract.network)
+                    .await
+                {
+                    Ok(result) => {
+                        log_prune_result(&network_contract.network, start_block, &result);
+                        if matches!(result, PruneCheckResult::Pruned { .. }) {
+                            let warning = crate::prune_detection::format_prune_warning(
+                                &network_contract.network,
+                                start_block,
+                                &result,
+                            );
+                            pruned_warnings.push(warning);
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to check prune status for network '{}': {}",
+                            network_contract.network, e
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // Check native transfer trace events
+    for trace_event in &trace_registry.events {
+        for network_detail in &trace_event.trace_information.details {
+            let key = (
+                network_detail.network.clone(),
+                network_detail.start_block.map(|b| b.to::<u64>()).unwrap_or(0),
+            );
+
+            if checked.contains(&key) {
+                continue;
+            }
+            checked.insert(key.clone());
+
+            if let Some(start_block) = network_detail.start_block {
+                let provider = network_detail.cached_provider.clone();
+                match check_rpc_pruning_status(&provider, start_block, &network_detail.network)
+                    .await
+                {
+                    Ok(result) => {
+                        log_prune_result(&network_detail.network, start_block, &result);
+                        if matches!(result, PruneCheckResult::Pruned { .. }) {
+                            let warning = crate::prune_detection::format_prune_warning(
+                                &network_detail.network,
+                                start_block,
+                                &result,
+                            );
+                            pruned_warnings.push(warning);
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to check prune status for network '{}': {}",
+                            network_detail.network, e
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    if !pruned_warnings.is_empty() {
+        return Err(StartIndexingError::PrunedRpcError(pruned_warnings.join("\n")));
+    }
+
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn start_indexing(
     manifest: &Manifest,
@@ -1237,6 +1346,9 @@ async fn start_indexing(
     cancel_token: CancellationToken,
     progress: Arc<IndexingEventsProgressState>,
 ) -> Result<Vec<ProcessedNetworkContract>, StartIndexingError> {
+    // Check for pruned RPCs before starting indexing
+    check_all_networks_for_pruning(&registry, &trace_registry).await?;
+
     let database = initialize_database(manifest).await?;
     let clickhouse = initialize_clickhouse(manifest).await?;
 

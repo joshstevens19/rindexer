@@ -60,6 +60,11 @@ pub use notifications::ChainStateNotification;
 pub mod blockclock;
 pub mod phantom;
 pub mod provider;
+pub mod prune_detection;
+pub use prune_detection::{
+    check_rpc_pruning_status, format_prune_warning, should_ignore_prune_warnings, PruneCheckError,
+    PruneCheckResult,
+};
 mod start;
 mod streams;
 pub use streams::StreamsClients;
