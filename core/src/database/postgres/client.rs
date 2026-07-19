@@ -97,6 +97,14 @@ pub enum BulkInsertPostgresError {
     CouldNotWriteDataToPostgres(#[from] tokio_postgres::Error),
 }
 
+/// Cursor advance committed atomically with a bulk event insert — the
+/// `rindexer_internal.{internal_table_name}` last-synced tracker for one network.
+pub struct BulkCursorUpdate {
+    pub internal_table_name: String,
+    pub network: String,
+    pub to_block: u64,
+}
+
 pub struct PostgresClient {
     pool: Pool<PostgresConnectionManager<MakeRustlsConnect>>,
 }
@@ -454,6 +462,92 @@ impl PostgresClient {
                 .map(|_| ())
                 .map_err(|e| e.to_string())
         }
+    }
+
+    /// Same as `insert_bulk`, but commits the batch AND the
+    /// `rindexer_internal.{table}` last-synced cursor in ONE transaction.
+    ///
+    /// This closes the double-index race (`process.rs` `trigger_event` TODO):
+    /// with the cursor committed atomically with the rows, a crash/restart at
+    /// any point either sees neither (clean re-fetch) or both (resume past the
+    /// batch) — a committed batch can never be re-fetched and re-inserted.
+    pub async fn insert_bulk_with_cursor(
+        &self,
+        table_name: &str,
+        columns: &[String],
+        postgres_bulk_data: &[Vec<EthereumSqlTypeWrapper>],
+        cursor: &BulkCursorUpdate,
+    ) -> Result<(), String> {
+        if postgres_bulk_data.is_empty() {
+            return Ok(());
+        }
+
+        let total_params = postgres_bulk_data.len() * columns.len();
+
+        let mut conn = self.pool.get().await.map_err(|e| e.to_string())?;
+        let transaction = conn.transaction().await.map_err(|e| e.to_string())?;
+
+        if postgres_bulk_data.len() > 100 || total_params > 65535 {
+            let column_types: Vec<PgType> =
+                postgres_bulk_data[0].iter().map(|param| param.to_type()).collect();
+            let stmt = format!(
+                "COPY {} ({}) FROM STDIN WITH (FORMAT binary)",
+                table_name,
+                generate_event_table_columns_names_sql(columns),
+            );
+            let sink = transaction.copy_in(&stmt).await.map_err(|e| e.to_string())?;
+            let writer = BinaryCopyInWriter::new(sink, &column_types);
+            pin_mut!(writer);
+            for row in postgres_bulk_data.iter() {
+                let row_refs: Vec<&(dyn ToSql + Sync)> =
+                    row.iter().map(|param| param as &(dyn ToSql + Sync)).collect();
+                if let Err(e) = writer.as_mut().write(&row_refs).await {
+                    error!("Error writing binary data in atomic bulk insert, aborting: {}", e);
+                    let _ = writer.finish().await;
+                    return Err(e.to_string());
+                }
+            }
+            writer.finish().await.map_err(|e| e.to_string())?;
+        } else {
+            let total_columns = columns.len();
+            let mut query = format!(
+                "INSERT INTO {} ({}) VALUES ",
+                table_name,
+                generate_event_table_columns_names_sql(columns),
+            );
+            let mut params: Vec<&(dyn ToSql + Sync)> = Vec::new();
+            for (i, row) in postgres_bulk_data.iter().enumerate() {
+                if i > 0 {
+                    query.push(',');
+                }
+                let mut placeholders = vec![];
+                for j in 0..total_columns {
+                    placeholders.push(format!("${}", i * total_columns + j + 1));
+                }
+                query.push_str(&format!("({})", placeholders.join(",")));
+                for param in row {
+                    params.push(param as &(dyn ToSql + Sync));
+                }
+            }
+            transaction.execute(&query, &params).await.map_err(|e| e.to_string())?;
+        }
+
+        // Same statement + binding shape as update_progress_and_last_synced_task,
+        // monotonic guard included — but inside the batch's transaction.
+        let cursor_query = format!(
+            "UPDATE rindexer_internal.{} SET last_synced_block = $1 WHERE network = $2 AND $1 > last_synced_block",
+            cursor.internal_table_name
+        );
+        transaction
+            .execute(
+                &cursor_query,
+                &[&EthereumSqlTypeWrapper::U64(cursor.to_block), &cursor.network],
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+
+        transaction.commit().await.map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     pub async fn raw_connection(

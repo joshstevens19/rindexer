@@ -17,7 +17,11 @@ use super::native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME}
 use super::tables::{process_table_operations, ProgressCheckpointConfig, TableRuntime, TxMetadata};
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::clickhouse::setup::{setup_clickhouse, SetupClickhouseError};
-use crate::database::generate::generate_event_table_full_name;
+use crate::database::generate::{
+    generate_event_table_full_name, generate_indexer_contract_schema_name,
+};
+use crate::database::postgres::client::BulkCursorUpdate;
+use crate::database::postgres::generate::generate_internal_event_table_name;
 use crate::database::sql_type_wrapper::{
     map_ethereum_wrapper_to_json, map_log_params_to_ethereum_wrapper, EthereumSqlTypeWrapper,
 };
@@ -625,11 +629,27 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
             if params.store_raw_events {
                 if let Some(postgres) = &params.postgres {
                     if !sql_bulk_data.is_empty() {
+                        // Atomic [batch + last-synced cursor] commit: closes the
+                        // double-index race (crash between batch insert and the async
+                        // cursor task re-fetched and re-inserted the same logs).
+                        let schema = generate_indexer_contract_schema_name(
+                            &params.indexer_name,
+                            &params.contract_name,
+                        );
+                        let cursor = BulkCursorUpdate {
+                            internal_table_name: generate_internal_event_table_name(
+                                &schema,
+                                &params.event_info.name,
+                            ),
+                            network: network.clone(),
+                            to_block: to_block.to(),
+                        };
                         if let Err(e) = postgres
-                            .insert_bulk(
+                            .insert_bulk_with_cursor(
                                 &params.sql_event_table_name,
                                 &params.sql_column_names,
                                 &sql_bulk_data,
+                                &cursor,
                             )
                             .await
                         {
