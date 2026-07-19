@@ -11,8 +11,10 @@ use crate::{
         ParamTypeError, ReadAbiError,
     },
     database::{
-        generate::generate_event_table_full_name,
-        postgres::generate::generate_column_names_only_with_base_properties,
+        generate::{generate_event_table_full_name, generate_indexer_contract_schema_name},
+        postgres::generate::{
+            generate_column_names_only_with_base_properties, generate_internal_event_table_name,
+        },
     },
     helpers::camel_to_snake,
     manifest::{
@@ -899,24 +901,74 @@ use super::super::super::typings::{indexer_name_formatted}::events::{handler_reg
 
                     let rows = [{columns_names}];
 
-                    let result = context
-                        .database
-                        .insert_bulk(
-                            "{table_name}",
-                            &rows,
-                            &postgres_bulk_data,
-                        )
-                        .await;
-
-                    if let Err(e) = result {{
-                        rindexer_error!("{event_type_name}::{handler_name} inserting bulk data: {{:?}}", e);
-                        return Err(e.to_string());
-                    }}
+                    {insert_call}
                 "#,
-                table_name =
-                    generate_event_table_full_name(indexer_name, &contract.name, &event.name),
-                handler_name = event.name,
-                event_type_name = event_type_name,
+                insert_call = if storage.postgres_enabled() && !storage.csv_enabled() {
+                    // Atomic [batch + last-synced cursor] commit — same contract as
+                    // the no-code path (insert_bulk_with_cursor): closes the
+                    // double-index race for Rust-mode generated storage handlers.
+                    // Postgres is the sole raw sink here by construction (the
+                    // generated context selects postgres OR clickhouse, never both);
+                    // csv-enabled projects keep the legacy path (cursor must not
+                    // commit before the csv append). Cursor advances to the batch's
+                    // max log block — the log-free tail refetches empty on restart
+                    // and the async task still bumps to the fetched to_block.
+                    format!(
+                        r#"let cursor = rindexer::BulkCursorUpdate {{
+                            internal_table_name: "{internal_table_name}".to_string(),
+                            network: results.first().expect("results is non-empty").tx_information.network.to_string(),
+                            to_block: results.iter().map(|r| r.tx_information.block_number).max().expect("results is non-empty"),
+                        }};
+                        let result = context
+                            .database
+                            .insert_bulk_with_cursor(
+                                "{table_name}",
+                                &rows,
+                                &postgres_bulk_data,
+                                &cursor,
+                            )
+                            .await;
+
+                        if let Err(e) = result {{
+                            rindexer_error!("{event_type_name}::{handler_name} inserting bulk data: {{:?}}", e);
+                            return Err(e.to_string());
+                        }}"#,
+                        internal_table_name = generate_internal_event_table_name(
+                            &generate_indexer_contract_schema_name(indexer_name, &contract.name),
+                            &event.name
+                        ),
+                        table_name = generate_event_table_full_name(
+                            indexer_name,
+                            &contract.name,
+                            &event.name
+                        ),
+                        event_type_name = event_type_name,
+                        handler_name = event.name,
+                    )
+                } else {
+                    format!(
+                        r#"let result = context
+                            .database
+                            .insert_bulk(
+                                "{table_name}",
+                                &rows,
+                                &postgres_bulk_data,
+                            )
+                            .await;
+
+                        if let Err(e) = result {{
+                            rindexer_error!("{event_type_name}::{handler_name} inserting bulk data: {{:?}}", e);
+                            return Err(e.to_string());
+                        }}"#,
+                        table_name = generate_event_table_full_name(
+                            indexer_name,
+                            &contract.name,
+                            &event.name
+                        ),
+                        event_type_name = event_type_name,
+                        handler_name = event.name,
+                    )
+                },
                 columns_names = generate_column_names_only_with_base_properties(&event.inputs)
                     .iter()
                     .map(|item| format!("\"{item}\".to_string()"))
