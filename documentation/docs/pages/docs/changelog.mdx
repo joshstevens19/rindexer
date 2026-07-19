@@ -5,9 +5,11 @@
 
 ### Bug fixes
 -------------------------------------------------
+- fix: **Atomic [batch + cursor] commit for Postgres event storage — closes the double-index race** — event batches (COPY / multi-row INSERT) and the `rindexer_internal.last_synced_block` cursor were previously committed in separate transactions (the cursor asynchronously, with errors swallowed), so a crash or restart between the two re-fetched and re-inserted already-committed ranges, producing byte-identical duplicate rows (reproducible: rewind a cursor and restart). When **Postgres is the sole raw-event sink**, the batch and its cursor now commit in ONE transaction: a restart either sees neither (clean re-fetch) or both (resume past the batch). Applies to the no-code path and to Rust-mode generated storage handlers. Configs with CSV or ClickHouse alongside Postgres deliberately keep the legacy at-least-once behaviour (the cursor must not commit before every sink has succeeded). The exactly-once contract assumes a single indexer process and the default callback concurrency of 1. The custom-tables shutdown checkpoint no longer advances the event cursor when the atomic path owns it (a SIGTERM mid-table-ops could otherwise skip un-inserted raw rows on restart), and a cursor update matching zero rows now logs a `warn!` (a missing seeded cursor row would silently restart indexing from the manifest start forever). **Rust-mode projects adopt the fix by re-running `rindexer codegen indexer`** — existing generated handlers are user-owned and are not rewritten automatically; they keep working unchanged until regenerated.
 
 ### Features
 -------------------------------------------------
+- feat: **`PostgresClient::insert_bulk_with_cursor` + `rindexer::BulkCursorUpdate` public API** — the atomic [batch + last-synced cursor] primitive used by the fix above is exported for custom Rust handlers that write their own event-derived rows and want crash-exact resume semantics: pass the internal checkpoint table name, network, and the batch's highest block.
 
 ## Releases
 -------------------------------------------------
