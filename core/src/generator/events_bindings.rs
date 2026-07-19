@@ -209,7 +209,7 @@ fn generate_csv_instance(
     // create_csv_file_for_event creates directories at code-gen time as a convenience
     event_info.create_csv_file_for_event(project_path, &contract.name, csv_path_str)?;
 
-    let csv_file_name = format!("{}-{}.csv", &contract.name, event_info.name).to_lowercase();
+    let csv_file_name = format!("{}-{}.csv", contract.name, event_info.name).to_lowercase();
     let relative_csv_file = csv_relative.join(&contract.name).join(&csv_file_name);
 
     let headers: Vec<String> =
@@ -611,7 +611,7 @@ impl<TExtensions> {event_type_name}<TExtensions> where TExtensions: 'static + Se
         abigen_file_name = abigen_contract_file_name(contract),
         abigen_name = abigen_contract_name(contract),
         structs = generate_structs(project_path, contract)?,
-        event_type_name = &event_type_name,
+        event_type_name = event_type_name,
         event_context_database = if storage.postgres_enabled() {
             "pub database: Arc<PostgresClient>,"
         } else if storage.clickhouse_enabled() {
