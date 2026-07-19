@@ -870,11 +870,15 @@ async fn trigger_event(
     };
 
     if should_update_progress {
-        // Double-index race NOTE: for the no-code POSTGRES path this is closed —
-        // no_code_callback commits [batch + rindexer_internal cursor] in ONE
-        // transaction (insert_bulk_with_cursor), so this async advance is only the
-        // empty-range / tail bump (monotonic guard makes it a no-op otherwise).
-        // The race window still exists for ClickHouse/CSV/custom-handler paths.
+        // Double-index race NOTE: for the no-code POSTGRES-sole-sink path this is
+        // closed — no_code_callback commits [batch + rindexer_internal cursor] in
+        // ONE transaction (insert_bulk_with_cursor), so this async advance is only
+        // the empty-range / tail bump (monotonic guard makes it a no-op otherwise).
+        // The race window still exists for: ClickHouse/CSV(-alongside-PG) configs
+        // (deliberately kept legacy — see atomic_pg_cursor in no_code.rs), custom
+        // Rust handlers, the trace path (its outer advance ignores the callback
+        // result), and factory streams (child-address bookkeeping commits after
+        // the callback — see DENG-414 review F2).
         update_progress_and_last_synced_task(config, to_block, indexing_event_processed).await;
     } else {
         indexing_event_processed();

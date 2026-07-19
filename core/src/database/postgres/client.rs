@@ -468,9 +468,15 @@ impl PostgresClient {
     /// `rindexer_internal.{table}` last-synced cursor in ONE transaction.
     ///
     /// This closes the double-index race (`process.rs` `trigger_event` TODO):
-    /// with the cursor committed atomically with the rows, a crash/restart at
-    /// any point either sees neither (clean re-fetch) or both (resume past the
-    /// batch) — a committed batch can never be re-fetched and re-inserted.
+    /// with the cursor committed atomically with the rows, a crash/restart
+    /// either sees neither (clean re-fetch) or both (resume past the batch).
+    ///
+    /// PRECONDITIONS (enforced by the caller, `no_code_callback`): Postgres is
+    /// the SOLE raw-event sink; a single writer process; effective callback
+    /// concurrency 1 (batches commit in rid order). Known residual race: a
+    /// reorg rollback rewinds this cursor unguarded while an in-flight commit
+    /// may re-advance it past the rewind (pre-existing, unchanged — the
+    /// corrected refetch re-inserts and stale rows carry dead block hashes).
     pub async fn insert_bulk_with_cursor(
         &self,
         table_name: &str,
@@ -529,7 +535,17 @@ impl PostgresClient {
                     params.push(param as &(dyn ToSql + Sync));
                 }
             }
-            transaction.execute(&query, &params).await.map_err(|e| e.to_string())?;
+            // Metrics parity with the non-atomic path (bulk_insert_via_query goes
+            // through self.execute, which records; the COPY path records nothing
+            // there either, so only this branch records).
+            let start = std::time::Instant::now();
+            let result = transaction.execute(&query, &params).await;
+            db_metrics::record_db_operation(
+                ops::QUERY,
+                result.is_ok(),
+                start.elapsed().as_secs_f64(),
+            );
+            result.map_err(|e| e.to_string())?;
         }
 
         // Same statement + binding shape as update_progress_and_last_synced_task,
@@ -538,7 +554,7 @@ impl PostgresClient {
             "UPDATE rindexer_internal.{} SET last_synced_block = $1 WHERE network = $2 AND $1 > last_synced_block",
             cursor.internal_table_name
         );
-        transaction
+        let cursor_rows = transaction
             .execute(
                 &cursor_query,
                 &[&EthereumSqlTypeWrapper::U64(cursor.to_block), &cursor.network],
@@ -547,6 +563,28 @@ impl PostgresClient {
             .map_err(|e| e.to_string())?;
 
         transaction.commit().await.map_err(|e| e.to_string())?;
+        if cursor_rows == 0 {
+            // Under serialized single-writer operation the cursor row must exist
+            // (seeded at setup) and this batch's to_block must exceed it — zero
+            // rows means the seeded (network, 0) row is missing or another writer
+            // is ahead. Resume would then restart from the manifest start forever.
+            tracing::warn!(
+                "ATOMIC-CURSOR commit updated 0 cursor rows: {} cursor[{}]={} network={} — seeded row missing or out-of-order writer",
+                table_name,
+                cursor.internal_table_name,
+                cursor.to_block,
+                cursor.network
+            );
+        } else {
+            tracing::debug!(
+                "ATOMIC-CURSOR commit: {} rows={} cursor[{}]={} (updated={})",
+                table_name,
+                postgres_bulk_data.len(),
+                cursor.internal_table_name,
+                cursor.to_block,
+                cursor_rows
+            );
+        }
         Ok(())
     }
 
