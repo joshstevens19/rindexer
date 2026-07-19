@@ -159,7 +159,7 @@ pub async fn handle_add_contract_command(
 
         print_success_message(&format!(
             "Downloaded ABI for: {} in {}",
-            contract_name, &abi_path_relative
+            contract_name, abi_path_relative
         ));
 
         let success_message = format!(
