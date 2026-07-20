@@ -163,6 +163,7 @@ use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::generate::generate_indexer_contract_schema_name;
 use crate::database::generate::generate_table_full_name;
 use crate::database::postgres::batch_operations::execute_dynamic_batch_operation;
+use crate::database::postgres::block_sink::{BufferedPgOp, PgWriteMode, SyncTogetherSink};
 use crate::database::postgres::client::PostgresClient;
 use crate::database::postgres::generate::generate_internal_event_table_name;
 use crate::database::sql_type_wrapper::EthereumSqlTypeWrapper;
@@ -3465,6 +3466,10 @@ fn expand_iterate_bindings(
 /// * `constants` - User-defined constants from the manifest (can be network-scoped)
 /// * `multicall_addresses` - Custom Multicall3 addresses per network (None = use default address)
 /// * `checkpoint_config` - Optional config for checkpointing progress on shutdown
+/// * `sync_sink` - When set, Postgres writes buffer into the sync_together
+///   sink instead of executing (the group loop commits them per block).
+///   Callers passing a sink must pass `checkpoint_config: None` — a shutdown
+///   checkpoint would otherwise record blocks whose writes were only buffered.
 #[allow(clippy::too_many_arguments)]
 pub async fn process_table_operations(
     tables: &[TableRuntime],
@@ -3476,7 +3481,12 @@ pub async fn process_table_operations(
     constants: &Constants,
     multicall_addresses: &HashMap<String, Option<String>>,
     checkpoint_config: Option<&ProgressCheckpointConfig>,
+    sync_sink: Option<&SyncTogetherSink>,
 ) -> Result<(), String> {
+    debug_assert!(
+        sync_sink.is_none() || checkpoint_config.is_none(),
+        "sync_together buffered mode must not use the shutdown checkpoint"
+    );
     // Exit early if shutdown requested before we start - no progress to save
     if !is_running() {
         info!("Shutdown requested - skipping table processing");
@@ -3785,8 +3795,26 @@ pub async fn process_table_operations(
 
             // Execute the operation
             if let Some(postgres) = &postgres {
+                let mode = match sync_sink {
+                    Some(sink) => {
+                        // Group loops invoke callbacks with single-network
+                        // batches; a mixed batch cannot be attributed to one
+                        // per-network buffer.
+                        let network =
+                            rows_to_process.first().map(|r| r.network.as_str()).unwrap_or_default();
+                        if rows_to_process.iter().any(|r| r.network != network) {
+                            return Err(format!(
+                                "sync_together invariant violated: table '{}' batch spans multiple networks",
+                                table_runtime.full_table_name
+                            ));
+                        }
+                        PgWriteMode::Buffered { sink, network }
+                    }
+                    None => PgWriteMode::Eager(postgres),
+                };
+
                 execute_postgres_operation(
-                    postgres,
+                    mode,
                     &table_runtime.full_table_name,
                     &table_runtime.table,
                     operation,
@@ -3796,13 +3824,29 @@ pub async fn process_table_operations(
                 .await?;
 
                 // Journal non-reversible operations (Set/Max/Min) for reorg recalculation
-                journal_non_reversible_ops(
-                    postgres,
-                    &table_runtime.full_table_name,
-                    operation,
-                    &rows_to_process,
-                )
-                .await;
+                match mode {
+                    PgWriteMode::Buffered { sink, network } => {
+                        // Inside the block tx a journal failure aborts and
+                        // retries the block (stricter than the eager path,
+                        // which logs and continues).
+                        if let Some(sql) = build_journal_sql(
+                            &table_runtime.full_table_name,
+                            operation,
+                            &rows_to_process,
+                        ) {
+                            sink.push_op(network, BufferedPgOp::BatchSql { sql });
+                        }
+                    }
+                    PgWriteMode::Eager(postgres) => {
+                        journal_non_reversible_ops(
+                            postgres,
+                            &table_runtime.full_table_name,
+                            operation,
+                            &rows_to_process,
+                        )
+                        .await;
+                    }
+                }
             }
 
             if let Some(clickhouse) = &clickhouse {
@@ -3898,7 +3942,7 @@ fn operation_type_to_batch_type(op_type: &OperationType) -> BatchOperationType {
 ///   Used when the `if`/`filter` condition contains `@table` references.
 ///   E.g., conditions like `$value > @balance` become SQL `EXCLUDED.value > table.balance`.
 async fn execute_postgres_operation(
-    postgres: &PostgresClient,
+    mode: PgWriteMode<'_>,
     table_name: &str,
     table_def: &Table,
     operation: &TableOperation,
@@ -4039,15 +4083,8 @@ async fn execute_postgres_operation(
     let short_table_name = table_name.split('.').next_back().unwrap_or(table_name);
     let event_name = format!("Tables::{}", short_table_name);
 
-    execute_dynamic_batch_operation(
-        postgres,
-        table_name,
-        op_type,
-        batch_rows,
-        &event_name,
-        sql_where,
-    )
-    .await?;
+    execute_dynamic_batch_operation(mode, table_name, op_type, batch_rows, &event_name, sql_where)
+        .await?;
 
     let op_label = match operation.operation_type {
         OperationType::Upsert => "UPSERT",
@@ -4056,7 +4093,8 @@ async fn execute_postgres_operation(
         OperationType::Delete => "DELETE",
     };
 
-    info!("Tables::{} - {} - {} rows", short_table_name, op_label, rows.len());
+    let action = if matches!(mode, PgWriteMode::Buffered { .. }) { " BUFFERED" } else { "" };
+    info!("Tables::{} - {}{} - {} rows", short_table_name, op_label, action, rows.len());
 
     Ok(())
 }
@@ -4248,7 +4286,17 @@ pub async fn execute_postgres_operation_internal(
     rows: &[TableRowData],
     sql_where: Option<&str>,
 ) -> Result<(), String> {
-    execute_postgres_operation(postgres, table_name, table_def, operation, rows, sql_where).await
+    // Cron operations always execute eagerly — they run outside event
+    // callbacks and never participate in a sync_together block transaction.
+    execute_postgres_operation(
+        PgWriteMode::Eager(postgres),
+        table_name,
+        table_def,
+        operation,
+        rows,
+        sql_where,
+    )
+    .await
 }
 
 /// Internal ClickHouse operation execution - used by cron scheduler.
@@ -4565,25 +4613,41 @@ fn collect_journal_values(
     value_tuples
 }
 
+/// Builds the Postgres `rindexer_internal.derived_op_log` INSERT for
+/// non-reversible (Set/Max/Min) operations, or `None` when there is nothing to
+/// journal. Batches all rows into a single statement.
+fn build_journal_sql(
+    derived_table: &str,
+    operation: &TableOperation,
+    rows: &[TableRowData],
+) -> Option<String> {
+    let values = collect_journal_values(derived_table, operation, rows, "''");
+    if values.is_empty() {
+        return None;
+    }
+
+    Some(format!(
+        "INSERT INTO rindexer_internal.derived_op_log \
+         (derived_table, network, where_key, column_name, value, block_number, tx_index, log_index) \
+         VALUES {}",
+        values.join(", ")
+    ))
+}
+
 /// Journal non-reversible (Set/Max/Min) operations to Postgres `rindexer_internal.derived_op_log`.
-/// Batches all rows into a single INSERT statement.
+///
+/// Failures are logged and swallowed on this eager path. (In sync_together
+/// buffered mode the journal joins the block transaction instead, where a
+/// failure aborts and retries the whole block.)
 async fn journal_non_reversible_ops(
     postgres: &PostgresClient,
     derived_table: &str,
     operation: &TableOperation,
     rows: &[TableRowData],
 ) {
-    let values = collect_journal_values(derived_table, operation, rows, "''");
-    if values.is_empty() {
+    let Some(sql) = build_journal_sql(derived_table, operation, rows) else {
         return;
-    }
-
-    let sql = format!(
-        "INSERT INTO rindexer_internal.derived_op_log \
-         (derived_table, network, where_key, column_name, value, block_number, tx_index, log_index) \
-         VALUES {}",
-        values.join(", ")
-    );
+    };
 
     if let Err(e) = postgres.batch_execute(&sql).await {
         tracing::error!(

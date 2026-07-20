@@ -257,6 +257,7 @@ macro_rules! create_batch_postgres_operation {
                             update_clauses,
                             sequence_col,
                             None, // custom_where - not used in macro-generated operations
+                            &subtract_columns,
                         ));
 
                         let params: Vec<&(dyn ToSql + Sync)> =

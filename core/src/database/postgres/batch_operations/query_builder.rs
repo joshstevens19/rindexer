@@ -204,6 +204,13 @@ pub fn build_delete_body(formatted_table_name: &str) -> String {
 /// * `update_clauses` - SET clauses for the update
 /// * `sequence_col` - Optional sequence column for ordering (adds WHERE EXCLUDED.seq > table.seq)
 /// * `custom_where` - Optional custom WHERE condition (e.g., for @table references)
+/// * `negated_insert_columns` - Subtract-action columns. Their values are
+///   negated in the insert SELECT so a row created by a subtract starts at
+///   `-value` (a subtract from the implicit 0), not `+value`; the matching
+///   SET clause adds `EXCLUDED.col` (already negated). References to these
+///   columns inside `custom_where` are wrapped as `(-EXCLUDED.col)` so user
+///   conditions keep seeing the positive event value.
+#[allow(clippy::too_many_arguments)]
 pub fn build_upsert_body(
     formatted_table_name: &str,
     all_columns: &[&str],
@@ -211,15 +218,36 @@ pub fn build_upsert_body(
     update_clauses: Vec<String>,
     sequence_col: Option<&str>,
     custom_where: Option<&str>,
+    negated_insert_columns: &[&str],
 ) -> String {
     let formatted_columns =
         all_columns.iter().map(|col| quote_identifier(col)).collect::<Vec<_>>().join(", ");
 
     let tp_columns = all_columns
         .iter()
-        .map(|col| format!("tp.{}", quote_identifier(col)))
+        .map(|col| {
+            if negated_insert_columns.contains(col) {
+                format!("-tp.{}", quote_identifier(col))
+            } else {
+                format!("tp.{}", quote_identifier(col))
+            }
+        })
         .collect::<Vec<_>>()
         .join(", ");
+
+    // Compensate custom_where: `$field` renders as `EXCLUDED."field"`
+    // (event/filter/ast.rs), which now carries the negated value for subtract
+    // columns — flip it back so the user's condition compares the event value.
+    let custom_where: Option<String> = custom_where.map(|where_clause| {
+        let mut compensated = where_clause.to_string();
+        for col in negated_insert_columns {
+            let rendered = format!("EXCLUDED.\"{col}\"");
+            let negated = format!("(-EXCLUDED.\"{col}\")");
+            compensated = compensated.replace(&rendered, &negated);
+        }
+        compensated
+    });
+    let custom_where = custom_where.as_deref();
 
     let mut query = format!(
         "\nINSERT INTO {} ({})\nSELECT {}\nFROM to_process tp",
@@ -227,6 +255,16 @@ pub fn build_upsert_body(
     );
 
     if !conflict_columns.is_empty() {
+        // Deterministic conflict-key ordering: concurrent batches touching
+        // overlapping rows (e.g. two networks' loops writing one cross_chain
+        // table) acquire row locks in the same order, avoiding ABBA deadlocks.
+        let order_cols = conflict_columns
+            .iter()
+            .map(|col| format!("tp.{}", quote_identifier(col)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        query.push_str(&format!("\nORDER BY {}", order_cols));
+
         let conflict_cols_str =
             conflict_columns.iter().map(|col| quote_identifier(col)).collect::<Vec<_>>().join(", ");
 
@@ -309,8 +347,11 @@ pub fn build_upsert_set_clause(
             )
         }
         UpsertClauseType::Subtract => {
+            // Subtract columns arrive NEGATED in the insert row (see
+            // `build_upsert_body`'s `negated_insert_columns`), so the update
+            // arm ADDS the (negative) excluded value: old - value.
             format!(
-                "{} = COALESCE({}.{}, 0) - EXCLUDED.{}",
+                "{} = COALESCE({}.{}, 0) + EXCLUDED.{}",
                 column_name, formatted_table_name, column_name, column_name
             )
         }

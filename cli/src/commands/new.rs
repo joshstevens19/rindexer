@@ -263,6 +263,7 @@ pub fn handle_new_command(
             tables: None,
         }],
         native_transfers: NativeTransfers::default(),
+        sync_together: None,
         phantom: None,
         global: Global::default(),
         storage: Storage {

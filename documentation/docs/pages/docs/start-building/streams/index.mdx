@@ -16,6 +16,15 @@ Rust projects do not get exposed to the stream clients yet but it can easily be 
 Note you can use all the streams together they are independent of each other, so if you wanted to us `kafka`,
 `webhooks`, `rabbitmq`, `sns`, `redis`, and `cloudflare_queues` together you can do that.
 
+:::warning[Delivery semantics with sync_together]
+For events in a [sync_together](/docs/start-building/yaml-config/sync-together) group, stream messages are
+dispatched **after** the block's Postgres transaction commits. Payloads are never published for blocks that fail
+to commit and block retries cannot double-publish, but if the process crashes between commit and dispatch — or a
+block's commit succeeds server-side while its acknowledgment is lost, so the retry finds it already committed —
+those messages are lost - delivery is at-most-once for grouped events (ungrouped events remain at-least-once with
+respect to crashes).
+:::
+
 Supported stream providers:
 
 - [Webhooks](/docs/start-building/streams/webhooks) - Fire webhooks to your own APIs

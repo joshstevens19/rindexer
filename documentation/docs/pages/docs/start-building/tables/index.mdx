@@ -231,6 +231,50 @@ tables:
 
 ---
 
+### sync_together
+
+When `true`, the table's events commit **atomically per block** during live indexing. For each block, the raw
+event rows, ALL of the event's table operations, the reorg journal, and the `last_synced_block` checkpoint land
+in one Postgres transaction per block, per network - readers can never see a block partially applied, and
+checkpoints can never drift from the data.
+
+```yaml
+tables:
+  - name: total_balances
+    cross_chain: true
+    sync_together: true  // [!code focus]
+    columns:
+      - name: holder
+      - name: balance
+        default: "0"
+```
+
+Under the hood this desugars into an implicit [sync_together group](/docs/start-building/yaml-config/sync-together)
+of the table's events.
+
+:::info[Whole-Callback Promotion]
+Opting in a table promotes the **whole event callback** - raw event rows plus every table that event writes to,
+not just the flagged table. Buffering one table while committing sibling tables eagerly would break checkpoint
+atomicity, so it is not offered. Two flagged tables on the same contract that share an event auto-merge into one group.
+:::
+
+:::warning[No Cron Triggers]
+`sync_together: true` cannot be combined with [cron](#cron-triggers-scheduled-operations) on the same table, and
+grouped contracts cannot have cron-trigger tables at all - cron writes the same tables outside the per-block
+transaction. Both are startup errors.
+:::
+
+**Interaction with `cross_chain`:** transactions are always per network - never cross-chain - so an ethereum block
+never waits on an arbitrum block. For `cross_chain: true` tables the guarantee is per-network, per-block atomicity;
+the cross-chain aggregate is the sum of each network's committed prefix, eventually consistent across chains
+(inherent to cross-chain aggregation, not a regression).
+
+`sync_together` requires Postgres storage, an explicit `start_block` on every network, no `end_block`, and no
+factory contracts - see the [full reference](/docs/start-building/yaml-config/sync-together) for all requirements
+and trade-offs.
+
+---
+
 ### timestamp
 
 When `true`, adds the `rindexer_block_timestamp` column to the table. By default, this column

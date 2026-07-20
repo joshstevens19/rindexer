@@ -90,6 +90,29 @@ config:
   callback_concurrency: 4 // [!code focus]
 ```
 
+## sync_together
+
+:::info
+This field is optional and only available for `no-code` projects with postgres storage.
+:::
+
+Named groups of events that commit atomically per block, per network during live indexing. [See more details](/docs/start-building/yaml-config/sync-together).
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+sync_together: // [!code focus]
+  - group: market-sync // [!code focus]
+    contracts: // [!code focus]
+      - name: CTFExchange // [!code focus]
+        events: // [!code focus]
+          - OrderFilled // [!code focus]
+      - name: ConditionalTokens // [!code focus]
+        events: // [!code focus]
+          - PositionSplit // [!code focus]
+```
+
 ## timestamps
 
 Enable block timestamps for all events on all networks. Timestamps are `disabled` by default.

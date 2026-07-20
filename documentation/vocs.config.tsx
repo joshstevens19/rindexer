@@ -116,6 +116,10 @@ export default defineConfig({
               link: "/docs/start-building/yaml-config/contracts",
             },
             {
+              text: "Sync Together",
+              link: "/docs/start-building/yaml-config/sync-together",
+            },
+            {
               text: "GraphQL",
               link: "/docs/start-building/yaml-config/graphql",
             },

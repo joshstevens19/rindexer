@@ -315,6 +315,102 @@ impl EventProcessingConfig {
         }
     }
 
+    pub fn start_block(&self) -> U64 {
+        match self {
+            Self::ContractEventProcessing(config) => config.start_block,
+            Self::FactoryEventProcessing(config) => config.start_block,
+        }
+    }
+
+    pub fn end_block(&self) -> U64 {
+        match self {
+            Self::ContractEventProcessing(config) => config.end_block,
+            Self::FactoryEventProcessing(config) => config.end_block,
+        }
+    }
+
+    /// Clones this config with an overridden block range and live-indexing flag.
+    /// Used by the `sync_together` fast-forward phase to run a member's
+    /// historical pipeline over a specific range.
+    pub fn clone_for_range(
+        &self,
+        start_block: U64,
+        end_block: U64,
+        live_indexing: bool,
+    ) -> EventProcessingConfig {
+        match self {
+            Self::ContractEventProcessing(config) => {
+                Self::ContractEventProcessing(ContractEventProcessingConfig {
+                    id: config.id.clone(),
+                    project_path: config.project_path.clone(),
+                    indexer_name: config.indexer_name.clone(),
+                    contract_name: config.contract_name.clone(),
+                    topic_id: config.topic_id,
+                    event_name: config.event_name.clone(),
+                    config: config.config.clone(),
+                    network_contract: config.network_contract.clone(),
+                    timestamps: config.timestamps,
+                    start_block,
+                    end_block,
+                    registry: config.registry.clone(),
+                    progress: config.progress.clone(),
+                    postgres: config.postgres.clone(),
+                    clickhouse: config.clickhouse.clone(),
+                    csv_details: config.csv_details.clone(),
+                    stream_last_synced_block_file_path: config
+                        .stream_last_synced_block_file_path
+                        .clone(),
+                    index_event_in_order: config.index_event_in_order,
+                    live_indexing,
+                    indexing_distance_from_head: config.indexing_distance_from_head,
+                    cancel_token: config.cancel_token.clone(),
+                    tables: config.tables.clone(),
+                    reorg_sender: config.reorg_sender.clone(),
+                    streams_clients: config.streams_clients.clone(),
+                    contract_abi: config.contract_abi.clone(),
+                    providers: config.providers.clone(),
+                    constants: config.constants.clone(),
+                    multicall_addresses: config.multicall_addresses.clone(),
+                })
+            }
+            Self::FactoryEventProcessing(config) => {
+                Self::FactoryEventProcessing(FactoryEventProcessingConfig {
+                    id: config.id.clone(),
+                    project_path: config.project_path.clone(),
+                    indexer_name: config.indexer_name.clone(),
+                    contract_name: config.contract_name.clone(),
+                    address: config.address.clone(),
+                    input_name: config.input_name.clone(),
+                    event: config.event.clone(),
+                    config: config.config.clone(),
+                    network_contract: config.network_contract.clone(),
+                    timestamps: config.timestamps,
+                    start_block,
+                    end_block,
+                    registry: config.registry.clone(),
+                    progress: config.progress.clone(),
+                    postgres: config.postgres.clone(),
+                    clickhouse: config.clickhouse.clone(),
+                    csv_details: config.csv_details.clone(),
+                    stream_last_synced_block_file_path: config
+                        .stream_last_synced_block_file_path
+                        .clone(),
+                    index_event_in_order: config.index_event_in_order,
+                    live_indexing,
+                    indexing_distance_from_head: config.indexing_distance_from_head,
+                    cancel_token: config.cancel_token.clone(),
+                    tables: config.tables.clone(),
+                    reorg_sender: config.reorg_sender.clone(),
+                    streams_clients: config.streams_clients.clone(),
+                    contract_abi: config.contract_abi.clone(),
+                    providers: config.providers.clone(),
+                    constants: config.constants.clone(),
+                    multicall_addresses: config.multicall_addresses.clone(),
+                })
+            }
+        }
+    }
+
     pub fn indexing_distance_from_head(&self) -> U64 {
         match self {
             Self::ContractEventProcessing(config) => config.indexing_distance_from_head,

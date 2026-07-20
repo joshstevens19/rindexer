@@ -4,7 +4,7 @@ use crate::EthereumSqlTypeWrapper;
 use tokio_postgres::types::Type as PgType;
 
 /// The type of batch operation to perform.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BatchOperationType {
     Update,
     Delete,

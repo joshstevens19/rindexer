@@ -64,6 +64,7 @@ pub enum ManifestChange {
     GraphqlChanged,
     NativeTransfersChanged,
     GlobalChanged,
+    SyncTogetherChanged,
 }
 
 /// Result of diffing two manifests.
@@ -121,6 +122,9 @@ pub fn compute_diff(old: &Manifest, new: &Manifest) -> ManifestDiff {
 
     // Compare global settings
     diff_global(old, new, &mut changes);
+
+    // Compare sync_together groups (explicit + table-flag implicit)
+    diff_sync_together(old, new, &mut changes, &mut plan, &mut config_only);
 
     // Determine the action
     if changes.is_empty() {
@@ -292,6 +296,37 @@ fn diff_global(old: &Manifest, new: &Manifest, changes: &mut Vec<ManifestChange>
 
     if old_yaml != new_yaml {
         changes.push(ManifestChange::GlobalChanged);
+    }
+}
+
+fn diff_sync_together(
+    old: &Manifest,
+    new: &Manifest,
+    changes: &mut Vec<ManifestChange>,
+    plan: &mut RestartPlan,
+    config_only: &mut bool,
+) {
+    // Comparing the EFFECTIVE groups also catches table-level
+    // `sync_together: true` flag flips, which change routing without any
+    // other contract difference.
+    let old_groups = crate::manifest::sync_together::effective_sync_together_groups(old);
+    let new_groups = crate::manifest::sync_together::effective_sync_together_groups(new);
+
+    if old_groups == new_groups {
+        return;
+    }
+
+    changes.push(ManifestChange::SyncTogetherChanged);
+    *config_only = false;
+
+    // Restart every contract named in either version's groups — membership
+    // changes alter how those contracts' events are routed.
+    for group in old_groups.iter().chain(new_groups.iter()) {
+        for contract in &group.contracts {
+            if !plan.contracts_to_restart.contains(&contract.name) {
+                plan.contracts_to_restart.push(contract.name.clone());
+            }
+        }
     }
 }
 

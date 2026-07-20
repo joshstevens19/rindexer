@@ -31,6 +31,10 @@ pub use database::{
     },
     generate::drop_tables_for_indexer_sql,
     postgres::{
+        block_sink::{
+            BufferedPgOp, MemberBlockOps, MemberCheckpoint, SyncTogetherFlushOutcome,
+            SyncTogetherSink,
+        },
         client::{PostgresClient, ToSql},
         schema_sync::{apply_schema_change, detect_schema_changes, SchemaChange},
         setup::setup_postgres,

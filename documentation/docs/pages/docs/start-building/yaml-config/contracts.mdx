@@ -607,6 +607,12 @@ as soon as it can.
 This is optional if you do not provide this it will assume speed is more important than order.
 :::
 
+:::info
+`dependency_events` is mutually exclusive with [sync_together](/docs/start-building/yaml-config/sync-together) per event -
+both claim ownership of an event's live indexing loop, so an event cannot be in a dependency chain and a sync group
+at the same time. This also applies to dependencies auto-derived from postgres [relationships](/docs/start-building/yaml-config/storage#relationships).
+:::
+
 ```yaml [rindexer.yaml]
 name: rETHIndexer
 description: My first rindexer project
@@ -738,6 +744,21 @@ contracts:
                     action: subtract // [!code focus]
                     value: $value // [!code focus]
 ```
+
+**Atomic per-block commits with `sync_together`:**
+
+Next to the `global` and `cross_chain` flags, a table can set `sync_together: true` to commit its events
+atomically per block during live indexing - the raw event rows, all of the event's table operations, and the
+`last_synced_block` checkpoint land in one Postgres transaction per block, per network.
+
+```yaml [rindexer.yaml]
+tables:
+  - name: total_balances
+    cross_chain: true
+    sync_together: true // [!code focus]
+```
+
+See the full semantics and requirements in the [sync_together documentation](/docs/start-building/yaml-config/sync-together).
 
 For complete documentation including column types, operations (`upsert`, `update`, `delete`),
 set actions (`add`, `subtract`, `max`, `min`), condition expressions (`if`), `global` tables,

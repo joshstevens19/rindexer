@@ -18,6 +18,7 @@ use super::tables::{process_table_operations, ProgressCheckpointConfig, TableRun
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::clickhouse::setup::{setup_clickhouse, SetupClickhouseError};
 use crate::database::generate::generate_event_table_full_name;
+use crate::database::postgres::block_sink::{active_sync_sink, push_raw_event_insert};
 use crate::database::sql_type_wrapper::{
     map_ethereum_wrapper_to_json, map_log_params_to_ethereum_wrapper, EthereumSqlTypeWrapper,
 };
@@ -345,6 +346,140 @@ struct EventCallbacks {
     trace_callback: TraceCallbackType,
 }
 
+/// Publishes one batch's events to the configured stream clients, split per
+/// block. Owned arguments so `sync_together` can defer the whole dispatch as a
+/// post-commit side effect; publish failures are logged and swallowed (see the
+/// error branches for why they must not propagate).
+#[allow(clippy::too_many_arguments)]
+async fn publish_stream_events(
+    streams_clients: Arc<Option<StreamsClients>>,
+    contract_name: String,
+    event_name: String,
+    event_signature_hash: alloy::primitives::B256,
+    index_event_in_order: bool,
+    is_trace_event: bool,
+    network: String,
+    from_block: alloy::primitives::U64,
+    to_block: alloy::primitives::U64,
+    events_by_block: std::collections::BTreeMap<u64, Vec<Value>>,
+) {
+    let Some(streams_clients) = streams_clients.as_ref() else {
+        return;
+    };
+
+    for (block_number, block_events) in events_by_block {
+        let event_message = EventMessage {
+            event_name: event_name.clone(),
+            event_data: Value::Array(block_events),
+            event_signature_hash,
+            network: network.clone(),
+            block_number,
+        };
+
+        let stream_id = format!(
+            "{}-{}-{}-{}-{}-blk{}",
+            contract_name, event_name, network, from_block, to_block, block_number
+        );
+
+        match streams_clients
+            .stream(stream_id, &event_message, index_event_in_order, is_trace_event)
+            .await
+        {
+            Ok(streamed) => {
+                if streamed > 0 {
+                    info!(
+                        "{}::{} - {} - {} events {}",
+                        contract_name,
+                        event_name,
+                        "STREAMED",
+                        streamed,
+                        format!("- block: {} - network: {}", block_number, network)
+                    );
+                }
+            }
+            Err(e) => {
+                // Don't propagate: callback retry would re-run
+                // PG/CH/CSV inserts and duplicate rows (see
+                // `streams::publish_with_retry` header).
+                // Instant-mode consumers lose this message;
+                // Finalized-mode buffers are unaffected.
+                error!(
+                    contract = %contract_name,
+                    event = %event_name,
+                    %network,
+                    block_number,
+                    error = %e,
+                    "Stream publish failed after retries, dropping to avoid \
+                     re-running PG inserts on callback retry"
+                );
+            }
+        }
+    }
+}
+
+/// Sends one batch's chat messages. Owned arguments so `sync_together` can
+/// defer the dispatch as a post-commit side effect; send failures are logged
+/// and swallowed.
+#[allow(clippy::too_many_arguments)]
+async fn send_chat_messages(
+    chat_clients: Arc<Option<ChatClients>>,
+    contract_name: String,
+    event_name: String,
+    index_event_in_order: bool,
+    network: String,
+    from_block: alloy::primitives::U64,
+    to_block: alloy::primitives::U64,
+    event_message: EventMessage,
+) {
+    let Some(chat_clients) = chat_clients.as_ref() else {
+        return;
+    };
+
+    if !chat_clients.is_in_block_range_to_send(&from_block, &to_block) {
+        warn!(
+            "{}::{} - {} - messages has a max 10 block range due the rate limits - {}",
+            contract_name,
+            event_name,
+            "CHAT_MESSAGES_DISABLED",
+            format!("- blocks: {} - {} - network: {}", from_block, to_block, network)
+        );
+        return;
+    }
+
+    match chat_clients
+        .send_message(&event_message, index_event_in_order, &from_block, &to_block)
+        .await
+    {
+        Ok(messages_sent) => {
+            if messages_sent > 0 {
+                info!(
+                    "{}::{} - {} - {} events {}",
+                    contract_name,
+                    event_name,
+                    "CHAT_MESSAGES_SENT",
+                    messages_sent,
+                    format!("- blocks: {} - {} - network: {}", from_block, to_block, network)
+                );
+            }
+        }
+        Err(e) => {
+            // Same rationale as the stream-publish branch above: do not
+            // propagate so the callback-level retry doesn't re-run
+            // PG/ClickHouse/CSV inserts.
+            error!(
+                contract = %contract_name,
+                event = %event_name,
+                %network,
+                from_block = %from_block,
+                to_block = %to_block,
+                error = %e,
+                "Chat message send failed, dropping to avoid re-running \
+                 PG inserts on callback retry"
+            );
+        }
+    }
+}
+
 fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
     let shared_callback = Arc::new(move |results| {
         let params = Arc::clone(&params);
@@ -404,6 +539,13 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                     return Ok(());
                 }
             };
+
+            // Set only when a sync_together group loop is driving this
+            // invocation: Postgres writes buffer into the sink (committed
+            // atomically per block by the loop) and CSV/stream/chat dispatch
+            // is deferred until after that commit. Historical backfill and
+            // ungrouped events take the eager paths below unchanged.
+            let sync_sink = active_sync_sink();
 
             let mut indexed_count = 0;
             let mut sql_bulk_data: Vec<Vec<EthereumSqlTypeWrapper>> = Vec::new();
@@ -625,7 +767,16 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
             if params.store_raw_events {
                 if let Some(postgres) = &params.postgres {
                     if !sql_bulk_data.is_empty() {
-                        if let Err(e) = postgres
+                        if let Some(sink) = &sync_sink {
+                            push_raw_event_insert(
+                                sink,
+                                &network,
+                                &params.sql_event_table_name,
+                                &params.sql_column_names,
+                                &sql_bulk_column_types,
+                                &sql_bulk_data,
+                            );
+                        } else if let Err(e) = postgres
                             .insert_bulk(
                                 &params.sql_event_table_name,
                                 &params.sql_column_names,
@@ -642,6 +793,8 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                     }
                 }
 
+                // ClickHouse storage is rejected at manifest validation for
+                // sync_together projects, so this path never runs in sink mode.
                 if let Some(clickhouse) = &params.clickhouse {
                     if !sql_bulk_data.is_empty() {
                         if let Err(e) = clickhouse
@@ -663,7 +816,28 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
 
                 if let Some(csv) = &params.csv {
                     if !csv_bulk_data.is_empty() {
-                        if let Err(e) = csv.append_bulk(csv_bulk_data).await {
+                        if let Some(sink) = &sync_sink {
+                            // Defer until the block tx commits: an eager append
+                            // would duplicate rows every time the loop retries
+                            // the block.
+                            let csv = Arc::clone(csv);
+                            let rows = std::mem::take(&mut csv_bulk_data);
+                            let log_name = format!(
+                                "{}::{}",
+                                params.contract_name, params.event_info.name
+                            );
+                            sink.push_side_effect(
+                                &network,
+                                Box::pin(async move {
+                                    if let Err(e) = csv.append_bulk(rows).await {
+                                        error!(
+                                            "{} - deferred CSV append failed (block already committed): {}",
+                                            log_name, e
+                                        );
+                                    }
+                                }),
+                            );
+                        } else if let Err(e) = csv.append_bulk(csv_bulk_data).await {
                             return Err(e.to_string());
                         }
                     }
@@ -672,7 +846,11 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
 
             // Process table operations
             if !params.tables.is_empty() && !table_events_data.is_empty() {
-                // Create checkpoint config for saving progress on shutdown
+                // Create checkpoint config for saving progress on shutdown.
+                // In sink mode the shutdown checkpoint is disabled: it would
+                // record blocks whose writes were only buffered (never
+                // committed) — the group loop's atomic flush is the only
+                // checkpoint writer for grouped events.
                 let checkpoint_config = ProgressCheckpointConfig::new(
                     params.indexer_name.clone(),
                     params.contract_name.clone(),
@@ -688,7 +866,8 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                     params.providers.clone(),
                     &params.constants,
                     &params.multicall_addresses,
-                    Some(&checkpoint_config),
+                    if sync_sink.is_some() { None } else { Some(&checkpoint_config) },
+                    sync_sink.as_deref(),
                 )
                 .await
                 {
@@ -723,130 +902,60 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                 events_by_block.entry(blk).or_default().push(ev);
             }
 
-            if let Some(streams_clients) = params.streams_clients.as_ref() {
-                let is_trace_event = match results {
-                    CallbackResult::Event(_) => false,
-                    CallbackResult::Trace(_) => true,
-                };
+            let is_trace_event = match results {
+                CallbackResult::Event(_) => false,
+                CallbackResult::Trace(_) => true,
+            };
 
-                for (block_number, block_events) in events_by_block {
-                    let event_message = EventMessage {
-                        event_name: params.event_info.name.clone(),
-                        event_data: Value::Array(block_events),
-                        event_signature_hash: params.event.selector(),
-                        network: network.clone(),
-                        block_number,
-                    };
+            if params.streams_clients.is_some() {
+                let stream_dispatch = publish_stream_events(
+                    params.streams_clients.clone(),
+                    params.contract_name.clone(),
+                    params.event_info.name.clone(),
+                    params.event.selector(),
+                    params.index_event_in_order,
+                    is_trace_event,
+                    network.clone(),
+                    from_block,
+                    to_block,
+                    events_by_block,
+                );
 
-                    let stream_id = format!(
-                        "{}-{}-{}-{}-{}-blk{}",
-                        params.contract_name,
-                        params.event_info.name,
-                        network,
-                        from_block,
-                        to_block,
-                        block_number
-                    );
-
-                    match streams_clients
-                        .stream(
-                            stream_id,
-                            &event_message,
-                            params.index_event_in_order,
-                            is_trace_event,
-                        )
-                        .await
-                    {
-                        Ok(streamed) => {
-                            if streamed > 0 {
-                                info!(
-                                    "{}::{} - {} - {} events {}",
-                                    params.contract_name,
-                                    params.event_info.name,
-                                    "STREAMED",
-                                    streamed,
-                                    format!("- block: {} - network: {}", block_number, network)
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            // Don't propagate: callback retry would re-run
-                            // PG/CH/CSV inserts and duplicate rows (see
-                            // `streams::publish_with_retry` header).
-                            // Instant-mode consumers lose this message;
-                            // Finalized-mode buffers are unaffected.
-                            error!(
-                                contract = %params.contract_name,
-                                event = %params.event_info.name,
-                                %network,
-                                block_number,
-                                error = %e,
-                                "Stream publish failed after retries, dropping to avoid \
-                                 re-running PG inserts on callback retry"
-                            );
-                        }
-                    }
+                if let Some(sink) = &sync_sink {
+                    // Defer until the block tx commits: dispatching now would
+                    // publish events whose rows may never commit, and a block
+                    // retry would publish them twice.
+                    sink.push_side_effect(&network, Box::pin(stream_dispatch));
+                } else {
+                    stream_dispatch.await;
                 }
             }
 
-            let event_message = EventMessage {
-                event_name: params.event_info.name.clone(),
-                event_data: Value::Array(chat_event_data),
-                event_signature_hash: params.event.selector(),
-                network: network.clone(),
-                block_number: from_block.to::<u64>(),
-            };
+            if params.chat_clients.is_some() {
+                let event_message = EventMessage {
+                    event_name: params.event_info.name.clone(),
+                    event_data: Value::Array(chat_event_data),
+                    event_signature_hash: params.event.selector(),
+                    network: network.clone(),
+                    block_number: from_block.to::<u64>(),
+                };
 
-            if let Some(chat_clients) = params.chat_clients.as_ref() {
-                if !chat_clients.is_in_block_range_to_send(&from_block, &to_block) {
-                    warn!(
-                        "{}::{} - {} - messages has a max 10 block range due the rate limits - {}",
-                        params.contract_name,
-                        params.event_info.name,
-                        "CHAT_MESSAGES_DISABLED",
-                        format!("- blocks: {} - {} - network: {}", from_block, to_block, network)
-                    );
+                let chat_dispatch = send_chat_messages(
+                    params.chat_clients.clone(),
+                    params.contract_name.clone(),
+                    params.event_info.name.clone(),
+                    params.index_event_in_order,
+                    network.clone(),
+                    from_block,
+                    to_block,
+                    event_message,
+                );
+
+                if let Some(sink) = &sync_sink {
+                    // Same rationale as the stream deferral above.
+                    sink.push_side_effect(&network, Box::pin(chat_dispatch));
                 } else {
-                    match chat_clients
-                        .send_message(
-                            &event_message,
-                            params.index_event_in_order,
-                            &from_block,
-                            &to_block,
-                        )
-                        .await
-                    {
-                        Ok(messages_sent) => {
-                            if messages_sent > 0 {
-                                info!(
-                                    "{}::{} - {} - {} events {}",
-                                    params.contract_name,
-                                    params.event_info.name,
-                                    "CHAT_MESSAGES_SENT",
-                                    messages_sent,
-                                    format!(
-                                        "- blocks: {} - {} - network: {}",
-                                        from_block, to_block, network
-                                    )
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            // Same rationale as the stream-publish branch
-                            // above: do not propagate so the callback-level
-                            // retry doesn't re-run PG/ClickHouse/CSV inserts.
-                            error!(
-                                contract = %params.contract_name,
-                                event = %params.event_info.name,
-                                %network,
-                                from_block = %from_block,
-                                to_block = %to_block,
-                                error = %e,
-                                "Chat message send failed, dropping to avoid re-running \
-                                 PG inserts on callback retry"
-                            );
-                        }
-                    }
+                    chat_dispatch.await;
                 }
             }
 

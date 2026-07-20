@@ -1,0 +1,197 @@
+# sync_together
+
+`sync_together` lets a no-code project define named groups of events that, during **live indexing only**, advance
+block-by-block in lockstep: for each block, every grouped event's Postgres writes - raw event rows, all of the
+event's custom-table operations, the reorg journal, and the `last_synced_block` checkpoints of every member -
+commit in **one Postgres transaction per block, per network**. Readers can never observe a block partially applied
+across the group, and checkpoints can never drift from the data.
+
+:::info
+`sync_together` is only available for `no-code` projects with postgres storage.
+Historical backfill is unchanged (non-atomic) - the lockstep guarantee applies once live indexing takes over,
+see [live indexing behavior](#live-indexing-behavior) below.
+:::
+
+## Defining a group
+
+There are two ways to opt in: explicit top-level groups (which can span contracts), or a
+`sync_together: true` flag on a single custom table.
+
+### Top-level groups (cross-contract)
+
+Define named groups at the top level of the YAML, listing the member contracts and events:
+
+```yaml [rindexer.yaml]
+name: MarketIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+contracts:
+  - name: CTFExchange
+    details:
+      - network: ethereum
+        address: "0x..."
+        start_block: 18600000
+    abi: ./abis/CTFExchange.json
+    include_events:
+      - OrderFilled
+  - name: ConditionalTokens
+    details:
+      - network: ethereum
+        address: "0x..."
+        start_block: 18600000
+    abi: ./abis/ConditionalTokens.json
+    include_events:
+      - PositionSplit
+sync_together: // [!code focus]
+  - group: market-sync // [!code focus]
+    contracts: // [!code focus]
+      - name: CTFExchange // [!code focus]
+        events: // [!code focus]
+          - OrderFilled // [!code focus]
+      - name: ConditionalTokens // [!code focus]
+        events: // [!code focus]
+          - PositionSplit // [!code focus]
+```
+
+Contract order × event order defines the deterministic per-block callback order - in the example above, for each
+block `OrderFilled` is processed before `PositionSplit`.
+
+Custom [tables](/docs/start-building/tables) are included automatically: grouping an event puts its **whole
+callback** into buffered mode - raw event rows and all of the event's table operations - no per-table wiring needed.
+
+### Per-table opt-in (single contract)
+
+For a single table whose events should commit atomically, set `sync_together: true` on the table entry - it sits
+next to the existing [global](/docs/start-building/tables#global) and
+[cross_chain](/docs/start-building/tables#cross_chain) flags:
+
+```yaml [rindexer.yaml]
+contracts:
+  - name: USDC
+    details:
+      - network: ethereum
+        address: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+        start_block: 18600000
+      - network: arbitrum
+        address: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
+        start_block: 150000000
+    abi: ./abis/ERC20.json
+    tables:
+      - name: total_balances
+        cross_chain: true
+        sync_together: true // [!code focus]
+        columns:
+          - name: holder
+          - name: balance
+            default: "0"
+        events:
+          - event: Transfer
+            operations:
+              - type: upsert
+                where:
+                  holder: $to
+                if: "$to != 0x0000000000000000000000000000000000000000"
+                set:
+                  - column: balance
+                    action: add
+                    value: $value
+```
+
+This desugars into an implicit group of that table's events.
+
+:::info[Whole-Callback Promotion]
+Opting in a table promotes the **whole event callback** - raw event rows, ALL of that event's table operations,
+the reorg journal, and the checkpoint - not just the flagged table. Buffering one table while committing sibling
+tables eagerly would break checkpoint atomicity, so it is not offered.
+:::
+
+## Transactions are per network
+
+Transactions are **per network - never cross-chain**. Each network's group loop commits its own per-block
+transaction: an ethereum transaction never waits on arbitrum, and block heights are not comparable across chains.
+
+For [cross_chain](/docs/start-building/tables#cross_chain) tables the guarantee is per-network, per-block
+atomicity - the cross-chain aggregate is the sum of each network's committed prefix, so it is eventually
+consistent across chains. This is inherent to cross-chain aggregation, not a regression.
+
+## Guarantees
+
+- **Per (network, block) atomicity** - all-or-nothing visibility across all group members' tables.
+- **Checkpoints commit with the data** - member `last_synced_block` checkpoints commit atomically WITH the data,
+  closing the crash window where data lands without its checkpoint and gets double-indexed on restart. This
+  includes the historical → live seam - the flush skips members already committed past a block, so re-invocations
+  can't double-count aggregations.
+- **Failures retry cleanly** - on any failure (callback error, database error, deadlock) the block's buffered
+  writes are discarded and the block retries in full. Atomicity means the retry sees zero rows for that block,
+  so no duplicates and no gaps.
+- **Reorgs roll back the whole group** - the shared per-network reorg coordinator rolls back all tables; the group
+  loop detects the rewind (via an in-transaction checkpoint check) and re-indexes from the fork point in lockstep.
+
+## Live indexing behavior
+
+Historical backfill is unchanged - each member backfills independently on the ordinary (non-atomic) pipeline.
+When live indexing starts, members that finished backfill at different heights are **fast-forwarded** to a common
+block on the ordinary pipeline, then the lockstep loop takes over. See
+[live indexing vs historic](/docs/start-building/live-indexing-and-historic) for the general behavior.
+
+## Requirements
+
+Each of the following is validated at startup - a violation is a hard startup error:
+
+| Requirement | Why |
+|---|---|
+| `project_type: no-code` only | Typed Rust handlers own their own database writes, so rindexer cannot wrap them in the per-block transaction (the same reason custom [tables](/docs/start-building/tables) are no-code only). |
+| Postgres storage only | Any ClickHouse storage on the project - **including Postgres + ClickHouse dual storage** - is rejected. ClickHouse has no cross-table transactions. |
+| No [end_block](/docs/start-building/yaml-config/contracts#end_block) on any member network | `sync_together` is live-only; all members must be live on all networks. |
+| Identical network sets across members | All member contracts of a group must run on the same networks and share the same [reorg_safe_distance](/docs/start-building/yaml-config/contracts#reorg_safe_distance) setting. |
+| No factory contracts (either direction) | A member cannot be factory-deployed, and a member cannot be referenced as a factory source by another contract - factory address discovery writes outside the block transaction. |
+| No cron-trigger tables on grouped contracts | Cron writes the same tables outside the block transaction. `sync_together: true` + `cron` on one table is likewise an error. |
+| Group names unique | Each `group` name may only appear once. |
+| Explicit groups need ≥ 2 distinct events | For a single table's events, use the [table-level flag](#per-table-opt-in-single-contract) instead. |
+| An event can be in at most one group | An event also cannot be in both an explicit group and a table-flagged group - the error tells you to fold the table's events into the explicit group. Two flagged tables on one contract that share an event auto-merge into one group. |
+| Mutually exclusive with [dependency_events](/docs/start-building/yaml-config/contracts#dependency_events) | Both claim ownership of an event's live loop. This also applies to dependencies auto-derived from postgres [relationships](/docs/start-building/yaml-config/storage#relationships). [index_event_in_order](/docs/start-building/yaml-config/contracts#index_event_in_order) is allowed. |
+
+:::info[start_block is optional for grouped members]
+With a [start_block](/docs/start-building/yaml-config/contracts#start_block), a member backfills from it and
+resumes from its checkpoint on restarts — set one when you need history. Without one, a grouped member starts at
+the chain tip on its FIRST boot and, unlike ungrouped events (which jump to the new tip on every boot and skip
+the downtime), still resumes from its checkpoint on restarts: the gap is caught up, then lockstep continues.
+:::
+
+## Trade-offs
+
+`sync_together` changes some behaviors - be aware of these before opting in:
+
+- **Streams, chat and CSV dispatch AFTER the block commit.** Those side effects are lost if the process crashes
+  between commit and dispatch, or if a block's commit succeeds server-side but its acknowledgment is lost and the
+  retry finds the block already committed (at-most-once). Previously (ungrouped) they were at-least-once with
+  respect to crashes. In return, payloads are never published for blocks that fail to commit, and block retries
+  can't double-publish.
+- **Reorg-journal failures abort the block.** Failures writing the reorg journal (`derived_op_log`) inside the
+  block transaction abort and retry the block (previously they were logged and swallowed).
+- **Throughput.** One commit per block that has logs, by design. Empty stretches advance with a single
+  checkpoint-only commit per poll window.
+- **Flush latency is shared.** The per-block flush briefly holds the network's reorg-coordinator lock, so other
+  pollers on that network inherit the flush latency (typically milliseconds).
+
+## Pool sizing
+
+Each group × network holds one database connection during its flush. Size `DATABASE_POOL_SIZE` to at least
+`(groups × networks)` plus your normal concurrency headroom - the default pool size is 10.
+
+```bash
+DATABASE_POOL_SIZE=20
+```
+
+## Hot reload
+
+Editing `sync_together` groups (or table flags) with [hot reload](/docs/start-building/hot-reload) triggers a
+restart of the affected contracts. Note that ABI file edits are not watched by hot reload.

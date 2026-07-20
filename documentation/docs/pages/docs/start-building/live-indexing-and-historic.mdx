@@ -103,3 +103,15 @@ contracts:
     - Transfer
     - Approval
 ```
+
+# Lockstep live indexing with sync_together
+
+Events grouped with [sync_together](/docs/start-building/yaml-config/sync-together) index historic data exactly as
+above - each member backfills independently on the ordinary (non-atomic) pipeline. When live indexing starts,
+members that finished backfill at different heights are first **fast-forwarded** to a common block on the ordinary
+pipeline, then the lockstep loop takes over: for each block, every member's writes and `last_synced_block`
+checkpoints commit in one Postgres transaction per block, per network.
+
+Because the checkpoint commits atomically with the data, grouped events no longer double-index at the
+historical → live seam - the per-block flush skips members already committed past a block, so a crash and restart
+cannot double-count aggregations.

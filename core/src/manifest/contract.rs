@@ -308,6 +308,14 @@ pub struct Table {
     #[serde(default)]
     pub cross_chain: bool,
 
+    /// If true, this table's events live-index in per-block lockstep with all
+    /// their Postgres writes (raw event rows, this and sibling table
+    /// operations, journal, checkpoints) committing in one transaction per
+    /// block, per network. Sugar for a `sync_together` group containing this
+    /// table's events. Postgres + no-code only; incompatible with `cron`.
+    #[serde(default)]
+    pub sync_together: bool,
+
     /// Column definitions for the table
     pub columns: Vec<TableColumn>,
 
@@ -1260,7 +1268,7 @@ impl SetAction {
 /// - `false` / omitted: index at head with active reorg detection
 /// - `true`: use chain-specific default safe distance
 /// - integer (u64): override with custom block distance
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum ReorgSafeDistance {
     Enabled(bool),
@@ -2257,6 +2265,7 @@ mod tests {
             name: "test_table".to_string(),
             global: false,
             cross_chain: false,
+            sync_together: false,
             columns: vec![],
             events: vec![TableEventMapping {
                 event: "Transfer".to_string(),
@@ -2302,6 +2311,7 @@ mod tests {
             name: "empty".to_string(),
             global: false,
             cross_chain: false,
+            sync_together: false,
             columns: vec![],
             events: vec![],
             cron: None,

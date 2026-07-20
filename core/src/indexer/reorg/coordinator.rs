@@ -35,6 +35,12 @@ pub struct ReorgCoordinator {
     /// expected to pre-filter out `None`-valued entries at construction time.
     streams_clients: Vec<Arc<Option<StreamsClients>>>,
     blocks_since_flush: u64,
+    /// Incremented after every successfully executed rollback. Loops that
+    /// commit multi-block windows (sync_together) snapshot this at window
+    /// start and abort the window if it changed before a commit — a rollback
+    /// interleaving between their per-block commits invalidates the window's
+    /// fetched logs.
+    rollback_epoch: u64,
 }
 
 impl ReorgCoordinator {
@@ -57,7 +63,13 @@ impl ReorgCoordinator {
             derived_tables,
             streams_clients,
             blocks_since_flush: 0,
+            rollback_epoch: 0,
         })
+    }
+
+    /// See the `rollback_epoch` field docs.
+    pub fn rollback_epoch(&self) -> u64 {
+        self.rollback_epoch
     }
 
     /// Called on each new block during live indexing.
@@ -406,6 +418,15 @@ impl ReorgCoordinator {
         reorg_task: ReorgTask,
         ctx: &ReorgContext<'_>,
     ) -> anyhow::Result<()> {
+        // Bump BEFORE executing: the rollback's core Postgres transaction
+        // (phase 1 of `execute`) can commit even when a later phase errors and
+        // aborts this call — the epoch must not read "no rollback ran" after
+        // data was already mutated. A bump on a fully-failed attempt costs
+        // concurrent sync_together windows a refetch and (if it lands during
+        // a group's fast-forward) skips the post-Phase-A checkpoint heal —
+        // both conservative, neither writes anything wrong.
+        self.rollback_epoch += 1;
+
         let result = reorg_task
             .execute(&mut self.window, ctx.postgres, ctx.clickhouse, self.provider.as_ref())
             .await?;
@@ -565,6 +586,7 @@ mod tests {
             derived_tables: vec![],
             streams_clients: vec![],
             blocks_since_flush: 0,
+            rollback_epoch: 0,
         }
     }
 
@@ -818,6 +840,7 @@ mod tests {
             ],
             streams_clients: vec![],
             blocks_since_flush: 0,
+            rollback_epoch: 0,
         };
 
         // on_exex_reorg creates a task — verify derived_tables are included
@@ -847,6 +870,7 @@ mod tests {
             }],
             streams_clients: vec![],
             blocks_since_flush: 0,
+            rollback_epoch: 0,
         };
 
         let task = coordinator.try_create_reorg_task_for_block_range(10, 11).unwrap();
@@ -875,6 +899,7 @@ mod tests {
             derived_tables: vec![],
             streams_clients: vec![],
             blocks_since_flush: 0,
+            rollback_epoch: 0,
         };
 
         let task = coordinator.on_exex_reorg(101, 110).unwrap();
@@ -907,6 +932,7 @@ mod tests {
             derived_tables: vec![],
             streams_clients,
             blocks_since_flush: 0,
+            rollback_epoch: 0,
         }
     }
 

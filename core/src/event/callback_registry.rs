@@ -278,6 +278,26 @@ impl EventCallbackRegistry {
         }
     }
 
+    /// Fires the callback exactly once, with no retry loop.
+    ///
+    /// Used by the `sync_together` lockstep loop, which owns retry at block
+    /// granularity: a partially-buffered callback that errored must NOT be
+    /// re-invoked by the registry (it would double-buffer its writes) — the
+    /// loop clears the sink and re-runs the whole block instead.
+    pub async fn trigger_event_once(
+        &self,
+        id: &String,
+        data: Vec<EventResult>,
+    ) -> Result<(), String> {
+        if let Some(event_information) = self.find_event(id) {
+            (event_information.callback)(data).await
+        } else {
+            let message = format!("EventCallbackRegistry: No event found for id: {}", id);
+            error!(message);
+            Err(message)
+        }
+    }
+
     pub fn complete(&self) -> Arc<Self> {
         Arc::new(self.clone())
     }
