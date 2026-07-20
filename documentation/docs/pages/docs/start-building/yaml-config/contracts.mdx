@@ -180,6 +180,12 @@ Some contracts are deployed through the factory contract (e.g. Uniswap V3). If y
 Factory filter requires to specify events which should be included when indexing through `include_events` property on the contract.
 :::
 
+:::info
+Factory-deployed contracts can also be [sync_together](/docs/start-building/yaml-config/sync-together) group
+members for per-block atomic commits - the group is gated by the factory's discovery checkpoint, see
+[factory-deployed members](/docs/start-building/yaml-config/sync-together#factory-deployed-members).
+:::
+
 #### name
 
 The name of the factory contract to index.

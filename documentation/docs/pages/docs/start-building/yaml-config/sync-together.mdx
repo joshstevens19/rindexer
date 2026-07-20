@@ -167,6 +167,56 @@ When live indexing starts, members that finished backfill at different heights a
 block on the ordinary pipeline, then the lockstep loop takes over. See
 [live indexing vs historic](/docs/start-building/live-indexing-and-historic) for the general behavior.
 
+## Factory-deployed members
+
+Contracts indexed through a [factory](/docs/start-building/yaml-config/contracts#factory) filter (e.g.
+factory-created vaults or pools) can be group members - their `Supply`/`Withdraw`/`Swap`-style events commit
+per-block atomically like any other member:
+
+```yaml [rindexer.yaml]
+contracts:
+  - name: Vault
+    details:
+      - network: ethereum
+        factory:
+          name: VaultFactory
+          address: "0x..."
+          event_name: VaultCreated
+          input_name: "vault"
+          abi: ./abis/VaultFactory.json
+    abi: ./abis/Vault.json
+    include_events:
+      - Supply
+      - Withdraw
+    tables:
+      - name: vault_balances
+        sync_together: true // [!code focus]
+        # ...
+```
+
+**How it works - the group is gated by discovery.** The factory-discovery event (`VaultCreated` above) keeps
+running on its own ordinary pipeline, writing newly deployed child addresses as it goes. The group loop **never
+processes a block past the factory-discovery checkpoint**: both the live-start fast-forward and every live window
+are capped at it, and the cap is re-read every iteration. Since a factory member's log filter resolves the known
+child addresses fresh on every window fetch, that ordering guarantees the address set is complete for any block
+the group commits - a vault deployed at block N (even one that receives a deposit in the same block) is
+discovered and committed by the factory pipeline before the group fetches block N. No deposit on a freshly
+deployed child can be silently skipped.
+
+**The observable behavior is that the group trails discovery.** Normally the factory pipeline runs at the chain
+tip and the lag is zero-to-one poll interval. But the coupling is deliberate and worth understanding
+operationally:
+
+- While the factory pipeline is still **backfilling** (first run with an old `start_block`), the group waits at
+  the discovery checkpoint and follows it up to the tip.
+- If the factory pipeline **stalls** (e.g. persistent RPC failures on the discovery loop), the whole group stops
+  advancing until discovery recovers - by design, since processing further could miss events from undiscovered
+  children. Alert on the group's `last_synced_block` metrics the same way you would for any event.
+- The clamp is **per network**, like everything else in the group.
+
+A contract used as a factory **SOURCE** (the contract whose event announces deployments) cannot itself be a
+group member - see [Requirements](#requirements).
+
 ## Requirements
 
 Each of the following is validated at startup - a violation is a hard startup error:
@@ -177,7 +227,7 @@ Each of the following is validated at startup - a violation is a hard startup er
 | Postgres storage only | Any ClickHouse storage on the project - **including Postgres + ClickHouse dual storage** - is rejected. ClickHouse has no cross-table transactions. |
 | No [end_block](/docs/start-building/yaml-config/contracts#end_block) on any member network | `sync_together` is live-only; all members must be live on all networks. |
 | Identical network sets across members | All member contracts of a group must run on the same networks and share the same [reorg_safe_distance](/docs/start-building/yaml-config/contracts#reorg_safe_distance) setting. |
-| No factory SOURCE contracts as members | A member cannot be referenced as a factory source by another contract - the discovery event's address writes run outside the block transaction. **Factory-DEPLOYED contracts (the children, e.g. factory-created vaults or pools) CAN be grouped**: discovery stays on its own pipeline and the group never processes a block past the factory's checkpoint, so child address sets are always complete for the blocks the group commits. |
+| No factory SOURCE contracts as members | A member cannot be referenced as a factory source by another contract - the discovery event's address writes run outside the block transaction. **Factory-DEPLOYED contracts (the children) CAN be grouped** - see [Factory-deployed members](#factory-deployed-members) for how the group is gated by discovery. |
 | No cron-trigger tables on grouped contracts | Cron writes the same tables outside the block transaction. `sync_together: true` + `cron` on one table is likewise an error. |
 | Group names unique | Each `group` name may only appear once. |
 | Explicit groups need ≥ 2 distinct events | For a single table's events, use the [table-level flag](#per-table-opt-in-single-contract) instead. |
@@ -206,6 +256,9 @@ the downtime), still resumes from its checkpoint on restarts: the gap is caught 
   checkpoint-only commit per poll window.
 - **Flush latency is shared.** The per-block flush briefly holds the network's reorg-coordinator lock, so other
   pollers on that network inherit the flush latency (typically milliseconds).
+- **Groups with factory-deployed members advance only as fast as discovery.** The group is capped at the
+  factory-discovery checkpoint (see [Factory-deployed members](#factory-deployed-members)) - if the discovery
+  pipeline stalls, the group waits rather than risk missing events from undiscovered children.
 
 ## Pool sizing
 
