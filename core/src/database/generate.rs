@@ -510,7 +510,7 @@ pub fn generate_internal_factory_event_table_name(
         "{}_{}_{}",
         schema_name,
         camel_to_snake(&params.event_name),
-        &params.input_names.iter().map(|v| camel_to_snake(v)).collect::<Vec<String>>().join("-")
+        params.input_names.iter().map(|v| camel_to_snake(v)).collect::<Vec<String>>().join("-")
     );
 
     compact_table_name_if_needed(table_name)
@@ -525,7 +525,7 @@ pub fn generate_internal_factory_event_table_name_no_shorten(
         "{}_{}_{}",
         schema_name,
         camel_to_snake(&params.event_name),
-        &params.input_names.iter().map(|v| camel_to_snake(v)).collect::<Vec<String>>().join("_")
+        params.input_names.iter().map(|v| camel_to_snake(v)).collect::<Vec<String>>().join("_")
     )
 }
 

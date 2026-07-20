@@ -22,6 +22,9 @@ curl -L https://rindexer.xyz/install.sh | bash
 If you’re on Windows, you will need to install and use Git BASH or WSL, as your terminal,
 since rindexer installation does not support Powershell or Cmd.
 
+Native Windows release binaries are built without Reth/ExEx support. If you need Reth mode,
+use Linux, macOS, Docker, or WSL/Linux instead of the native Windows artifact.
+
 ## Use rindexer
 
 Once installed you can run `rindexer --help` in your terminal to see all the commands available to you.

@@ -663,7 +663,7 @@ impl<TExtensions> {event_type_name}<TExtensions> where TExtensions: 'static + Se
         abigen_file_name = trace_abigen_contract_file_name(contract_name),
         abigen_name = trace_abigen_contract_name(contract_name),
         structs = trace_generate_structs(contract_name)?,
-        event_type_name = &event_type_name,
+        event_type_name = event_type_name,
         event_context_database =
             if storage.postgres_enabled() { "pub database: Arc<PostgresClient>," } else { "" },
         event_context_csv =

@@ -50,11 +50,8 @@ impl Template {
         let keys: Vec<&str> = path.split('.').collect();
         let mut current = data;
         for key in keys {
-            if let Some(value) = current.get(key) {
-                current = value;
-            } else {
-                return None;
-            }
+            let value = current.get(key)?;
+            current = value;
         }
         Some(current.to_string().replace('"', ""))
     }
