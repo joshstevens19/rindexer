@@ -708,6 +708,9 @@ async fn live_indexing_for_contract_event_dependencies(
                     .lock()
                     .await = ordering_live_indexing_details;
 
+                // No event task spawns on this skip path, but the checkpoint write below
+                // must still be tracked so graceful shutdown waits for it.
+                indexing_event_processing();
                 update_progress_and_last_synced_task(
                     Arc::clone(config),
                     to_block,

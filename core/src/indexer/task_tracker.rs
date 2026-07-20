@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use once_cell::sync::Lazy;
+use tracing::warn;
 
 use crate::metrics::indexing as metrics;
 
@@ -12,7 +13,15 @@ pub fn indexing_event_processing() {
 }
 
 pub fn indexing_event_processed() {
-    INDEXING_TASKS.fetch_sub(1, Ordering::SeqCst);
+    // Skip the decrement at 0 so the unsigned counter can't underflow;
+    if INDEXING_TASKS
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+        .is_err()
+    {
+        warn!("indexing_event_processed called with no active task, counter imbalance");
+        return;
+    }
+
     metrics::dec_active_tasks();
 }
 

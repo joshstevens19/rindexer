@@ -2284,7 +2284,7 @@ mod tests {
 
         // Both event buckets for block 101 are gone; block 100 survives in both.
         let map = clients.finalized_buffers.lock().await;
-        for (_key, buf) in map.iter() {
+        for buf in map.values() {
             assert!(buf.buffer.contains_key(&100), "block 100 must survive");
             assert!(!buf.buffer.contains_key(&101), "block 101 must be discarded");
         }

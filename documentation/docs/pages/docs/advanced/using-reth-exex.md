@@ -2,6 +2,8 @@
 
 Reth Execution Extensions (ExEx) is a powerful framework introduced by Reth for building high-performance off-chain infrastructure as post-execution hooks. rindexer leverages ExEx to provide superior indexing performance and native reorg handling.
 
+> Native Windows rindexer CLI releases are built without Reth/ExEx support because upstream Reth no longer provides Windows build/release support. Use Linux, macOS, Docker, or WSL/Linux for Reth mode.
+
 ## What is ExEx?
 
 ExEx provides a reorg-aware stream called `ExExNotification` which includes:

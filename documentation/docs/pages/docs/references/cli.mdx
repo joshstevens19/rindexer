@@ -64,6 +64,8 @@ Examples:
   rindexer new rust --reth -- --datadir /custom/path --http true
 ```
 
+`--reth` requires a CLI binary built with the `reth` feature. Official native Windows release binaries are built without that feature, so use Linux, macOS, Docker, or WSL/Linux for Reth mode.
+
 ## start
 
 Start various services like indexers, GraphQL APIs or both together. This will start the services based on the rindexer.yaml file. A health monitoring server is automatically started alongside these services.
