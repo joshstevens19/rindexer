@@ -4436,11 +4436,8 @@ async fn execute_view_call_for_cron_internal(
                 // Fallback for string type: some tokens (MKR) return bytes32 for symbol()/name()
                 // Try to decode as bytes32 and convert to string
                 if result_bytes.len() == 32 {
-                    if let Some(s) = try_bytes32_as_string(&result_bytes) {
-                        DynSolValue::String(s)
-                    } else {
-                        return None;
-                    }
+                    let s = try_bytes32_as_string(&result_bytes)?;
+                    DynSolValue::String(s)
                 } else {
                     return None;
                 }

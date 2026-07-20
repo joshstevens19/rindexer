@@ -313,7 +313,9 @@ pub struct Table {
     /// operations, journal, checkpoints) committing in one transaction per
     /// block, per network. Sugar for a `sync_together` group containing this
     /// table's events. Postgres + no-code only; incompatible with `cron`.
-    #[serde(default)]
+    /// skip_serializing_if keeps manifest round-trips (`rindexer add contract`
+    /// etc.) from injecting `sync_together: false` into users' YAML.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub sync_together: bool,
 
     /// Column definitions for the table

@@ -200,9 +200,9 @@ pub fn handle_new_command(
     let reth_mode_text = if final_reth_config.is_some() { " with Reth support" } else { "" };
 
     let success_message = if project_type == ProjectType::Rust {
-        format!("rindexer rust project created{} with a rETH transfer events YAML template.\n cd ./{} \n- use rindexer codegen commands to regenerate the code\n- run `rindexer start all` to start rindexer\n- run `rindexer add contract` to add new contracts to your project", reth_mode_text, &project_name)
+        format!("rindexer rust project created{} with a rETH transfer events YAML template.\n cd ./{} \n- use rindexer codegen commands to regenerate the code\n- run `rindexer start all` to start rindexer\n- run `rindexer add contract` to add new contracts to your project", reth_mode_text, project_name)
     } else {
-        format!("rindexer no-code project created{} with a rETH transfer events YAML template.\n cd ./{} \n- run `rindexer start all` to start rindexer\n- run `rindexer add contract` to add new contracts to your project", reth_mode_text, &project_name)
+        format!("rindexer no-code project created{} with a rETH transfer events YAML template.\n cd ./{} \n- run `rindexer start all` to start rindexer\n- run `rindexer add contract` to add new contracts to your project", reth_mode_text, project_name)
     };
 
     // for later to avoid cloning

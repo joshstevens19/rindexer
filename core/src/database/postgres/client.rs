@@ -560,8 +560,8 @@ async fn write_binary_copy_rows(
     for row in prepared_data.iter() {
         if let Err(e) = writer.as_mut().write(row).await {
             error!("Error writing binary data, aborting early: {}", e);
-            writer.finish().await?;
-            return Err(e)?;
+            writer.as_mut().finish().await?;
+            Err(e)?;
         };
     }
 
