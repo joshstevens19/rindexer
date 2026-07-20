@@ -1175,13 +1175,7 @@ async fn process_contract(
         let has_tables = !contract_tables.is_empty();
         let store_raw_events = contract.is_event_in_include_events(&event_name) || has_tables;
 
-        // Mirrors EventCallbackRegistryInformation::is_factory_filter_event —
-        // true only for the synthesized factory contract's discovery event.
-        let is_factory_event = contract.details.iter().all(|d| {
-            d.factory
-                .as_ref()
-                .is_some_and(|f| f.name == contract.name && f.event_name == event_info.name)
-        });
+        let is_factory_event = contract.is_factory_only_event(&event_info.name);
         let atomic_safe_concurrency =
             index_event_in_order || manifest.config.callback_concurrency.unwrap_or(1) <= 1;
 

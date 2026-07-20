@@ -910,12 +910,8 @@ use super::super::super::typings::{indexer_name_formatted}::events::{handler_reg
                     // child-address bookkeeping persists only AFTER the callback
                     // (FactoryEventProcessingConfig::trigger_event) — an atomic
                     // cursor commit + crash there would permanently skip
-                    // re-discovery. Mirrors is_factory_filter_event.
-                    && !contract.details.iter().all(|d| {
-                        d.factory.as_ref().is_some_and(|f| {
-                            f.name == contract.name && f.event_name == event.name
-                        })
-                    })
+                    // re-discovery.
+                    && !contract.is_factory_only_event(&event.name)
                     // Exactly-once needs serialized batch commits (effective
                     // callback concurrency 1). Codegen-time check — if the yaml
                     // later raises callback_concurrency, re-run codegen so this
@@ -1078,8 +1074,133 @@ use super::super::super::typings::{indexer_name_formatted}::events::{handler_reg
 
 #[cfg(test)]
 mod tests {
-    use super::generate_event_input_path;
-    use crate::abi::{AbiNamePropertiesPath, AbiProperty};
+    use super::{generate_event_handlers, generate_event_input_path};
+    use crate::{
+        abi::{AbiNamePropertiesPath, AbiProperty},
+        manifest::{contract::Contract, storage::Storage},
+    };
+
+    const TRANSFER_ABI: &str = r#"[{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"from","type":"address"},{"indexed":true,"internalType":"address","name":"to","type":"address"},{"indexed":false,"internalType":"uint256","name":"value","type":"uint256"}],"name":"Transfer","type":"event"}]"#;
+
+    const PLAIN_CONTRACT: &str = r#"
+        name: Token
+        abi: ./abi.json
+        details:
+          - network: ethereum
+            address: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
+            start_block: 1
+    "#;
+
+    /// Generate handlers for `contract_yaml` against a tempdir project holding
+    /// the Transfer ABI, returning the emitted source.
+    fn generated_handlers(
+        contract_yaml: &str,
+        storage_yaml: &str,
+        callback_concurrency: Option<usize>,
+    ) -> String {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("abi.json"), TRANSFER_ABI).expect("write abi");
+        let contract: Contract = serde_yaml::from_str(contract_yaml).expect("contract yaml");
+        let storage: Storage = serde_yaml::from_str(storage_yaml).expect("storage yaml");
+        generate_event_handlers(
+            dir.path(),
+            "TestIndexer",
+            false,
+            &contract,
+            &storage,
+            callback_concurrency,
+        )
+        .expect("generate handlers")
+        .as_string()
+    }
+
+    fn assert_atomic(code: &str) {
+        assert!(code.contains("insert_bulk_with_cursor"), "expected atomic arm:\n{code}");
+        assert!(code.contains("rindexer::BulkCursorUpdate"), "expected cursor struct:\n{code}");
+        assert!(!code.contains(".insert_bulk("), "legacy call must be absent:\n{code}");
+    }
+
+    fn assert_legacy(code: &str) {
+        assert!(code.contains(".insert_bulk("), "expected legacy arm:\n{code}");
+        assert!(!code.contains("insert_bulk_with_cursor"), "atomic call must be absent:\n{code}");
+    }
+
+    #[test]
+    fn postgres_only_default_concurrency_emits_atomic_insert() {
+        let code = generated_handlers(PLAIN_CONTRACT, "postgres:\n  enabled: true", None);
+        assert_atomic(&code);
+        // the cursor targets the event's rindexer_internal tracker table
+        assert!(code.contains("test_indexer_token_transfer"), "internal table name:\n{code}");
+    }
+
+    #[test]
+    fn callback_concurrency_above_one_falls_back_to_legacy_insert() {
+        let code = generated_handlers(PLAIN_CONTRACT, "postgres:\n  enabled: true", Some(4));
+        assert_legacy(&code);
+    }
+
+    #[test]
+    fn index_event_in_order_restores_atomic_insert_despite_concurrency() {
+        let contract = r#"
+            name: Token
+            abi: ./abi.json
+            index_event_in_order:
+              - Transfer
+            details:
+              - network: ethereum
+                address: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
+                start_block: 1
+        "#;
+        let code = generated_handlers(contract, "postgres:\n  enabled: true", Some(4));
+        assert_atomic(&code);
+    }
+
+    #[test]
+    fn csv_alongside_postgres_keeps_legacy_insert() {
+        let storage = "postgres:\n  enabled: true\ncsv:\n  enabled: true\n  path: ./generated_csv";
+        let code = generated_handlers(PLAIN_CONTRACT, storage, None);
+        assert_legacy(&code);
+    }
+
+    #[test]
+    fn factory_discovery_event_keeps_legacy_insert() {
+        // The synthesized discovery contract: every detail is a factory binding
+        // for this contract name + event.
+        let contract = r#"
+            name: PoolFactory
+            abi: ./abi.json
+            details:
+              - network: ethereum
+                factory:
+                  name: PoolFactory
+                  address: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
+                  event_name: Transfer
+                  input_name: pool
+                  abi: ./abi.json
+        "#;
+        let code = generated_handlers(contract, "postgres:\n  enabled: true", None);
+        assert_legacy(&code);
+    }
+
+    #[test]
+    fn factory_child_contract_emits_atomic_insert() {
+        // A child contract discovered via a factory: the factory binding points
+        // at a DIFFERENT contract name/event, so its own events are exact.
+        let contract = r#"
+            name: Pool
+            abi: ./abi.json
+            details:
+              - network: ethereum
+                factory:
+                  name: PoolFactory
+                  address: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
+                  event_name: PoolCreated
+                  input_name: pool
+                  abi: ./abi.json
+        "#;
+        let code = generated_handlers(contract, "postgres:\n  enabled: true", None);
+        assert_atomic(&code);
+    }
 
     #[test]
     fn test_top_level_property() {
