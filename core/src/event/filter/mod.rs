@@ -61,7 +61,8 @@ fn get_nested_value(data: &Value, path: &str) -> Option<Value> {
     let keys: Vec<&str> = path.split('.').collect();
     let mut current = data;
     for key in keys {
-        current = current.get(key)?;
+        let value = current.get(key)?;
+        current = value;
     }
     Some(current.clone())
 }
