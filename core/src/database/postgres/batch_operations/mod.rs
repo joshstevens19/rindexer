@@ -8,7 +8,13 @@ mod dynamic;
 mod macros;
 mod query_builder;
 
-pub use dynamic::execute_dynamic_batch_operation;
+// build_batch_statement/execute_batch_statement are consumed by unit tests
+// (SQL parity assertions) and kept public for future callers.
+#[allow(unused_imports)]
+pub use dynamic::{
+    build_batch_statement, execute_batch_statement, execute_dynamic_batch_operation,
+    DynamicBatchStatement,
+};
 
 // Re-exported for use by the create_batch_postgres_operation! macro
 #[allow(unused_imports)]

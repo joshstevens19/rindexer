@@ -18,6 +18,7 @@ use crate::{
     manifest::{
         core::{Manifest, ProjectType},
         network::Network,
+        sync_together::{effective_sync_together_groups, IMPLICIT_GROUP_PREFIX},
     },
     StringOrArray,
 };
@@ -264,6 +265,64 @@ pub enum ValidateManifestError {
 
     #[error("Cron field '{0}' referenced in cron operation for table '{1}' in contract '{2}' not found in table columns.")]
     CronFieldNotFound(String, String, String),
+
+    // sync_together validation errors
+    #[error("sync_together requires 'project_type: no-code'. Typed Rust handlers own their own database writes, so rindexer cannot wrap them in the per-block transaction.")]
+    SyncTogetherRequiresNoCodeProjectType,
+
+    #[error("sync_together requires Postgres storage to be enabled — the per-block atomic commit is a Postgres transaction.")]
+    SyncTogetherRequiresPostgres,
+
+    #[error("sync_together is not supported with ClickHouse storage (including Postgres+ClickHouse dual storage): ClickHouse has no cross-table transactions, so its writes cannot join the per-block commit. Disable ClickHouse storage or remove sync_together.")]
+    SyncTogetherClickhouseNotSupported,
+
+    #[error("sync_together group names must be unique: '{0}' is defined more than once")]
+    SyncTogetherGroupNameMustBeUnique(String),
+
+    #[error("sync_together group '{0}' needs at least 2 distinct events — a single-event group has nothing to synchronize with. To get per-block atomic commits for one table's events, set 'sync_together: true' on the table instead.")]
+    SyncTogetherGroupTooSmall(String),
+
+    #[error("sync_together group '{0}' has no events")]
+    SyncTogetherGroupEmpty(String),
+
+    #[error("Event '{1}' on contract '{0}' appears in more than one sync_together group ('{2}' and '{3}') — an event can only belong to one group")]
+    SyncTogetherEventInMultipleGroups(String, String, String, String),
+
+    #[error("Event '{1}' on contract '{0}' is in the explicit sync_together group '{2}' but its table '{3}' also sets 'sync_together: true'. Remove the table flag — the explicit group already covers this table's writes.")]
+    SyncTogetherTableFlagConflictsWithExplicitGroup(String, String, String, String),
+
+    #[error("sync_together group '{1}' references contract '{0}' which is not declared under 'contracts'")]
+    SyncTogetherContractNotFound(String, String),
+
+    #[error("Contract '{0}' in sync_together group '{1}' uses a factory — factory contracts are not supported in sync_together: the factory address discovery writes outside the per-block transaction")]
+    SyncTogetherFactoryContractNotSupported(String, String),
+
+    #[error("Contract '{0}' is referenced as a factory source by contract '{2}' — contracts used as factories cannot be in sync_together group '{1}': factory address discovery writes outside the per-block transaction")]
+    SyncTogetherFactoryParentNotSupported(String, String, String),
+
+    #[error("Event '{1}' on contract '{0}' in sync_together group '{2}' is not indexed — it must exist in the ABI as an event and be listed in 'include_events' or used by a table")]
+    SyncTogetherEventNotIndexed(String, String, String),
+
+    #[error("Event '{1}' on contract '{0}' is in sync_together group '{2}' but also in a dependency_events tree — an event's live loop can only be owned by one of the two")]
+    SyncTogetherEventInDependencyEvents(String, String, String),
+
+    #[error("Contract '{0}' (network '{1}') in sync_together group '{2}' sets 'end_block' — sync_together applies to live indexing, so every member must be live (no end_block) on every network")]
+    SyncTogetherEndBlockNotSupported(String, String, String),
+
+    #[error("Contracts '{1}' and '{2}' in sync_together group '{0}' index different network sets — all members of a group must run on identical networks")]
+    SyncTogetherNetworkMismatch(String, String, String),
+
+    #[error("Contracts '{1}' and '{2}' in sync_together group '{0}' have different 'reorg_safe_distance' settings — the group runs one lockstep window per network, so all members must share one effective reorg distance")]
+    SyncTogetherReorgDistanceMismatch(String, String, String),
+
+    #[error("Table '{1}' on contract '{0}' has cron triggers — cron operations write the same tables outside the per-block transaction, so contracts in sync_together group '{2}' cannot have cron tables")]
+    SyncTogetherCronTablesNotSupported(String, String, String),
+
+    #[error("Table '{0}' under native_transfers sets 'sync_together: true' — sync_together only supports contract events, not native transfers. Remove the flag.")]
+    SyncTogetherNativeTransfersNotSupported(String),
+
+    #[error("sync_together group name '{0}' uses the reserved '{1}' prefix (auto-generated for table-level sync_together groups) — pick a different name")]
+    SyncTogetherGroupNameReserved(String, String),
 }
 
 fn validate_manifest(
@@ -837,7 +896,341 @@ fn validate_manifest(
         }
     }
 
+    validate_sync_together(project_path, manifest)?;
+
     Ok(())
+}
+
+/// Validates `sync_together` groups (explicit top-level groups plus implicit
+/// groups desugared from table-level `sync_together: true` flags).
+fn validate_sync_together(
+    project_path: &Path,
+    manifest: &Manifest,
+) -> Result<(), ValidateManifestError> {
+    use std::collections::HashMap;
+
+    use crate::event::contract_setup::ContractEventMapping;
+    use crate::manifest::contract::SimpleEventOrContractEvent;
+
+    // Table-level sync_together is only wired for contract tables (the
+    // desugar in effective_sync_together_groups walks manifest.contracts).
+    // Reject the flag on native_transfers tables rather than silently
+    // ignoring the opt-in. Checked before the empty-groups early return —
+    // an NT-only flag produces no groups.
+    if let Some(tables) = &manifest.native_transfers.tables {
+        if let Some(table) = tables.iter().find(|t| t.sync_together) {
+            return Err(ValidateManifestError::SyncTogetherNativeTransfersNotSupported(
+                table.name.clone(),
+            ));
+        }
+    }
+
+    // The implicit-group prefix is reserved: a user group named "table:…"
+    // would be misclassified by is_implicit() everywhere it's consulted
+    // (single-event rule, explicit-vs-implicit conflict messages).
+    if let Some(user_groups) = &manifest.sync_together {
+        if let Some(group) = user_groups.iter().find(|g| g.group.starts_with(IMPLICIT_GROUP_PREFIX))
+        {
+            return Err(ValidateManifestError::SyncTogetherGroupNameReserved(
+                group.group.clone(),
+                IMPLICIT_GROUP_PREFIX.to_string(),
+            ));
+        }
+    }
+
+    let groups = effective_sync_together_groups(manifest);
+    if groups.is_empty() {
+        return Ok(());
+    }
+
+    // Rule 1: no-code project + Postgres storage.
+    if manifest.project_type != ProjectType::NoCode {
+        return Err(ValidateManifestError::SyncTogetherRequiresNoCodeProjectType);
+    }
+
+    // Rule 8: any ClickHouse storage on the project is rejected (its writes
+    // cannot join the per-block Postgres transaction). Checked before the
+    // postgres rule so ClickHouse projects get the specific message.
+    if manifest.storage.clickhouse_enabled() {
+        return Err(ValidateManifestError::SyncTogetherClickhouseNotSupported);
+    }
+
+    if !manifest.storage.postgres_enabled() {
+        return Err(ValidateManifestError::SyncTogetherRequiresPostgres);
+    }
+
+    // Rule 2a: unique group names.
+    let mut seen_names = HashSet::new();
+    for group in &groups {
+        if !seen_names.insert(group.group.as_str()) {
+            return Err(ValidateManifestError::SyncTogetherGroupNameMustBeUnique(
+                group.group.clone(),
+            ));
+        }
+    }
+
+    // Rule 2b + 12: every event in at most one group; explicit groups need
+    // >=2 distinct members (single-event atomicity is what the table-level
+    // flag is for); implicit groups may have 1.
+    let mut member_owner: HashMap<
+        ContractEventMapping,
+        &crate::manifest::sync_together::SyncTogetherGroup,
+    > = HashMap::new();
+    for group in &groups {
+        let members = group.members();
+        let distinct: HashSet<&ContractEventMapping> = members.iter().collect();
+
+        if distinct.is_empty() {
+            return Err(ValidateManifestError::SyncTogetherGroupEmpty(group.group.clone()));
+        }
+        if !group.is_implicit() && distinct.len() < 2 {
+            return Err(ValidateManifestError::SyncTogetherGroupTooSmall(group.group.clone()));
+        }
+
+        for member in distinct {
+            if let Some(owner) = member_owner.get(member) {
+                // Explicit + implicit overlap gets a targeted message telling
+                // the user to drop the table flag.
+                let (explicit, implicit) = if owner.is_implicit() && !group.is_implicit() {
+                    (group, *owner)
+                } else if !owner.is_implicit() && group.is_implicit() {
+                    (*owner, group)
+                } else {
+                    return Err(ValidateManifestError::SyncTogetherEventInMultipleGroups(
+                        member.contract_name.clone(),
+                        member.event_name.clone(),
+                        owner.group.clone(),
+                        group.group.clone(),
+                    ));
+                };
+                return Err(
+                    ValidateManifestError::SyncTogetherTableFlagConflictsWithExplicitGroup(
+                        member.contract_name.clone(),
+                        member.event_name.clone(),
+                        explicit.group.clone(),
+                        implicit.group.clone(),
+                    ),
+                );
+            }
+            member_owner.insert(member.clone(), group);
+        }
+    }
+
+    for group in &groups {
+        let members = group.members();
+
+        // Unique member contracts in declaration order.
+        let mut member_contract_names: Vec<&str> = Vec::new();
+        for member in &members {
+            if !member_contract_names.contains(&member.contract_name.as_str()) {
+                member_contract_names.push(&member.contract_name);
+            }
+        }
+
+        let mut member_contracts = Vec::new();
+        for name in &member_contract_names {
+            // Rule 3: resolve against user-declared contracts only (not
+            // all_contracts(), which contains synthesized factory names).
+            let contract =
+                manifest.contracts.iter().find(|c| c.name == *name).ok_or_else(|| {
+                    ValidateManifestError::SyncTogetherContractNotFound(
+                        name.to_string(),
+                        group.group.clone(),
+                    )
+                })?;
+            member_contracts.push(contract);
+        }
+
+        for contract in &member_contracts {
+            // Rule 4 (child side): member contracts must not be factory-deployed.
+            if contract.details.iter().any(|d| d.factory.is_some()) {
+                return Err(ValidateManifestError::SyncTogetherFactoryContractNotSupported(
+                    contract.name.clone(),
+                    group.group.clone(),
+                ));
+            }
+
+            // Rule 4 (parent side): member contracts must not be used as a
+            // factory source by any other contract (by name, or by address
+            // overlap on a shared network).
+            for other in &manifest.contracts {
+                for detail in &other.details {
+                    let Some(factory) = &detail.factory else { continue };
+
+                    let name_match = factory.name == contract.name;
+                    let address_match = contract.details.iter().any(|member_detail| {
+                        member_detail.network == detail.network
+                            && member_detail.address.as_ref().is_some_and(|member_address| {
+                                addresses_overlap(member_address, &factory.address)
+                            })
+                    });
+
+                    if name_match || address_match {
+                        return Err(ValidateManifestError::SyncTogetherFactoryParentNotSupported(
+                            contract.name.clone(),
+                            group.group.clone(),
+                            other.name.clone(),
+                        ));
+                    }
+                }
+            }
+
+            for detail in &contract.details {
+                // start_block is optional for grouped members: with one, the
+                // member backfills from it and resumes from its checkpoint;
+                // without one, it starts at the tip on first boot and — unlike
+                // ungrouped events — still resumes from its checkpoint on
+                // restarts (see get_start_end_block's
+                // checkpoint_resume_without_start_block), so downtime never
+                // becomes a silent gap in the group.
+
+                // Rule 7 (part): live on every network.
+                if detail.end_block.is_some() {
+                    return Err(ValidateManifestError::SyncTogetherEndBlockNotSupported(
+                        contract.name.clone(),
+                        detail.network.clone(),
+                        group.group.clone(),
+                    ));
+                }
+            }
+
+            // Rule 10: no cron tables on grouped contracts.
+            if let Some(tables) = &contract.tables {
+                for table in tables {
+                    if table.has_cron() {
+                        return Err(ValidateManifestError::SyncTogetherCronTablesNotSupported(
+                            contract.name.clone(),
+                            table.name.clone(),
+                            group.group.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Rule 7: identical network sets and one reorg_safe_distance setting
+        // across all member contracts.
+        if let Some(first) = member_contracts.first() {
+            let first_networks: HashSet<&str> =
+                first.details.iter().map(|d| d.network.as_str()).collect();
+            for contract in member_contracts.iter().skip(1) {
+                let networks: HashSet<&str> =
+                    contract.details.iter().map(|d| d.network.as_str()).collect();
+                if networks != first_networks {
+                    return Err(ValidateManifestError::SyncTogetherNetworkMismatch(
+                        group.group.clone(),
+                        first.name.clone(),
+                        contract.name.clone(),
+                    ));
+                }
+                // Compare EFFECTIVE settings: an omitted key and an explicit
+                // `reorg_safe_distance: false` are documented as identical
+                // (both index at head, distance 0).
+                if contract.reorg_safe_distance.unwrap_or_default()
+                    != first.reorg_safe_distance.unwrap_or_default()
+                {
+                    return Err(ValidateManifestError::SyncTogetherReorgDistanceMismatch(
+                        group.group.clone(),
+                        first.name.clone(),
+                        contract.name.clone(),
+                    ));
+                }
+            }
+        }
+
+        // Rules 5 + 6, per member event.
+        for contract in &member_contracts {
+            let contract_events: Vec<&str> = members
+                .iter()
+                .filter(|m| m.contract_name == contract.name)
+                .map(|m| m.event_name.as_str())
+                .collect();
+
+            // read_abi_items already applies the include_events ∪ table-events
+            // filter (all events when neither is set), mirroring registration.
+            let abi_events = ABIItem::read_abi_items(project_path, contract).map_err(|e| {
+                ValidateManifestError::InvalidABI(contract.name.clone(), e.to_string())
+            })?;
+
+            // Filter contracts narrow further to their filter event names.
+            let filter_event_names: HashSet<String> = contract
+                .details
+                .iter()
+                .filter_map(|detail| detail.filter.clone())
+                .flat_map(|events| match events {
+                    ValueOrArray::Value(event) => vec![event.event_name],
+                    ValueOrArray::Array(event_array) => {
+                        event_array.into_iter().map(|e| e.event_name).collect()
+                    }
+                })
+                .collect();
+
+            // Yaml-declared dependency_events on this contract (relationship-
+            // derived dependencies are checked at startup routing).
+            let mut dependency_members: HashSet<ContractEventMapping> = HashSet::new();
+            if let Some(tree) = &contract.dependency_events {
+                let mut stack = vec![tree];
+                while let Some(node) = stack.pop() {
+                    for event in &node.events {
+                        match event {
+                            SimpleEventOrContractEvent::SimpleEvent(name) => {
+                                dependency_members.insert(ContractEventMapping {
+                                    contract_name: contract.name.clone(),
+                                    event_name: name.clone(),
+                                });
+                            }
+                            SimpleEventOrContractEvent::ContractEvent(mapping) => {
+                                dependency_members.insert(mapping.clone());
+                            }
+                        }
+                    }
+                    if let Some(then) = &node.then {
+                        stack.push(then);
+                    }
+                }
+            }
+
+            for event_name in contract_events {
+                let in_abi = abi_events.iter().any(|e| e.name == event_name && e.type_ == "event");
+                let passes_filter =
+                    filter_event_names.is_empty() || filter_event_names.contains(event_name);
+                if !in_abi || !passes_filter {
+                    return Err(ValidateManifestError::SyncTogetherEventNotIndexed(
+                        contract.name.clone(),
+                        event_name.to_string(),
+                        group.group.clone(),
+                    ));
+                }
+
+                let mapping = ContractEventMapping {
+                    contract_name: contract.name.clone(),
+                    event_name: event_name.to_string(),
+                };
+                if dependency_members.contains(&mapping) {
+                    return Err(ValidateManifestError::SyncTogetherEventInDependencyEvents(
+                        contract.name.clone(),
+                        event_name.to_string(),
+                        group.group.clone(),
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// True if two address specs share at least one address.
+fn addresses_overlap(
+    a: &ValueOrArray<alloy::primitives::Address>,
+    b: &ValueOrArray<alloy::primitives::Address>,
+) -> bool {
+    let collect = |v: &ValueOrArray<alloy::primitives::Address>| match v {
+        ValueOrArray::Value(address) => vec![*address],
+        ValueOrArray::Array(addresses) => addresses.clone(),
+    };
+    let a_addresses = collect(a);
+    collect(b).iter().any(|address| a_addresses.contains(address))
 }
 
 #[derive(thiserror::Error, Debug)]

@@ -40,9 +40,17 @@ use crate::{
             ProcessContractsEventsWithDependenciesError, ProcessEventError,
         },
         progress::IndexingEventsProgressState,
+        sync_together::{
+            process_sync_together_groups, ProcessSyncTogetherError, SyncTogetherGroupConfig,
+            SyncTogetherMember,
+        },
         ContractEventDependencies,
     },
-    manifest::{contract::ReorgSafeDistance, core::Manifest},
+    manifest::{
+        contract::ReorgSafeDistance,
+        core::Manifest,
+        sync_together::{effective_sync_together_groups, SyncTogetherGroup},
+    },
     provider::{ChainProvider, ProviderError},
     PostgresClient,
 };
@@ -53,6 +61,8 @@ pub enum CombinedLogEventProcessingError {
     DependencyError(#[from] ProcessContractsEventsWithDependenciesError),
     #[error("{0}")]
     NonBlockingError(#[from] ProcessEventError),
+    #[error("{0}")]
+    SyncTogetherError(#[from] ProcessSyncTogetherError),
     #[error("{0}")]
     JoinError(#[from] JoinError),
 }
@@ -89,6 +99,12 @@ pub enum StartIndexingError {
     #[error("The end block set for {0} is higher than the latest block: {1} - end block: {2}")]
     EndBlockIsHigherThanLatestBlockError(String, U64, U64),
 
+    #[error("Event '{0}::{1}' is in sync_together group '{2}' but is also part of a dependency tree (dependency_events or a relationship-derived dependency) — an event's live loop can only be owned by one of the two")]
+    SyncTogetherEventHasDependencies(String, String, String),
+
+    #[error("sync_together group '{0}' member '{1}.{2}' did not resolve to any registered event — check the contract and event names (filter contracts are matched with their base name)")]
+    SyncTogetherMemberNotRegistered(String, String, String),
+
     #[error("Encountered unknown error: {0}")]
     UnknownError(String),
 
@@ -102,6 +118,7 @@ pub struct ProcessedNetworkContract {
     pub processed_up_to: U64,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn get_start_end_block(
     provider: &dyn ChainProvider,
     manifest_start_block: Option<U64>,
@@ -110,6 +127,12 @@ async fn get_start_end_block(
     event_name: &str,
     network: &str,
     reorg_safe_distance: Option<ReorgSafeDistance>,
+    // When true, the saved checkpoint is consulted even without a manifest
+    // start_block (grouped sync_together members): first boot starts at the
+    // tip like any no-start_block event, but restarts resume from the
+    // checkpoint instead of jumping to the new tip — the group's no-gaps
+    // guarantee cannot survive the default skip-the-downtime semantics.
+    checkpoint_resume_without_start_block: bool,
 ) -> Result<(U64, U64, U64), StartIndexingError> {
     let latest_block = provider.get_block_number().await?;
 
@@ -141,22 +164,23 @@ async fn get_start_end_block(
         }
     }
 
-    let last_known_start_block = if manifest_start_block.is_some() {
-        let last_synced_block = get_last_synced_block_number(config).await;
+    let last_known_start_block =
+        if manifest_start_block.is_some() || checkpoint_resume_without_start_block {
+            let last_synced_block = get_last_synced_block_number(config).await;
 
-        if let Some(value) = last_synced_block {
-            let start_from = value + U64::from(1);
-            info!(
-                "{} Found last synced block number - {:?} rindexer will start up from {:?}",
-                event_name, value, start_from
-            );
-            Some(start_from)
+            if let Some(value) = last_synced_block {
+                let start_from = value + U64::from(1);
+                info!(
+                    "{} Found last synced block number - {:?} rindexer will start up from {:?}",
+                    event_name, value, start_from
+                );
+                Some(start_from)
+            } else {
+                None
+            }
         } else {
             None
-        }
-    } else {
-        None
-    };
+        };
 
     let start_block =
         last_known_start_block.unwrap_or(manifest_start_block.unwrap_or(latest_block));
@@ -260,6 +284,7 @@ async fn start_indexing_traces(
             &format!("TraceEvents[{}]", network_name),
             &network_name,
             first_event.trace_information.reorg_safe_distance,
+            false,
         )
         .await?;
 
@@ -561,6 +586,7 @@ async fn start_indexing_contract_events(
         Vec<ProcessedNetworkContract>,
         Vec<(String, Arc<EventProcessingConfig>)>,
         Vec<ContractEventsDependenciesConfig>,
+        Vec<SyncTogetherGroupConfig>,
         HashMap<String, Arc<Mutex<ReorgCoordinator>>>,
     ),
     StartIndexingError,
@@ -569,6 +595,16 @@ async fn start_indexing_contract_events(
     let mut non_blocking_process_events = Vec::new();
     let mut processed_network_contracts: Vec<ProcessedNetworkContract> = Vec::new();
     let mut dependency_event_processing_configs: Vec<ContractEventsDependenciesConfig> = Vec::new();
+
+    // sync_together groups (explicit + table-flag implicit). Membership is
+    // needed on BOTH legs: routing into the lockstep loop happens on the live
+    // leg only (historical backfill runs on the ordinary independent path),
+    // but grouped members get checkpoint-aware start blocks on every leg —
+    // without a manifest start_block they start at the tip on first boot and
+    // resume from their checkpoint on restarts, so downtime never becomes a
+    // silent gap in the group.
+    let sync_groups: Vec<SyncTogetherGroup> = effective_sync_together_groups(manifest);
+    let mut sync_group_members: HashMap<usize, Vec<Arc<EventProcessingConfig>>> = HashMap::new();
 
     let mut block_tasks = FuturesUnordered::new();
 
@@ -593,6 +629,9 @@ async fn start_indexing_contract_events(
             let registry = Arc::clone(&registry);
             let progress = Arc::clone(&progress);
             let dependencies = dependencies.to_vec();
+            let is_sync_together_member =
+                find_sync_together_group(&sync_groups, &event.contract.name, &event.event_name)
+                    .is_some();
 
             block_tasks.push(async move {
                 let config = SyncConfig {
@@ -616,6 +655,7 @@ async fn start_indexing_contract_events(
                     &event.info_log_name(),
                     &network_contract.network,
                     event.contract.reorg_safe_distance,
+                    is_sync_together_member,
                 )
                 .await;
 
@@ -980,6 +1020,33 @@ async fn start_indexing_contract_events(
             panic!("Multiple dependencies of the same event on different contracts not supported yet - please raise an issue if you need this feature");
         }
 
+        // sync_together routing: grouped live events are collected for the
+        // lockstep group loop instead of getting an independent live task.
+        if event_processing_config.live_indexing() {
+            if let Some(group_idx) = find_sync_together_group(
+                &sync_groups,
+                &event_processing_config.contract_name(),
+                &event_processing_config.event_name(),
+            ) {
+                // Relationship-derived dependencies only exist at runtime, so
+                // the yaml-level mutual-exclusion check can't see them —
+                // enforce against the final dependency vector here.
+                if dependencies_status.has_dependencies() {
+                    return Err(StartIndexingError::SyncTogetherEventHasDependencies(
+                        event_processing_config.contract_name(),
+                        event_processing_config.event_name(),
+                        sync_groups[group_idx].group.clone(),
+                    ));
+                }
+
+                sync_group_members
+                    .entry(group_idx)
+                    .or_default()
+                    .push(Arc::new(event_processing_config));
+                continue;
+            }
+        }
+
         if dependencies_status.has_dependencies() {
             if let Some(dependency_in_other_contract) =
                 dependencies_status.get_first_dependencies_in_other_contracts()
@@ -1161,13 +1228,109 @@ async fn start_indexing_contract_events(
         }
     }
 
+    // Assemble sync_together group configs: assert every declared member
+    // resolved to at least one registered event (a silently-unmatched member
+    // would index eagerly and void the group's atomicity), order members by
+    // group spec order, and wire in each network's SHARED reorg coordinator.
+    // Live leg only — the historical pass collects no members (grouped events
+    // backfill on the ordinary independent path).
+    let mut sync_together_configs: Vec<SyncTogetherGroupConfig> = Vec::new();
+    for (group_idx, group) in sync_groups.iter().enumerate().filter(|_| !no_live_indexing_forced) {
+        let mut members = sync_group_members.remove(&group_idx).unwrap_or_default();
+
+        for declared in group.members() {
+            let resolved = members.iter().any(|m| {
+                sync_together_contract_matches(&m.contract_name(), &declared.contract_name)
+                    && m.event_name() == declared.event_name
+            });
+            if !resolved {
+                return Err(StartIndexingError::SyncTogetherMemberNotRegistered(
+                    group.group.clone(),
+                    declared.contract_name.clone(),
+                    declared.event_name.clone(),
+                ));
+            }
+        }
+
+        let spec_order = group.members();
+        members.sort_by_key(|m| {
+            spec_order
+                .iter()
+                .position(|declared| {
+                    sync_together_contract_matches(&m.contract_name(), &declared.contract_name)
+                        && m.event_name() == declared.event_name
+                })
+                .unwrap_or(usize::MAX)
+        });
+
+        let mut reorg_coordinators: HashMap<String, Arc<Mutex<ReorgCoordinator>>> = HashMap::new();
+        for member in &members {
+            let network_name = member.network_contract().network.clone();
+            if let Some(coordinator) = network_coordinators.get(&network_name) {
+                reorg_coordinators.insert(network_name, Arc::clone(coordinator));
+            }
+        }
+
+        // Attach each member's rewind-detection floor: the MANIFEST
+        // start_block when declared (the live-leg config's start_block is the
+        // resume point, mutated by reapply_after_historic — useless as the
+        // floor), or, for members without one, this boot's checkpoint-aware
+        // resume point. Never 0: a never-synced member's seeded 0 checkpoint
+        // must not read as a reorg rewind to block 0.
+        let members: Vec<SyncTogetherMember> = members
+            .into_iter()
+            .map(|config| {
+                let network_name = config.network_contract().network.clone();
+                let manifest_start_block = manifest
+                    .contracts
+                    .iter()
+                    .find(|c| sync_together_contract_matches(&config.contract_name(), &c.name))
+                    .and_then(|c| c.details.iter().find(|d| d.network == network_name))
+                    .and_then(|d| d.start_block)
+                    .map(|b| b.to::<u64>())
+                    .unwrap_or_else(|| config.start_block().to::<u64>());
+                SyncTogetherMember { config, manifest_start_block }
+            })
+            .collect();
+
+        sync_together_configs.push(SyncTogetherGroupConfig {
+            group_name: group.group.clone(),
+            members,
+            reorg_coordinators,
+        });
+    }
+
     Ok((
         non_blocking_process_events,
         processed_network_contracts,
         apply_cross_contract_dependency_events_config_after_processing,
         dependency_event_processing_configs,
+        sync_together_configs,
         network_coordinators,
     ))
+}
+
+/// Registry contract names for filter contracts are rewritten to
+/// `{name}Filter` before registration; sync_together members are declared with
+/// the base manifest name, so match both spellings (same normalization as the
+/// dependency pipeline).
+fn sync_together_contract_matches(registry_contract_name: &str, declared_name: &str) -> bool {
+    registry_contract_name == declared_name
+        || registry_contract_name.strip_suffix("Filter") == Some(declared_name)
+}
+
+/// Finds the sync_together group containing `(contract, event)`, if any.
+fn find_sync_together_group(
+    groups: &[SyncTogetherGroup],
+    registry_contract_name: &str,
+    event_name: &str,
+) -> Option<usize> {
+    groups.iter().position(|group| {
+        group.members().iter().any(|member| {
+            sync_together_contract_matches(registry_contract_name, &member.contract_name)
+                && member.event_name == event_name
+        })
+    })
 }
 
 pub async fn start_historical_indexing(
@@ -1269,6 +1432,7 @@ async fn start_indexing(
         processed_network_contracts,
         apply_cross_contract_dependency_events_config_after_processing,
         mut dependency_event_processing_configs,
+        sync_together_configs,
         network_coordinators,
     ) = contract_events_indexer?;
 
@@ -1318,10 +1482,20 @@ async fn start_indexing(
             trace_registry.clone(),
         ));
 
+    let sync_together_handle: JoinHandle<Result<(), ProcessSyncTogetherError>> =
+        tokio::spawn(process_sync_together_groups(sync_together_configs));
+
     let mut handles: Vec<JoinHandle<Result<(), CombinedLogEventProcessingError>>> = Vec::new();
 
     handles.push(tokio::spawn(async {
         dependency_handle
+            .await
+            .map_err(CombinedLogEventProcessingError::from)
+            .and_then(|res| res.map_err(CombinedLogEventProcessingError::from))
+    }));
+
+    handles.push(tokio::spawn(async {
+        sync_together_handle
             .await
             .map_err(CombinedLogEventProcessingError::from)
             .and_then(|res| res.map_err(CombinedLogEventProcessingError::from))
@@ -1493,6 +1667,7 @@ mod tests {
             "Test",
             "ethereum",
             None,
+            false,
         )
         .await;
 
@@ -1513,6 +1688,7 @@ mod tests {
             "Test",
             "ethereum",
             None,
+            false,
         )
         .await;
 
@@ -1533,6 +1709,7 @@ mod tests {
             "Test",
             "ethereum",
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1553,6 +1730,7 @@ mod tests {
             "Test",
             "ethereum",
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1571,6 +1749,7 @@ mod tests {
             "Test",
             "ethereum",
             Some(ReorgSafeDistance::Custom(50)),
+            false,
         )
         .await
         .unwrap();
@@ -1591,6 +1770,32 @@ mod tests {
             "Test",
             "ethereum",
             None,
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(start, U64::from(500));
+        assert_eq!(end, U64::from(500));
+    }
+
+    #[tokio::test]
+    async fn grouped_member_without_start_block_starts_at_latest_on_first_boot() {
+        // sync_together members consult the checkpoint even without a
+        // manifest start_block; with no stored checkpoint (first boot) they
+        // start at the tip like any other no-start_block event. On restarts
+        // the checkpoint (when present) takes over — covered by the
+        // last_known_start_block branch shared with manifest-start events.
+        let mock = MockChainProvider::new(1).with_block_number(500);
+        let (start, end, _) = get_start_end_block(
+            &mock,
+            None,
+            None,
+            empty_sync_config(),
+            "Test",
+            "ethereum",
+            None,
+            true, // checkpoint_resume_without_start_block
         )
         .await
         .unwrap();
@@ -1610,6 +1815,7 @@ mod tests {
             "Test",
             "ethereum",
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1630,6 +1836,7 @@ mod tests {
             "Test",
             "ethereum",
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1650,6 +1857,7 @@ mod tests {
             "Test",
             "ethereum",
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1672,6 +1880,7 @@ mod tests {
             "Test",
             "ethereum",
             Some(ReorgSafeDistance::Custom(200)),
+            false,
         )
         .await
         .unwrap();
@@ -1873,6 +2082,7 @@ mod tests {
             name: "balances".to_string(),
             global: false,
             cross_chain: false,
+            sync_together: false,
             columns: vec![
                 TableColumn {
                     name: "account".to_string(),

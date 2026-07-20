@@ -16,6 +16,7 @@ pub mod native_transfer;
 pub mod no_code;
 pub mod reorg;
 pub mod start;
+mod sync_together;
 pub mod task_tracker;
 
 pub use dependency::{ContractEventDependencies, EventDependencies, EventsDependencyTree};

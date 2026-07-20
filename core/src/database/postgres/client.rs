@@ -329,41 +329,11 @@ impl PostgresClient {
         column_types: &[PgType],
         data: &[Vec<EthereumSqlTypeWrapper>],
     ) -> Result<(), BulkInsertPostgresError> {
-        let stmt = format!(
-            "COPY {} ({}) FROM STDIN WITH (FORMAT binary)",
-            table_name,
-            generate_event_table_columns_names_sql(column_names),
-        );
-
-        // info!("Bulk insert statement: {}", stmt);
-
-        let prepared_data: Vec<Vec<&(dyn ToSql + Sync)>> = data
-            .iter()
-            .map(|row| row.iter().map(|param| param as &(dyn ToSql + Sync)).collect())
-            .collect();
-
-        // info!("Prepared data: {:?}", prepared_data);
+        let stmt = build_copy_statement(table_name, column_names);
 
         let sink = self.copy_in(&stmt).await?;
 
-        let writer = BinaryCopyInWriter::new(sink, column_types);
-        pin_mut!(writer);
-
-        // This can cause issues with Binary Copy command not completing and leaving hanging
-        // processes. See similar: https://github.com/sfackler/rust-postgres/issues/1109
-        //
-        // We have to call `finish` manually on any write error.
-        for row in prepared_data.iter() {
-            if let Err(e) = writer.as_mut().write(row).await {
-                error!("Error writing binary data, aborting early: {}", e);
-                writer.as_mut().finish().await?;
-                Err(e)?;
-            };
-        }
-
-        writer.finish().await?;
-
-        Ok(())
+        write_binary_copy_rows(sink, column_types, data).await
     }
 
     // Internal method used by insert_bulk for small datasets (≤100 rows).
@@ -375,50 +345,10 @@ impl PostgresClient {
         column_names: &[String],
         bulk_data: &[Vec<EthereumSqlTypeWrapper>],
     ) -> Result<u64, PostgresError> {
-        let total_columns = column_names.len();
+        let query = build_multi_row_insert_sql(table_name, column_names, bulk_data.len());
 
-        // good for debugging
-        // for (i, row) in bulk_data.iter().enumerate() {
-        //     for (j, param) in row.iter().enumerate() {
-        //         tracing::info!(
-        //             "Row {} Column {} ({:?}) -> Value: {:?}, Type: {:?}",
-        //             i,
-        //             j,
-        //             column_names.get(j),
-        //             param,
-        //             param.to_type()
-        //         );
-        //     }
-        // }
-
-        let mut query = format!(
-            "INSERT INTO {} ({}) VALUES ",
-            table_name,
-            generate_event_table_columns_names_sql(column_names),
-        );
-        let mut params: Vec<&(dyn ToSql + Sync)> = Vec::new();
-
-        for (i, row) in bulk_data.iter().enumerate() {
-            if i > 0 {
-                query.push(',');
-            }
-            let mut placeholders = vec![];
-            for j in 0..total_columns {
-                placeholders.push(format!("${}", i * total_columns + j + 1));
-            }
-            query.push_str(&format!("({})", placeholders.join(",")));
-
-            for param in row {
-                params.push(param as &(dyn ToSql + Sync));
-            }
-        }
-
-        // Good for debugging
-        // tracing::info!("query: {:?}", query);
-        // tracing::info!(
-        //     "params original types: {:?}",
-        //     bulk_data.iter().flat_map(|row| row.iter().map(|p|
-        // p.to_type())).collect::<Vec<_>>()     );
+        let params: Vec<&(dyn ToSql + Sync)> =
+            bulk_data.iter().flatten().map(|param| param as &(dyn ToSql + Sync)).collect();
 
         self.execute(&query, &params).await
     }
@@ -552,11 +482,14 @@ impl PostgresClient {
                 .await?;
         }
 
-        // 4. Rewind last_synced_block checkpoints to fork_point - 1
+        // 4. Rewind last_synced_block checkpoints to fork_point - 1.
+        // LEAST() so checkpoints only ever move DOWN: an event still backfilling
+        // (checkpoint far below the fork) must not be jumped forward past blocks
+        // it has never indexed.
         let rewind_block = Decimal::from(fork_point.saturating_sub(1));
         for table in checkpoint_tables {
             let query = format!(
-                "UPDATE rindexer_internal.{} SET last_synced_block = $1 WHERE network = $2",
+                "UPDATE rindexer_internal.{} SET last_synced_block = LEAST(last_synced_block, $1) WHERE network = $2",
                 table
             );
             transaction.execute(&query, &[&rewind_block, &network]).await?;
@@ -566,4 +499,91 @@ impl PostgresClient {
 
         Ok((total_deleted, all_affected_tx_hashes))
     }
+}
+
+/// Builds a `COPY ... FROM STDIN WITH (FORMAT binary)` statement.
+pub(crate) fn build_copy_statement(table_name: &str, column_names: &[String]) -> String {
+    format!(
+        "COPY {} ({}) FROM STDIN WITH (FORMAT binary)",
+        table_name,
+        generate_event_table_columns_names_sql(column_names),
+    )
+}
+
+/// Builds a multi-row `INSERT INTO ... VALUES ($1,...),(...)` statement.
+/// Parameters are the rows flattened in order.
+pub(crate) fn build_multi_row_insert_sql(
+    table_name: &str,
+    column_names: &[String],
+    row_count: usize,
+) -> String {
+    let total_columns = column_names.len();
+
+    let mut query = format!(
+        "INSERT INTO {} ({}) VALUES ",
+        table_name,
+        generate_event_table_columns_names_sql(column_names),
+    );
+
+    for i in 0..row_count {
+        if i > 0 {
+            query.push(',');
+        }
+        let mut placeholders = vec![];
+        for j in 0..total_columns {
+            placeholders.push(format!("${}", i * total_columns + j + 1));
+        }
+        query.push_str(&format!("({})", placeholders.join(",")));
+    }
+
+    query
+}
+
+/// Streams rows into a binary COPY sink, replicating the manual
+/// `finish()`-on-error handling required to avoid hanging processes.
+///
+/// See similar: https://github.com/sfackler/rust-postgres/issues/1109
+async fn write_binary_copy_rows(
+    sink: CopyInSink<bytes::Bytes>,
+    column_types: &[PgType],
+    data: &[Vec<EthereumSqlTypeWrapper>],
+) -> Result<(), BulkInsertPostgresError> {
+    let prepared_data: Vec<Vec<&(dyn ToSql + Sync)>> = data
+        .iter()
+        .map(|row| row.iter().map(|param| param as &(dyn ToSql + Sync)).collect())
+        .collect();
+
+    let writer = BinaryCopyInWriter::new(sink, column_types);
+    pin_mut!(writer);
+
+    // We have to call `finish` manually on any write error.
+    for row in prepared_data.iter() {
+        if let Err(e) = writer.as_mut().write(row).await {
+            error!("Error writing binary data, aborting early: {}", e);
+            writer.as_mut().finish().await?;
+            Err(e)?;
+        };
+    }
+
+    writer.finish().await?;
+
+    Ok(())
+}
+
+/// Performs a binary COPY inside an already-open transaction, so the copied
+/// rows commit (or roll back) atomically with the rest of the transaction.
+/// Used by the `sync_together` per-block flush.
+pub(crate) async fn copy_in_via_transaction(
+    transaction: &PgTransaction<'_>,
+    table_name: &str,
+    column_names: &[String],
+    column_types: &[PgType],
+    data: &[Vec<EthereumSqlTypeWrapper>],
+) -> Result<(), BulkInsertPostgresError> {
+    let stmt = build_copy_statement(table_name, column_names);
+
+    let sink: CopyInSink<bytes::Bytes> =
+        transaction.copy_in(&stmt).await.map_err(PostgresError::PgError)?;
+
+    write_binary_copy_rows(sink, column_types, data).await
 }

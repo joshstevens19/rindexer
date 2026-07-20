@@ -50,6 +50,7 @@ Not all changes are treated equally. Rindexer computes a diff to determine the a
 | Change Type | Action |
 |---|---|
 | Contract added, removed, or modified | Restart |
+| [sync_together](/docs/start-building/yaml-config/sync-together) group or table flag changed | Restart (affected contracts) |
 | Network RPC URL changed | Restart |
 | Storage configuration changed | Restart |
 | Config tuning (buffer, concurrency) | Restart |
@@ -145,5 +146,6 @@ Make sure `drop_each_run` is set to `false` in production. With `drop_each_run: 
 ## Limitations
 
 - **No-code projects only** — Rust projects require recompilation, which is outside the scope of hot reload
+- **ABI files are not watched** — only `rindexer.yaml` is monitored. Edits to ABI JSON files do not trigger a reload; restart manually to pick them up
 - **Full process restart** — Each reload restarts the entire indexer process. This means historical indexing re-runs from the last checkpoint (no data is lost, but there is a brief pause in live indexing)
 - **Exit code 75** — The process exits with code `75` (EX_TEMPFAIL) to signal a restart. Make sure your monitoring does not treat this as a crash

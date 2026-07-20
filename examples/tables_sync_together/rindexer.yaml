@@ -1,0 +1,119 @@
+# sync_together Tables Example
+#
+# Tracks WETH holder balances aggregated ACROSS chains (cross_chain table).
+# The balance is mutated by THREE events — Deposit (mint), Withdrawal (burn)
+# and Transfer — and `sync_together: true` makes them advance block-by-block
+# in lockstep: each block's raw event rows, ALL the balance upserts, and the
+# events' checkpoints commit in ONE Postgres transaction per block, per
+# network. A reader can never observe a same-block deposit without its
+# transfer (or any block partially applied), and checkpoints can never drift
+# from the data. Without the flag each event indexes on its own loop and
+# commits independently.
+#
+# Transactions are per network: ethereum commits its own per-block tx,
+# arbitrum its own — the cross-chain aggregate is the sum of each network's
+# committed prefix.
+#
+# NOTE: sync_together applies to LIVE indexing (no end_block allowed).
+# start_block is optional for grouped members: without one, a member starts at
+# the chain tip on first boot and resumes from its checkpoint on restarts.
+# This example sets explicit start_blocks to control the backfill range — if
+# you keep them, set each to a block near the current tip so the backfill is
+# short (WETH is high-volume, an old start_block means a long backfill before
+# lockstep begins).
+#
+# Starting mid-stream means balances are NET FLOW since start_block (holders'
+# pre-existing balances are unknown, so net senders show negative values).
+# The invariant SUM(all balances) == total deposits - total withdrawals holds
+# exactly.
+#
+# For cross-CONTRACT groups, use the top-level `sync_together:` key instead —
+# see the docs: /docs/start-building/yaml-config/sync-together
+name: SyncTogetherExample
+description: Cross-chain WETH balances with per-block atomic (lockstep) live indexing
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+  - name: arbitrum
+    chain_id: 42161
+    rpc: https://arbitrum.gateway.tenderly.co
+  - name: optimism
+    chain_id: 10
+    rpc: https://optimism.gateway.tenderly.co
+
+storage:
+  postgres:
+    enabled: true
+    drop_each_run: true
+
+contracts:
+  - name: WETH
+    details:
+      - network: ethereum
+        address: "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+        start_block: "25570800"
+      - network: arbitrum
+        address: "0x82af49447d8a07e3bd95bd0d56f35241523fbab1"
+        start_block: "485688000"
+      - network: optimism
+        address: "0x4200000000000000000000000000000000000006"
+        start_block: "154457100"
+    abi: ./abis/WETH.abi.json
+    include_events:
+      - Transfer
+      - Deposit
+      - Withdrawal
+    tables:
+      - name: total_balances
+        # One row per holder summed across ALL networks (no network column)
+        cross_chain: true
+        # Lockstep: ALL of this table's events (Deposit, Withdrawal and
+        # Transfer) commit per-block atomically with the raw event rows and
+        # the checkpoints, per network
+        sync_together: true
+        columns:
+          - name: holder
+          - name: balance
+            default: "0"
+        events:
+          # Wrapping ETH mints WETH to the depositor (no paired Transfer)
+          - event: Deposit
+            operations:
+              - type: upsert
+                where:
+                  holder: $dst
+                set:
+                  - column: balance
+                    action: add
+                    value: $wad
+          # Unwrapping burns WETH from the withdrawer (no paired Transfer)
+          - event: Withdrawal
+            operations:
+              - type: upsert
+                where:
+                  holder: $src
+                set:
+                  - column: balance
+                    action: subtract
+                    value: $wad
+          # Transfers move balance between holders
+          - event: Transfer
+            operations:
+              - type: upsert
+                where:
+                  holder: $dst
+                set:
+                  - column: balance
+                    action: add
+                    value: $wad
+              - type: upsert
+                where:
+                  holder: $src
+                set:
+                  - column: balance
+                    action: subtract
+                    value: $wad

@@ -1,4 +1,5 @@
 pub mod batch_operations;
+pub mod block_sink;
 pub mod client;
 pub mod generate;
 pub mod indexes;

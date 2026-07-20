@@ -10,4 +10,5 @@ pub mod phantom;
 pub mod reth;
 pub mod storage;
 pub mod stream;
+pub mod sync_together;
 pub mod yaml;

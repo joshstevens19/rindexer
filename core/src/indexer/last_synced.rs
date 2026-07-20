@@ -261,15 +261,26 @@ async fn update_last_synced_block_number_for_file(
     Ok(())
 }
 
-/// Update the last indexed block.
+/// Builds the fully-qualified `rindexer_internal` checkpoint table name for an
+/// event (the table `update_progress_and_last_synced_task` writes to).
+pub fn internal_event_checkpoint_table_name(
+    indexer_name: &str,
+    contract_name: &str,
+    event_name: &str,
+) -> String {
+    let schema = generate_indexer_contract_schema_name(indexer_name, contract_name);
+    generate_internal_event_table_name(&schema, event_name)
+}
+
+/// Updates the in-memory progress reporter and prometheus metrics for an event
+/// having synced to `to_block`. Performs no database writes.
 ///
-/// Note: this is an async task and should be awaited rather than spawned in the background
-/// to prevent overloading concurrent "update" statements on the database which will increase
-/// lock contention and slow down the system.
-pub async fn update_progress_and_last_synced_task(
-    config: Arc<EventProcessingConfig>,
+/// `latest` is the current chain head if known; pass 0 to skip the chain-head
+/// metrics (e.g. when the caller has no fresh tip).
+pub async fn update_in_memory_progress_and_metrics(
+    config: &Arc<EventProcessingConfig>,
     to_block: U64,
-    on_complete: impl FnOnce() + Send + 'static,
+    latest: u64,
 ) {
     let update_last_synced_block_result = tokio::time::timeout(
         Duration::from_millis(100),
@@ -289,16 +300,6 @@ pub async fn update_progress_and_last_synced_task(
         _ => {}
     };
 
-    let latest = config
-        .network_contract()
-        .cached_provider
-        .get_latest_block()
-        .await
-        .ok()
-        .flatten()
-        .map(|b| b.header.number)
-        .unwrap_or(0);
-
     // Record block progress metrics
     let network = &config.network_contract().network;
     let contract = &config.contract_name();
@@ -310,6 +311,29 @@ pub async fn update_progress_and_last_synced_task(
         metrics::set_latest_chain_block(network, latest);
         metrics::set_blocks_behind(network, contract, event, to_block_u64, latest);
     }
+}
+
+/// Update the last indexed block.
+///
+/// Note: this is an async task and should be awaited rather than spawned in the background
+/// to prevent overloading concurrent "update" statements on the database which will increase
+/// lock contention and slow down the system.
+pub async fn update_progress_and_last_synced_task(
+    config: Arc<EventProcessingConfig>,
+    to_block: U64,
+    on_complete: impl FnOnce() + Send + 'static,
+) {
+    let latest = config
+        .network_contract()
+        .cached_provider
+        .get_latest_block()
+        .await
+        .ok()
+        .flatten()
+        .map(|b| b.header.number)
+        .unwrap_or(0);
+
+    update_in_memory_progress_and_metrics(&config, to_block, latest).await;
 
     if let Some(postgres) = &config.postgres() {
         let schema =

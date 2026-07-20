@@ -995,6 +995,12 @@ If you wish to store the data in a clickhouse database with the no-code project 
 This is optional if you do not wish to store the data in a clickhouse database you can leave this section out of your YAML.
 :::
 
+:::warning
+ClickHouse storage is incompatible with [sync_together](/docs/start-building/yaml-config/sync-together) - ClickHouse
+has no cross-table transactions. Any ClickHouse storage on the project (including Postgres + ClickHouse dual storage)
+combined with `sync_together` is rejected at startup with a validation error.
+:::
+
 ### Internal tables
 
 When rindexer is running with clickhouse it uses the database to manage some internal state including the network and contract last seen block.

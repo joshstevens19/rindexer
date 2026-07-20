@@ -17,6 +17,15 @@ The ChatBots are really only meant to be ran sending live data not historic data
 Rust projects do not get exposed to the stream clients yet but it can easily be exposed in the future.
 :::
 
+:::warning[Delivery semantics with sync_together]
+For events in a [sync_together](/docs/start-building/yaml-config/sync-together) group, chat messages are
+dispatched **after** the block's Postgres transaction commits. Messages are never sent for blocks that fail to
+commit and block retries cannot double-send, but if the process crashes between commit and dispatch — or a
+block's commit succeeds server-side while its acknowledgment is lost, so the retry finds it already committed —
+those messages are lost - delivery is at-most-once for grouped events (ungrouped events remain at-least-once with
+respect to crashes).
+:::
+
 Supported Chatbots providers:
 
 - [Telegram](/docs/start-building/chatbots/telegram) - Send messages to your Telegram chats

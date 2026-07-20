@@ -11,6 +11,7 @@ use crate::manifest::contract::{
     ContractDetails, ContractEvent, DependencyEventTreeYaml, FactoryDetailsYaml,
     SimpleEventOrContractEvent,
 };
+use crate::manifest::sync_together::SyncTogetherGroup;
 use crate::{
     indexer::Indexer,
     manifest::{
@@ -136,6 +137,12 @@ pub struct Manifest {
     pub native_transfers: NativeTransfers,
 
     pub contracts: Vec<Contract>,
+
+    /// Named groups of events that live-index in per-block lockstep, with all
+    /// their Postgres writes committing in one transaction per block per
+    /// network. See `manifest::sync_together`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_together: Option<Vec<SyncTogetherGroup>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phantom: Option<Phantom>,
