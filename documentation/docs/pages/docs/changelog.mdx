@@ -2,6 +2,23 @@
 
 ### Breaking changes
 -------------------------------------------------
+
+### Bug fixes
+-------------------------------------------------
+- fix: live indexing now respects the network `max_block_range` setting after historical sync, preventing oversized `eth_getLogs` requests when catching up to the chain tip.
+
+### Features
+-------------------------------------------------
+
+## Releases
+-------------------------------------------------
+
+all release branches are deployed through `release/VERSION_NUMBER` branches
+
+# 0.41.0-beta - 23rd June 2026
+
+### Breaking changes
+-------------------------------------------------
 - breaking: **Generated code uses `Arc<dyn ChainProvider>` instead of `Arc<JsonRpcCachedProvider>`** — Rust-mode projects that call concrete-type methods (e.g. `get_inner_provider()`) through the generated provider binding will need to use the network-specific accessors (`get_ethereum_provider_cache()`, etc.) which still return the concrete type. After upgrading, run `rindexer codegen typings` to regenerate.
 
 ### Bug fixes
