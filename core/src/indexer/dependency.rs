@@ -344,10 +344,21 @@ impl ContractEventsDependenciesConfig {
         }
     }
 
-    pub fn add_to_event_or_panic(
+    /// Adds a cross-contract dependency event (deferred during the unordered
+    /// registry iteration) to the TARGET contract's entry, creating the entry
+    /// when it does not exist. The missing-entry case happens when every event
+    /// of the target contract was claimed by a `sync_together` group: the
+    /// group replaces
+    /// the dependency pipeline for those events, but cross-contract members
+    /// of the tree — the factory-discovery event in particular — still need
+    /// a config so discovery keeps running (the group loop clamps to its
+    /// checkpoint). Still panics when the target contract has no declared
+    /// dependencies at all, which would be a registration bug.
+    pub fn add_to_event_in_contract_or_new_entry(
         contract_name: &str,
-        dependency_event_processing_configs: &mut [ContractEventsDependenciesConfig],
+        dependency_event_processing_configs: &mut Vec<ContractEventsDependenciesConfig>,
         event_processing_config: Arc<EventProcessingConfig>,
+        dependencies: &[ContractEventDependencies],
     ) {
         match dependency_event_processing_configs
             .iter_mut()
@@ -357,11 +368,22 @@ impl ContractEventsDependenciesConfig {
                 contract_events_config.add_event_config(event_processing_config)
             }
             None => {
-                panic!("Contract events config not found for {} dependency event processing config make sure it registered - trying to add to it - contract {} - event {}",
-                       contract_name,
-                       event_processing_config.contract_name(),
-                       event_processing_config.event_name()
-                );
+                let Some(contract_dependencies) =
+                    dependencies.iter().find(|d| d.contract_name == contract_name)
+                else {
+                    panic!("Contract events config not found for {} dependency event processing config make sure it registered - trying to add to it - contract {} - event {}",
+                           contract_name,
+                           event_processing_config.contract_name(),
+                           event_processing_config.event_name()
+                    );
+                };
+
+                dependency_event_processing_configs.push(ContractEventsDependenciesConfig {
+                    contract_name: contract_name.to_string(),
+                    event_dependencies: contract_dependencies.event_dependencies.clone(),
+                    events_config: vec![event_processing_config],
+                    reorg_coordinators: HashMap::new(),
+                });
             }
         }
     }

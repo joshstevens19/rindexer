@@ -66,6 +66,9 @@ pub enum ProcessSyncTogetherError {
     #[error("sync_together group '{0}': postgres client missing — sync_together requires postgres storage")]
     PostgresMissing(String),
 
+    #[error("sync_together group '{0}': could not read the factory discovery checkpoint: {1}")]
+    FactoryClampFailed(String, String),
+
     #[error("Could not run sync_together group tasks: {0}")]
     JoinError(#[from] JoinError),
 }
@@ -80,6 +83,14 @@ pub struct SyncTogetherMember {
     /// config's `start_block` (mutated by reapply_after_historic) is useless
     /// as the floor — see `MemberCheckpoint::manifest_start_block`.
     pub manifest_start_block: u64,
+    /// For factory-DEPLOYED members: the `rindexer_internal` checkpoint table
+    /// of the factory-discovery event (which runs on the ordinary eager
+    /// pipeline). The group loop never processes a block past this checkpoint,
+    /// so the member's `FactoryFilter` address set — resolved fresh on every
+    /// window fetch — is complete for any block the group commits: a vault
+    /// deployed at block N is discovered and committed by the factory pipeline
+    /// before the group fetches block N.
+    pub factory_checkpoint_table: Option<String>,
 }
 
 /// Runtime configuration for one `sync_together` group, collected during
@@ -184,7 +195,29 @@ async fn sync_together_network_task(
     // of target are protected by the flush's skip-already-committed check.
     let max_resume = members.iter().map(|m| m.config.start_block()).max().unwrap_or_default();
     let safe_head_snapshot = members.iter().map(|m| m.config.end_block()).min().unwrap_or_default();
-    let target = std::cmp::min(max_resume.saturating_sub(U64::from(1)), safe_head_snapshot);
+    let mut target = std::cmp::min(max_resume.saturating_sub(U64::from(1)), safe_head_snapshot);
+
+    // Factory-deployed members: never process (even in Phase A) past the
+    // factory-discovery checkpoint — blocks beyond it may contain events from
+    // children the factory pipeline hasn't discovered yet, and a fetch with an
+    // incomplete address set that advances the checkpoint is a permanent gap.
+    // The lockstep loop re-reads this clamp every iteration, so the group
+    // simply trails discovery (usually by nothing).
+    let factory_clamp_sql = build_factory_clamp_sql(
+        members.iter().filter_map(|m| m.factory_checkpoint_table.as_deref()).collect(),
+    );
+    if factory_clamp_sql.is_some() {
+        let clamp = read_factory_clamp(
+            &postgres,
+            factory_clamp_sql.as_deref().expect("checked above"),
+            &network,
+        )
+        .await
+        .map_err(|e| {
+            ProcessSyncTogetherError::FactoryClampFailed((*group_name).clone(), e.to_string())
+        })?;
+        target = std::cmp::min(target, U64::from(clamp));
+    }
 
     let checkpoints_meta: Vec<(String, u64)> = members
         .iter()
@@ -462,7 +495,27 @@ async fn sync_together_network_task(
         }
 
         let safe_head = latest_block_number.saturating_sub(reorg_distance);
-        if cursor >= safe_head {
+
+        // Factory-deployed members: cap the window at the factory-discovery
+        // checkpoint (re-read every iteration — the eager factory pipeline
+        // advances it continuously) so member address sets are complete for
+        // every block this window can commit.
+        let mut window_limit = safe_head;
+        if let Some(sql) = factory_clamp_sql.as_deref() {
+            match read_factory_clamp(&postgres, sql, &network).await {
+                Ok(clamp) => window_limit = std::cmp::min(window_limit, U64::from(clamp)),
+                Err(e) => {
+                    warn!(
+                        "sync_together '{}' on {}: could not read factory discovery checkpoint, retrying: {}",
+                        group_name, network, e
+                    );
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    continue;
+                }
+            }
+        }
+
+        if cursor >= window_limit {
             let elapsed = iteration_start.elapsed();
             if elapsed < target_iteration_duration {
                 tokio::time::sleep(target_iteration_duration - elapsed).await;
@@ -471,8 +524,8 @@ async fn sync_together_network_task(
         }
 
         let from = cursor + U64::from(1);
-        let to = std::cmp::min(safe_head, cursor + U64::from(window_cap));
-        let catching_up = to < safe_head;
+        let to = std::cmp::min(window_limit, cursor + U64::from(window_cap));
+        let catching_up = to < window_limit;
 
         // Fetch ALL members' logs for the window before processing anything —
         // never process a partial view of the window. Timestamp enrichment
@@ -801,6 +854,40 @@ async fn flush_block(
         .await
 }
 
+/// Builds the query reading the LOWEST factory-discovery checkpoint across the
+/// group's factory-deployed members on one network, or `None` when the group
+/// has no factory-deployed members (no clamp needed).
+fn build_factory_clamp_sql(mut tables: Vec<&str>) -> Option<String> {
+    tables.sort_unstable();
+    tables.dedup();
+
+    if tables.is_empty() {
+        return None;
+    }
+
+    let selects = tables
+        .iter()
+        .map(|table| {
+            format!(
+                "SELECT last_synced_block AS cp FROM rindexer_internal.{table} WHERE network = $1"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" UNION ALL ");
+
+    Some(format!("SELECT COALESCE(MIN(cp), 0) AS clamp FROM ({selects}) AS factory_checkpoints"))
+}
+
+async fn read_factory_clamp(
+    postgres: &Arc<PostgresClient>,
+    sql: &str,
+    network: &str,
+) -> Result<u64, crate::database::postgres::client::PostgresError> {
+    let row = postgres.query_one(sql, &[&network]).await?;
+    let clamp: Decimal = row.get("clamp");
+    Ok(u64::try_from(clamp).unwrap_or(0))
+}
+
 /// Buckets each member's window logs by block number, ascending.
 ///
 /// Returns `None` if any log is missing a block number or falls outside
@@ -868,5 +955,29 @@ mod tests {
     fn empty_members_produce_empty_buckets() {
         let buckets = plan_block_buckets(vec![vec![], vec![]], U64::from(1), U64::from(5)).unwrap();
         assert!(buckets.is_empty());
+    }
+
+    #[test]
+    fn factory_clamp_sql_none_without_factory_members() {
+        assert!(build_factory_clamp_sql(vec![]).is_none());
+    }
+
+    #[test]
+    fn factory_clamp_sql_dedups_and_unions_tables() {
+        let sql = build_factory_clamp_sql(vec![
+            "idx_factory_b_created",
+            "idx_factory_a_created",
+            "idx_factory_a_created",
+        ])
+        .expect("sql");
+
+        assert_eq!(sql.matches("SELECT last_synced_block").count(), 2, "deduped: {sql}");
+        assert!(sql.contains("MIN(cp)"), "takes the LOWEST checkpoint: {sql}");
+        assert!(
+            sql.contains("rindexer_internal.idx_factory_a_created")
+                && sql.contains("rindexer_internal.idx_factory_b_created"),
+            "both factories included: {sql}"
+        );
+        assert!(sql.contains("WHERE network = $1"), "network scoped: {sql}");
     }
 }

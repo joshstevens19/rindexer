@@ -367,7 +367,10 @@ fn reorg_distance_mismatch_rejected() {
 }
 
 #[test]
-fn factory_child_rejected() {
+fn factory_child_allowed() {
+    // Factory-DEPLOYED members (children, e.g. factory-created vaults) are
+    // supported: discovery stays on the eager factory pipeline and the group
+    // loop clamps its window to the factory's checkpoint.
     let factory_detail = r#"      - network: ethereum
         factory:
           name: PoolFactory
@@ -382,11 +385,7 @@ fn factory_child_rejected() {
         &two_contracts(factory_detail, ETH_DETAIL_B, "", ""),
         GROUP_A_TRANSFER_B_TRANSFER,
     );
-    assert!(matches!(
-        validate(&manifest),
-        Err(ValidateManifestError::SyncTogetherFactoryContractNotSupported(contract, _))
-            if contract == "TokenA"
-    ));
+    assert!(validate(&manifest).is_ok());
 }
 
 #[test]

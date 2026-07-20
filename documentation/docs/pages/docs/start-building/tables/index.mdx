@@ -279,8 +279,10 @@ never waits on an arbitrum block. For `cross_chain: true` tables the guarantee i
 the cross-chain aggregate is the sum of each network's committed prefix, eventually consistent across chains
 (inherent to cross-chain aggregation, not a regression).
 
-`sync_together` requires Postgres storage, no `end_block`, and no factory contracts (`start_block` is optional -
-without one a member starts at the tip on first boot and resumes from its checkpoint on restarts) - see the
+`sync_together` requires Postgres storage and no `end_block`; `start_block` is optional (without one a member
+starts at the tip on first boot and resumes from its checkpoint on restarts). Factory-DEPLOYED contracts (e.g.
+factory-created vaults or pools) can be grouped - the group trails the factory's discovery checkpoint so child
+address sets stay complete - but a contract used as a factory SOURCE cannot. See the
 [full reference](/docs/start-building/yaml-config/sync-together) for all requirements and trade-offs.
 
 ---

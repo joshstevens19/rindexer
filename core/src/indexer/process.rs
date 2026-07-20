@@ -708,12 +708,13 @@ async fn live_indexing_for_contract_event_dependencies(
                     .lock()
                     .await = ordering_live_indexing_details;
 
-                update_progress_and_last_synced_task(
-                    Arc::clone(config),
-                    to_block,
-                    indexing_event_processed,
-                )
-                .await;
+                // No-op on_complete: this bloom-skip path never called
+                // indexing_event_processing(), so passing
+                // indexing_event_processed here underflowed the active-task
+                // counter (negative-as-u64), hanging graceful shutdown's
+                // wait-for-zero for any long-running dependency/factory loop
+                // whose event is rare enough to bloom-skip.
+                update_progress_and_last_synced_task(Arc::clone(config), to_block, || {}).await;
                 continue;
             }
 

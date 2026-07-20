@@ -177,7 +177,7 @@ Each of the following is validated at startup - a violation is a hard startup er
 | Postgres storage only | Any ClickHouse storage on the project - **including Postgres + ClickHouse dual storage** - is rejected. ClickHouse has no cross-table transactions. |
 | No [end_block](/docs/start-building/yaml-config/contracts#end_block) on any member network | `sync_together` is live-only; all members must be live on all networks. |
 | Identical network sets across members | All member contracts of a group must run on the same networks and share the same [reorg_safe_distance](/docs/start-building/yaml-config/contracts#reorg_safe_distance) setting. |
-| No factory contracts (either direction) | A member cannot be factory-deployed, and a member cannot be referenced as a factory source by another contract - factory address discovery writes outside the block transaction. |
+| No factory SOURCE contracts as members | A member cannot be referenced as a factory source by another contract - the discovery event's address writes run outside the block transaction. **Factory-DEPLOYED contracts (the children, e.g. factory-created vaults or pools) CAN be grouped**: discovery stays on its own pipeline and the group never processes a block past the factory's checkpoint, so child address sets are always complete for the blocks the group commits. |
 | No cron-trigger tables on grouped contracts | Cron writes the same tables outside the block transaction. `sync_together: true` + `cron` on one table is likewise an error. |
 | Group names unique | Each `group` name may only appear once. |
 | Explicit groups need ≥ 2 distinct events | For a single table's events, use the [table-level flag](#per-table-opt-in-single-contract) instead. |

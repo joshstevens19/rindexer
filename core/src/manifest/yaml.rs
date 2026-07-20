@@ -294,10 +294,7 @@ pub enum ValidateManifestError {
     #[error("sync_together group '{1}' references contract '{0}' which is not declared under 'contracts'")]
     SyncTogetherContractNotFound(String, String),
 
-    #[error("Contract '{0}' in sync_together group '{1}' uses a factory — factory contracts are not supported in sync_together: the factory address discovery writes outside the per-block transaction")]
-    SyncTogetherFactoryContractNotSupported(String, String),
-
-    #[error("Contract '{0}' is referenced as a factory source by contract '{2}' — contracts used as factories cannot be in sync_together group '{1}': factory address discovery writes outside the per-block transaction")]
+    #[error("Contract '{0}' is referenced as a factory source by contract '{2}' — contracts used as factories cannot be in sync_together group '{1}': the factory discovery event's address writes and cache invalidation run outside the per-block transaction. (Factory-DEPLOYED contracts — the children — CAN be grouped.)")]
     SyncTogetherFactoryParentNotSupported(String, String, String),
 
     #[error("Event '{1}' on contract '{0}' in sync_together group '{2}' is not indexed — it must exist in the ABI as an event and be listed in 'include_events' or used by a table")]
@@ -1042,17 +1039,15 @@ fn validate_sync_together(
         }
 
         for contract in &member_contracts {
-            // Rule 4 (child side): member contracts must not be factory-deployed.
-            if contract.details.iter().any(|d| d.factory.is_some()) {
-                return Err(ValidateManifestError::SyncTogetherFactoryContractNotSupported(
-                    contract.name.clone(),
-                    group.group.clone(),
-                ));
-            }
+            // Factory-DEPLOYED members (children) are allowed: their address
+            // discovery stays on the eager factory pipeline and the group
+            // loop clamps its window to the factory's checkpoint, so member
+            // address sets are complete for every block the group commits.
 
             // Rule 4 (parent side): member contracts must not be used as a
             // factory source by any other contract (by name, or by address
-            // overlap on a shared network).
+            // overlap on a shared network) — the discovery event itself
+            // cannot join the per-block transaction.
             for other in &manifest.contracts {
                 for detail in &other.details {
                     let Some(factory) = &detail.factory else { continue };

@@ -1022,16 +1022,29 @@ async fn start_indexing_contract_events(
 
         // sync_together routing: grouped live events are collected for the
         // lockstep group loop instead of getting an independent live task.
-        if event_processing_config.live_indexing() {
+        // The synthesized factory-discovery event itself never joins a group —
+        // its address writes and cache invalidation run outside callbacks.
+        if event_processing_config.live_indexing() && !event_processing_config.is_factory_event() {
             if let Some(group_idx) = find_sync_together_group(
                 &sync_groups,
                 &event_processing_config.contract_name(),
                 &event_processing_config.event_name(),
             ) {
-                // Relationship-derived dependencies only exist at runtime, so
-                // the yaml-level mutual-exclusion check can't see them —
-                // enforce against the final dependency vector here.
-                if dependencies_status.has_dependencies() {
+                // Factory-DEPLOYED children carry an auto-installed dependency
+                // tree (factory event first, then child events). The group
+                // claims the child events instead: discovery stays on the
+                // eager factory pipeline and the group loop clamps its window
+                // to the factory's checkpoint, which gives the same
+                // discovery-before-children ordering. Any other dependency
+                // (yaml or relationship-derived) is still mutually exclusive
+                // with grouping.
+                let is_factory_child = event_processing_config
+                    .network_contract()
+                    .indexing_contract_setup
+                    .factory_details()
+                    .is_some();
+
+                if dependencies_status.has_dependencies() && !is_factory_child {
                     return Err(StartIndexingError::SyncTogetherEventHasDependencies(
                         event_processing_config.contract_name(),
                         event_processing_config.event_name(),
@@ -1277,6 +1290,11 @@ async fn start_indexing_contract_events(
         // floor), or, for members without one, this boot's checkpoint-aware
         // resume point. Never 0: a never-synced member's seeded 0 checkpoint
         // must not read as a reorg rewind to block 0.
+        //
+        // Factory-deployed members also record their factory-discovery
+        // event's checkpoint table: the group loop clamps its window to it so
+        // the member's address set is always complete for any block the group
+        // processes.
         let members: Vec<SyncTogetherMember> = members
             .into_iter()
             .map(|config| {
@@ -1289,7 +1307,19 @@ async fn start_indexing_contract_events(
                     .and_then(|d| d.start_block)
                     .map(|b| b.to::<u64>())
                     .unwrap_or_else(|| config.start_block().to::<u64>());
-                SyncTogetherMember { config, manifest_start_block }
+
+                let factory_checkpoint_table =
+                    config.network_contract().indexing_contract_setup.factory_details().map(
+                        |factory| {
+                            crate::indexer::last_synced::internal_event_checkpoint_table_name(
+                                &config.indexer_name(),
+                                &factory.contract_name,
+                                &factory.event.name,
+                            )
+                        },
+                    );
+
+                SyncTogetherMember { config, manifest_start_block, factory_checkpoint_table }
             })
             .collect();
 
@@ -1466,14 +1496,40 @@ async fn start_indexing(
     non_blocking_process_events.extend(trace_indexer_handles);
     non_blocking_process_events.extend(non_blocking_contract_handles);
 
-    // apply dependency events config after processing to avoid ordering issues
+    // apply dependency events config after processing to avoid ordering
+    // issues. The or-new-entry fallback covers targets whose own events were
+    // all claimed by a sync_together group (factory discovery events must
+    // keep running — the group clamps to their checkpoint).
     for apply in apply_cross_contract_dependency_events_config_after_processing {
         let (dependency_in_other_contract, event_processing_config) = apply;
-        ContractEventsDependenciesConfig::add_to_event_or_panic(
+        ContractEventsDependenciesConfig::add_to_event_in_contract_or_new_entry(
             &dependency_in_other_contract,
             &mut dependency_event_processing_configs,
             event_processing_config,
+            dependencies,
         );
+    }
+
+    // Late-created entries (and any deferred event whose network the earlier
+    // injection pass missed) still need the network's SHARED reorg
+    // coordinator; only-if-missing keeps existing wiring untouched.
+    if !no_live_indexing_forced {
+        for dep_config in &mut dependency_event_processing_configs {
+            let live_networks: std::collections::HashSet<String> = dep_config
+                .events_config
+                .iter()
+                .filter(|e| e.live_indexing())
+                .map(|e| e.network_contract().network.clone())
+                .collect();
+            for network_name in live_networks {
+                if let Some(coordinator) = network_coordinators.get(&network_name) {
+                    dep_config
+                        .reorg_coordinators
+                        .entry(network_name)
+                        .or_insert_with(|| Arc::clone(coordinator));
+                }
+            }
+        }
     }
 
     let dependency_handle: JoinHandle<Result<(), ProcessContractsEventsWithDependenciesError>> =
