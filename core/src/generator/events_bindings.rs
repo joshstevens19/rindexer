@@ -707,6 +707,7 @@ pub fn generate_event_handlers(
     is_filter: bool,
     contract: &Contract,
     storage: &Storage,
+    callback_concurrency: Option<usize>,
 ) -> Result<Code, GenerateEventHandlersError> {
     let abi_items = ABIItem::get_abi_items(project_path, contract, is_filter)?;
     let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
@@ -903,7 +904,28 @@ use super::super::super::typings::{indexer_name_formatted}::events::{handler_reg
 
                     {insert_call}
                 "#,
-                insert_call = if storage.postgres_enabled() && !storage.csv_enabled() {
+                insert_call = if storage.postgres_enabled()
+                    && !storage.csv_enabled()
+                    // Factory discovery events keep the legacy path: their
+                    // child-address bookkeeping persists only AFTER the callback
+                    // (FactoryEventProcessingConfig::trigger_event) — an atomic
+                    // cursor commit + crash there would permanently skip
+                    // re-discovery. Mirrors is_factory_filter_event.
+                    && !contract.details.iter().all(|d| {
+                        d.factory.as_ref().is_some_and(|f| {
+                            f.name == contract.name && f.event_name == event.name
+                        })
+                    })
+                    // Exactly-once needs serialized batch commits (effective
+                    // callback concurrency 1). Codegen-time check — if the yaml
+                    // later raises callback_concurrency, re-run codegen so this
+                    // falls back to the legacy path.
+                    && (contract
+                        .index_event_in_order
+                        .as_ref()
+                        .is_some_and(|v| v.contains(&event.name))
+                        || callback_concurrency.unwrap_or(1) <= 1)
+                {
                     // Atomic [batch + last-synced cursor] commit — same contract as
                     // the no-code path (insert_bulk_with_cursor): closes the
                     // double-index race for Rust-mode generated storage handlers.

@@ -509,7 +509,10 @@ impl PostgresClient {
                     row.iter().map(|param| param as &(dyn ToSql + Sync)).collect();
                 if let Err(e) = writer.as_mut().write(&row_refs).await {
                     error!("Error writing binary data in atomic bulk insert, aborting: {}", e);
-                    let _ = writer.finish().await;
+                    // Same discipline as bulk_insert_via_copy: finish() must run
+                    // (hanging-COPY protection) and its error must propagate, not
+                    // be swallowed; otherwise return the original write error.
+                    writer.as_mut().finish().await.map_err(|fe| fe.to_string())?;
                     return Err(e.to_string());
                 }
             }

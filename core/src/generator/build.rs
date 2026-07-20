@@ -367,6 +367,7 @@ pub fn generate_rindexer_handlers(
                         is_filter,
                         &contract,
                         &manifest.storage,
+                        manifest.config.callback_concurrency,
                     )?
                     .as_str(),
                 )?;
