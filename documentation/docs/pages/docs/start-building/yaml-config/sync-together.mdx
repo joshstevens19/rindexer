@@ -171,18 +171,21 @@ block on the ordinary pipeline, then the lockstep loop takes over. See
 
 Contracts indexed through a [factory](/docs/start-building/yaml-config/contracts#factory) filter (e.g.
 factory-created vaults or pools) can be group members - their `Supply`/`Withdraw`/`Swap`-style events commit
-per-block atomically like any other member:
+per-block atomically like any other member. Custom tables work exactly as on fixed-address contracts: use
+`$rindexer_contract_address` to key rows by the child that emitted the event, and set `sync_together: true` on
+the table to put all of its events in lockstep across **every discovered child**:
 
 ```yaml [rindexer.yaml]
 contracts:
   - name: Vault
     details:
       - network: ethereum
+        start_block: 21000000
         factory:
           name: VaultFactory
           address: "0x..."
           event_name: VaultCreated
-          input_name: "vault"
+          input_name: "vault"  # Field containing the new vault address
           abi: ./abis/VaultFactory.json
     abi: ./abis/Vault.json
     include_events:
@@ -191,8 +194,37 @@ contracts:
     tables:
       - name: vault_balances
         sync_together: true // [!code focus]
-        # ...
+        columns:
+          - name: vault
+          - name: owner
+          - name: balance
+            default: "0"
+        events:
+          - event: Supply // [!code focus]
+            operations:
+              - type: upsert
+                where:
+                  vault: $rindexer_contract_address  # The vault (child) that emitted the event
+                  owner: $owner
+                set:
+                  - column: balance
+                    action: add
+                    value: $assets
+          - event: Withdraw // [!code focus]
+            operations:
+              - type: upsert
+                where:
+                  vault: $rindexer_contract_address
+                  owner: $owner
+                set:
+                  - column: balance
+                    action: subtract
+                    value: $assets
 ```
+
+For each block, every discovered vault's `Supply` and `Withdraw` events - the raw event rows, the
+`vault_balances` upserts, and both events' checkpoints - commit in one transaction per network. A reader can
+never see a same-block supply without its withdrawal, on any vault.
 
 **How it works - the group is gated by discovery.** The factory-discovery event (`VaultCreated` above) keeps
 running on its own ordinary pipeline, writing newly deployed child addresses as it goes. The group loop **never
@@ -213,6 +245,106 @@ operationally:
   advancing until discovery recovers - by design, since processing further could miss events from undiscovered
   children. Alert on the group's `last_synced_block` metrics the same way you would for any event.
 - The clamp is **per network**, like everything else in the group.
+
+### Mixing factory children with other contracts
+
+Factory-deployed children can be grouped with ordinary fixed-address contracts through a top-level explicit
+group. A common shape: per-vault flows (factory children) and protocol-level fees (a singleton) that must never
+be seen out of sync within a block:
+
+```yaml [rindexer.yaml]
+contracts:
+  # Factory-deployed children (the vaults)
+  - name: Vault
+    details:
+      - network: ethereum
+        start_block: 21000000
+        factory:
+          name: VaultFactory
+          address: "0x..."
+          event_name: VaultCreated
+          input_name: "vault"
+          abi: ./abis/VaultFactory.json
+    abi: ./abis/Vault.json
+    include_events:
+      - Supply
+      - Withdraw
+    tables:
+      - name: vault_tvl
+        columns:
+          - name: vault
+          - name: tvl
+            default: "0"
+        events:
+          - event: Supply
+            operations:
+              - type: upsert
+                where:
+                  vault: $rindexer_contract_address
+                set:
+                  - column: tvl
+                    action: add
+                    value: $assets
+          - event: Withdraw
+            operations:
+              - type: upsert
+                where:
+                  vault: $rindexer_contract_address
+                set:
+                  - column: tvl
+                    action: subtract
+                    value: $assets
+
+  # An ordinary fixed-address contract in the same group
+  - name: Treasury
+    details:
+      - network: ethereum
+        address: "0x..."
+        start_block: 21000000
+    abi: ./abis/Treasury.json
+    include_events:
+      - FeesCollected
+    tables:
+      - name: protocol_fees
+        columns:
+          - name: token
+          - name: total_fees
+            default: "0"
+        events:
+          - event: FeesCollected
+            operations:
+              - type: upsert
+                where:
+                  token: $token
+                set:
+                  - column: total_fees
+                    action: add
+                    value: $amount
+
+sync_together: // [!code focus]
+  - group: vault-accounting // [!code focus]
+    contracts: // [!code focus]
+      - name: Vault // [!code focus]
+        events: // [!code focus]
+          - Supply // [!code focus]
+          - Withdraw // [!code focus]
+      - name: Treasury // [!code focus]
+        events: // [!code focus]
+          - FeesCollected // [!code focus]
+```
+
+Notes on the mixed shape:
+
+- **No table flags needed.** Membership in the explicit group already promotes each event's whole callback -
+  `vault_tvl` and `protocol_fees` commit in the same per-block transaction without `sync_together: true` on
+  either table (adding the flag on top is a validation error telling you to fold it into the explicit group).
+- **Deterministic order within a block:** contract order × event order from the group spec - here every block
+  processes `Vault.Supply`, then `Vault.Withdraw` (across all discovered vaults), then `Treasury.FeesCollected`.
+- **The discovery gate applies to the whole group.** The `Treasury` member also waits at the `VaultFactory`
+  discovery checkpoint - grouping any factory child couples every member to discovery (see the trade-offs
+  above). Keep unrelated events out of a factory group if they must not inherit that coupling.
+- **Requirements still apply:** `Vault` and `Treasury` must index identical network sets with the same
+  `reorg_safe_distance`, and `VaultFactory` itself (the factory SOURCE) cannot be added to the group.
 
 A contract used as a factory **SOURCE** (the contract whose event announces deployments) cannot itself be a
 group member - see [Requirements](#requirements).

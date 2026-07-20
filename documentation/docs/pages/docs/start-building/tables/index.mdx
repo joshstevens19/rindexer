@@ -2318,6 +2318,13 @@ contracts:
 
 **Result:** Aggregated metrics for every Uniswap V3 pool, discovered automatically.
 
+:::tip[Per-block atomic commits for factory children]
+Factory-child tables work with [sync_together](#sync_together) too: set `sync_together: true` on `pool_metrics`
+and every discovered pool's same-block events commit in one Postgres transaction per block during live indexing.
+Children can also be grouped with fixed-address contracts via the top-level `sync_together:` key - see
+[factory-deployed members](/docs/start-building/yaml-config/sync-together#factory-deployed-members).
+:::
+
 :::info[Factory Indexing Details]
 For full factory indexing configuration options (multiple input fields, token indexing, etc.),
 see the [Factory Indexing documentation](/docs/start-building/yaml-config/contracts#factory-indexing).
