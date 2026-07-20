@@ -5,6 +5,7 @@
 
 ### Bug fixes
 -------------------------------------------------
+- fix: graceful shutdown no longer loops forever ("N active indexing tasks pending" with a huge N) when live indexing skipped empty blocks via the logs-bloom check — the skip path underflowed the active task counter ([#432](https://github.com/joshstevens19/rindexer/pull/432))
 
 ### Features
 -------------------------------------------------
