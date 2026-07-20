@@ -6,8 +6,9 @@
 //! `example_runs_live` is `#[ignore]`d: it needs docker + the public RPC
 //! gateways. It copies the example to a temp dir, moves the start blocks to
 //! just behind the live tips, runs the real indexer for a bit, and asserts
-//! the invariant the example exists to demonstrate: the cross-chain
-//! `total_balances` aggregate exactly matches the raw transfer rows.
+//! the invariant the example exists to demonstrate: the cross-chain WETH
+//! `total_balances` aggregate exactly matches the raw Deposit/Withdrawal/
+//! Transfer rows.
 //! Run manually with:
 //!   cargo test -p rindexer --test example_tables_sync_together -- --ignored --nocapture
 
@@ -26,10 +27,14 @@ fn example_manifest_validates() {
     let manifest = rindexer::manifest::yaml::read_manifest(&manifest_path)
         .expect("examples/tables_sync_together/rindexer.yaml must pass validation");
 
-    // The demo's point: the table opts into lockstep.
+    // The demo's point: a MULTI-EVENT table opting into lockstep.
     let table = &manifest.contracts[0].tables.as_ref().expect("tables")[0];
     assert!(table.sync_together, "example table must set sync_together: true");
     assert!(table.cross_chain, "example table must set cross_chain: true");
+    assert!(
+        table.events.len() >= 2,
+        "example table must be fed by multiple events (that's what lockstep is for)"
+    );
 }
 
 async fn rpc_block_number(http: &reqwest::Client, rpc_url: &str) -> Option<u64> {
@@ -53,7 +58,7 @@ async fn example_runs_live() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let dir = tmp.path();
     std::fs::create_dir_all(dir.join("abis")).unwrap();
-    std::fs::copy(example_dir().join("abis/ERC20.abi.json"), dir.join("abis/ERC20.abi.json"))
+    std::fs::copy(example_dir().join("abis/WETH.abi.json"), dir.join("abis/WETH.abi.json"))
         .unwrap();
 
     let mut yaml = std::fs::read_to_string(example_dir().join("rindexer.yaml")).unwrap();
@@ -108,38 +113,37 @@ async fn example_runs_live() {
         let _ = connection.await;
     });
 
-    // Accounting invariant: SUM(all balances) must equal credits - debits
-    // derived from the raw transfer rows (mints/burns via the zero address
-    // excluded per the operation `if` conditions). This holds even when
-    // starting mid-stream because a holder first seen as a SENDER starts at
-    // -value (the upsert-subtract fresh-insert fix).
-    const ZERO: &str = "0x0000000000000000000000000000000000000000";
-    let consistency_sql = format!(
-        "SELECT \
-            (SELECT COUNT(*)::bigint FROM sync_together_example_usdc.total_balances) AS holders, \
-            (SELECT COUNT(DISTINCT network)::bigint FROM sync_together_example_usdc.transfer) AS networks, \
-            (SELECT COUNT(*)::bigint FROM sync_together_example_usdc.transfer) AS transfers, \
-            (SELECT COALESCE(SUM(balance), 0)::numeric FROM sync_together_example_usdc.total_balances) AS total, \
-            (SELECT COALESCE(SUM(CASE WHEN \"to\" <> '{ZERO}' THEN value::numeric ELSE 0 END), 0) \
-                  - COALESCE(SUM(CASE WHEN \"from\" <> '{ZERO}' THEN value::numeric ELSE 0 END), 0) \
-             FROM sync_together_example_usdc.transfer) AS expected"
-    );
+    // Accounting invariant: SUM(all balances) must equal total deposits minus
+    // total withdrawals from the raw event rows (Transfer's credit/debit pair
+    // nets to zero). Holds exactly because all three events' balance
+    // mutations commit atomically per block — and because the upsert-subtract
+    // fresh-insert fix makes mid-stream debits start at -value.
+    let consistency_sql = "SELECT \
+            (SELECT COUNT(*)::bigint FROM sync_together_example_weth.total_balances) AS holders, \
+            (SELECT COUNT(DISTINCT network)::bigint FROM sync_together_example_weth.transfer) AS networks, \
+            (SELECT COUNT(*)::bigint FROM sync_together_example_weth.transfer) \
+              + (SELECT COUNT(*)::bigint FROM sync_together_example_weth.deposit) \
+              + (SELECT COUNT(*)::bigint FROM sync_together_example_weth.withdrawal) AS events, \
+            (SELECT COALESCE(SUM(balance), 0)::numeric FROM sync_together_example_weth.total_balances) AS total, \
+            (SELECT COALESCE(SUM(wad::numeric), 0) FROM sync_together_example_weth.deposit) \
+              - (SELECT COALESCE(SUM(wad::numeric), 0) FROM sync_together_example_weth.withdrawal) AS expected"
+        .to_string();
 
     let driver = async {
-        // Wait for live USDC transfers to land (backfill is tiny; USDC has
+        // Wait for live WETH events to land (backfill is tiny; WETH has
         // near-constant volume on all three networks).
         let deadline = tokio::time::Instant::now() + Duration::from_secs(240);
         loop {
             tokio::time::sleep(Duration::from_secs(5)).await;
             if let Ok(row) = pg.query_one(&consistency_sql, &[]).await {
-                let transfers: i64 = row.get("transfers");
-                eprintln!("transfers so far: {transfers}");
-                if transfers >= 50 {
+                let events: i64 = row.get("events");
+                eprintln!("events so far: {events}");
+                if events >= 50 {
                     break;
                 }
             }
             if tokio::time::Instant::now() > deadline {
-                panic!("timed out waiting for USDC transfers to be indexed");
+                panic!("timed out waiting for WETH events to be indexed");
             }
         }
 
@@ -156,37 +160,56 @@ async fn example_runs_live() {
     let row = pg.query_one(&consistency_sql, &[]).await.expect("consistency query");
     let holders: i64 = row.get("holders");
     let networks: i64 = row.get("networks");
-    let transfers: i64 = row.get("transfers");
+    let events: i64 = row.get("events");
     let total: rust_decimal::Decimal = row.get("total");
     let expected: rust_decimal::Decimal = row.get("expected");
     eprintln!(
-        "indexed {transfers} transfers from {networks} networks; {holders} holders; \
-         SUM(balances) = {total}, credits - debits = {expected}"
+        "indexed {events} events from {networks} networks; {holders} holders; \
+         SUM(balances) = {total}, deposits - withdrawals = {expected}"
     );
-    assert!(transfers >= 50, "expected at least 50 transfers, got {transfers}");
+    assert!(events >= 50, "expected at least 50 events, got {events}");
     assert_eq!(networks, 3, "expected transfers from all three networks");
     assert!(holders > 0, "cross-chain totals table is empty");
-    assert_eq!(total, expected, "cross-chain aggregate diverged from raw transfers");
-
-    // Lockstep checkpoints advanced on every network.
-    let checkpoints: i64 = pg
-        .query_one(
-            "SELECT COUNT(*)::bigint FROM rindexer_internal.sync_together_example_usdc_transfer WHERE last_synced_block > 0",
-            &[],
-        )
-        .await
-        .expect("checkpoint query")
-        .get(0);
-    assert_eq!(checkpoints, 3, "expected advanced checkpoints on all three networks");
+    assert_eq!(total, expected, "cross-chain aggregate diverged from raw events");
 
     // No duplicate rows (per network) — the seam guarantee.
     let dups: i64 = pg
         .query_one(
-            "SELECT COALESCE(SUM(c - 1), 0)::bigint FROM (SELECT COUNT(*) AS c FROM sync_together_example_usdc.transfer GROUP BY network, tx_hash, log_index) d WHERE c > 1",
+            "SELECT COALESCE(SUM(c - 1), 0)::bigint FROM (SELECT COUNT(*) AS c FROM sync_together_example_weth.transfer GROUP BY network, tx_hash, log_index) d WHERE c > 1",
             &[],
         )
         .await
         .expect("dup query")
         .get(0);
     assert_eq!(dups, 0, "duplicate transfer rows");
+
+    // Lockstep checkpoints advanced on every network, for every member event.
+    for member in ["transfer", "deposit", "withdrawal"] {
+        let checkpoints: i64 = pg
+            .query_one(
+                &format!(
+                    "SELECT COUNT(*)::bigint FROM rindexer_internal.sync_together_example_weth_{member} WHERE last_synced_block > 0"
+                ),
+                &[],
+            )
+            .await
+            .expect("checkpoint query")
+            .get(0);
+        assert_eq!(checkpoints, 3, "expected advanced {member} checkpoints on all three networks");
+    }
+
+    // The lockstep invariant across MEMBERS: within each network, all three
+    // events' checkpoints are identical (they commit together).
+    let drift: i64 = pg
+        .query_one(
+            "SELECT COUNT(*)::bigint FROM rindexer_internal.sync_together_example_weth_transfer t \
+             JOIN rindexer_internal.sync_together_example_weth_deposit d ON d.network = t.network \
+             JOIN rindexer_internal.sync_together_example_weth_withdrawal w ON w.network = t.network \
+             WHERE t.last_synced_block <> d.last_synced_block OR t.last_synced_block <> w.last_synced_block",
+            &[],
+        )
+        .await
+        .expect("drift query")
+        .get(0);
+    assert_eq!(drift, 0, "member checkpoints diverged within a network");
 }

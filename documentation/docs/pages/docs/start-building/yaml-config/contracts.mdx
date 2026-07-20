@@ -748,14 +748,26 @@ contracts:
 **Atomic per-block commits with `sync_together`:**
 
 Next to the `global` and `cross_chain` flags, a table can set `sync_together: true` to commit its events
-atomically per block during live indexing - the raw event rows, all of the event's table operations, and the
-`last_synced_block` checkpoint land in one Postgres transaction per block, per network.
+atomically per block during live indexing - the raw event rows, all of the events' table operations, and the
+`last_synced_block` checkpoints land in one Postgres transaction per block, per network. Most useful for tables
+fed by multiple events (e.g. WETH balances from `Deposit` + `Withdrawal` + `Transfer`), which then advance
+block-by-block together instead of each event committing on its own loop:
 
 ```yaml [rindexer.yaml]
 tables:
-  - name: total_balances
-    cross_chain: true
+  - name: balances
     sync_together: true // [!code focus]
+    columns:
+      - name: holder
+      - name: balance
+        default: "0"
+    events:
+      - event: Deposit // [!code focus]
+        operations: [...]
+      - event: Withdrawal // [!code focus]
+        operations: [...]
+      - event: Transfer // [!code focus]
+        operations: [...]
 ```
 
 See the full semantics and requirements in the [sync_together documentation](/docs/start-building/yaml-config/sync-together).

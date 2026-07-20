@@ -69,43 +69,68 @@ callback** into buffered mode - raw event rows and all of the event's table oper
 
 ### Per-table opt-in (single contract)
 
-For a single table whose events should commit atomically, set `sync_together: true` on the table entry - it sits
-next to the existing [global](/docs/start-building/tables#global) and
-[cross_chain](/docs/start-building/tables#cross_chain) flags:
+For a table fed by several events that should commit atomically, set `sync_together: true` on the table entry -
+it sits next to the existing [global](/docs/start-building/tables#global) and
+[cross_chain](/docs/start-building/tables#cross_chain) flags. WETH balances are the canonical case: `Deposit`,
+`Withdrawal` and `Transfer` all mutate the same balance, and without lockstep each event commits on its own
+loop - a reader can see a same-block deposit land without its transfer (or vice versa):
 
 ```yaml [rindexer.yaml]
 contracts:
-  - name: USDC
+  - name: WETH
     details:
       - network: ethereum
-        address: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+        address: "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
         start_block: 18600000
-      - network: arbitrum
-        address: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
-        start_block: 150000000
-    abi: ./abis/ERC20.json
+    abi: ./abis/WETH.json
     tables:
-      - name: total_balances
-        cross_chain: true
+      - name: balances
         sync_together: true // [!code focus]
         columns:
           - name: holder
           - name: balance
             default: "0"
         events:
-          - event: Transfer
+          - event: Deposit // [!code focus]
             operations:
               - type: upsert
                 where:
-                  holder: $to
-                if: "$to != 0x0000000000000000000000000000000000000000"
+                  holder: $dst
                 set:
                   - column: balance
                     action: add
-                    value: $value
+                    value: $wad
+          - event: Withdrawal // [!code focus]
+            operations:
+              - type: upsert
+                where:
+                  holder: $src
+                set:
+                  - column: balance
+                    action: subtract
+                    value: $wad
+          - event: Transfer // [!code focus]
+            operations:
+              - type: upsert
+                where:
+                  holder: $dst
+                set:
+                  - column: balance
+                    action: add
+                    value: $wad
+              - type: upsert
+                where:
+                  holder: $src
+                set:
+                  - column: balance
+                    action: subtract
+                    value: $wad
 ```
 
-This desugars into an implicit group of that table's events.
+This desugars into an implicit group of that table's events - here `Deposit`, `Withdrawal` and `Transfer` advance
+block-by-block together and their balance mutations commit in one transaction per block. A single-event table is
+also valid: you don't get cross-event ordering (there is only one event), but the raw event rows, the table
+operations, and the checkpoint still commit atomically per block.
 
 :::info[Whole-Callback Promotion]
 Opting in a table promotes the **whole event callback** - raw event rows, ALL of that event's table operations,

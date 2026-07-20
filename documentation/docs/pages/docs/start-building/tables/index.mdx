@@ -238,19 +238,29 @@ event rows, ALL of the event's table operations, the reorg journal, and the `las
 in one Postgres transaction per block, per network - readers can never see a block partially applied, and
 checkpoints can never drift from the data.
 
+The flag earns its keep on tables fed by **multiple events** - all of them advance block-by-block together, so a
+reader can never see one event's mutation without its same-block siblings:
+
 ```yaml
 tables:
-  - name: total_balances
-    cross_chain: true
+  - name: balances
     sync_together: true  // [!code focus]
     columns:
       - name: holder
       - name: balance
         default: "0"
+    events:
+      - event: Deposit      # credits $dst // [!code focus]
+        operations: [...]
+      - event: Withdrawal   # debits $src // [!code focus]
+        operations: [...]
+      - event: Transfer     # moves $src -> $dst // [!code focus]
+        operations: [...]
 ```
 
 Under the hood this desugars into an implicit [sync_together group](/docs/start-building/yaml-config/sync-together)
-of the table's events.
+of the table's events. A single-event table is also valid - the raw event rows, table operations, and checkpoint
+still commit atomically per block.
 
 :::info[Whole-Callback Promotion]
 Opting in a table promotes the **whole event callback** - raw event rows plus every table that event writes to,
@@ -269,9 +279,9 @@ never waits on an arbitrum block. For `cross_chain: true` tables the guarantee i
 the cross-chain aggregate is the sum of each network's committed prefix, eventually consistent across chains
 (inherent to cross-chain aggregation, not a regression).
 
-`sync_together` requires Postgres storage, an explicit `start_block` on every network, no `end_block`, and no
-factory contracts - see the [full reference](/docs/start-building/yaml-config/sync-together) for all requirements
-and trade-offs.
+`sync_together` requires Postgres storage, no `end_block`, and no factory contracts (`start_block` is optional -
+without one a member starts at the tip on first boot and resumes from its checkpoint on restarts) - see the
+[full reference](/docs/start-building/yaml-config/sync-together) for all requirements and trade-offs.
 
 ---
 
