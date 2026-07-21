@@ -50,6 +50,12 @@ pub struct StartDetails<'a> {
     pub graphql_details: GraphqlOverrideSettings,
     pub cron_scheduler_handle: Option<tokio::task::JoinHandle<Result<(), String>>>,
     pub watch: bool,
+    /// When false, rindexer will not register process signal handlers (SIGTERM/SIGINT/etc.)
+    /// so an embedding host application can own signal handling itself.
+    pub manage_process_signals: bool,
+    /// When true, the health server is never started (useful when embedding rindexer
+    /// inside another application which exposes its own health endpoints).
+    pub disable_health_server: bool,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -117,6 +123,19 @@ async fn handle_shutdown(signal: &str) {
     std::process::exit(0);
 }
 
+async fn wait_for_shutdown_handle(
+    shutdown_handle: Option<tokio::task::JoinHandle<()>>,
+) -> Result<(), tokio::task::JoinError> {
+    match shutdown_handle {
+        Some(handle) => handle.await,
+        // Signals are managed by the embedding host, so never resolve here
+        None => {
+            std::future::pending::<()>().await;
+            Ok(())
+        }
+    }
+}
+
 pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindexerError> {
     info!(
         "🚀 start_rindexer called with indexing_details.is_some() = {}",
@@ -127,7 +146,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
     match project_path {
         Some(project_path) => {
             #[cfg(unix)]
-            let shutdown_handle = {
+            let shutdown_handle = if details.manage_process_signals {
                 let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
                     .map_err(|e| StartRindexerError::ShutdownHandlerFailed(e.to_string()))?;
                 let mut sigint = signal::unix::signal(signal::unix::SignalKind::interrupt())
@@ -135,24 +154,30 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                 let mut sigquit = signal::unix::signal(signal::unix::SignalKind::quit())
                     .map_err(|e| StartRindexerError::ShutdownHandlerFailed(e.to_string()))?;
 
-                tokio::spawn(async move {
+                Some(tokio::spawn(async move {
                     tokio::select! {
                         _ = sigterm.recv() => handle_shutdown("SIGTERM").await,
                         _ = sigint.recv() => handle_shutdown("SIGINT (Ctrl+C)").await,
                         _ = sigquit.recv() => handle_shutdown("SIGQUIT").await,
                     }
-                })
+                }))
+            } else {
+                None
             };
 
             // On Windows, we just use Ctrl+C to trigger shutdown
             #[cfg(windows)]
-            let shutdown_handle = tokio::spawn(async move {
-                if let Err(e) = signal::ctrl_c().await {
-                    error!("Failed to register Ctrl+C handler: {}", e);
-                    panic!("Ctrl+C handler failed: {}", e);
-                }
-                handle_shutdown("Ctrl+C").await
-            });
+            let shutdown_handle = if details.manage_process_signals {
+                Some(tokio::spawn(async move {
+                    if let Err(e) = signal::ctrl_c().await {
+                        error!("Failed to register Ctrl+C handler: {}", e);
+                        panic!("Ctrl+C handler failed: {}", e);
+                    }
+                    handle_shutdown("Ctrl+C").await
+                }))
+            } else {
+                None
+            };
 
             let manifest = Arc::new(read_manifest(details.manifest_path)?);
 
@@ -196,17 +221,21 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
 
             let health_port = manifest.global.health_port;
 
-            if let Some(graphql_port) = graphql_port {
-                if graphql_port == health_port {
-                    return Err(StartRindexerError::PortConflict(format!(
-                        "GraphQL and health servers cannot use the same port: {}",
-                        graphql_port
-                    )));
+            if !details.disable_health_server {
+                if let Some(graphql_port) = graphql_port {
+                    if graphql_port == health_port {
+                        return Err(StartRindexerError::PortConflict(format!(
+                            "GraphQL and health servers cannot use the same port: {}",
+                            graphql_port
+                        )));
+                    }
                 }
             }
 
             // Health server follows the indexer lifecycle - only runs when indexer is running
-            let health_server_handle = if details.indexing_details.is_some() {
+            let health_server_handle = if details.indexing_details.is_some()
+                && !details.disable_health_server
+            {
                 let manifest_clone = Arc::clone(&manifest);
 
                 Some(tokio::spawn(async move {
@@ -391,7 +420,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                                 error!("Health server task failed: {:?}", e);
                             }
                         }
-                        result = shutdown_handle => {
+                        result = wait_for_shutdown_handle(shutdown_handle) => {
                             result.map_err(|e| {
                                 error!("Shutdown handler failed: {:?}", e);
                                 StartRindexerError::ShutdownHandlerFailed(e.to_string())
@@ -407,7 +436,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                                 error!("GraphQL server task failed: {:?}", e);
                             }
                         }
-                        result = shutdown_handle => {
+                        result = wait_for_shutdown_handle(shutdown_handle) => {
                             result.map_err(|e| {
                                 error!("Shutdown handler failed: {:?}", e);
                                 StartRindexerError::ShutdownHandlerFailed(e.to_string())
@@ -423,7 +452,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                                 error!("Health server task failed: {:?}", e);
                             }
                         }
-                        result = shutdown_handle => {
+                        result = wait_for_shutdown_handle(shutdown_handle) => {
                             result.map_err(|e| {
                                 error!("Shutdown handler failed: {:?}", e);
                                 StartRindexerError::ShutdownHandlerFailed(e.to_string())
@@ -433,7 +462,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                 }
                 (None, None, shutdown_handle) => {
                     info!("Waiting for shutdown signal...");
-                    shutdown_handle.await.map_err(|e| {
+                    wait_for_shutdown_handle(shutdown_handle).await.map_err(|e| {
                         error!("Shutdown handler failed: {:?}", e);
                         StartRindexerError::ShutdownHandlerFailed(e.to_string())
                     })?;

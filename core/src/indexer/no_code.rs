@@ -198,6 +198,8 @@ pub async fn setup_no_code(
                     graphql_details: details.graphql_details,
                     cron_scheduler_handle: None,
                     watch: details.watch,
+                    manage_process_signals: true,
+                    disable_health_server: false,
                 });
             }
 
@@ -294,6 +296,8 @@ pub async fn setup_no_code(
                     graphql_details: details.graphql_details,
                     cron_scheduler_handle,
                     watch: details.watch,
+                    manage_process_signals: true,
+                    disable_health_server: false,
                 });
             }
 
@@ -307,6 +311,8 @@ pub async fn setup_no_code(
                 graphql_details: details.graphql_details,
                 cron_scheduler_handle: None,
                 watch: details.watch,
+                manage_process_signals: true,
+                disable_health_server: false,
             })
         }
         None => Err(SetupNoCodeError::NoProjectPathFoundUsingParentOfManifestPath),
