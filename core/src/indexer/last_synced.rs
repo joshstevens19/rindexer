@@ -196,11 +196,7 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
             .await;
 
         return if let Ok(result) = get_last_synced_block_number_file(
-            &config
-                .project_path
-                .join(stream_details.get_streams_last_synced_block_path())
-                .canonicalize()
-                .expect("Failed to canonicalize path"),
+            &config.project_path.join(stream_details.get_streams_last_synced_block_path()),
             config.contract_name,
             config.network,
             config.event_name,
@@ -250,6 +246,9 @@ async fn update_last_synced_block_number_for_file(
 
     if last_block.is_none() || to_block_higher_then_last_block {
         let temp_file_path = format!("{file_path}.tmp");
+        if let Some(parent) = Path::new(&file_path).parent() {
+            fs::create_dir_all(parent).await?;
+        }
 
         let mut file = File::create(&temp_file_path).await?;
         file.write_all(to_block.to_string().as_bytes()).await?;
@@ -364,15 +363,13 @@ pub async fn update_progress_and_last_synced_task(
     } else if let Some(stream_last_synced_block_file_path) =
         &config.stream_last_synced_block_file_path()
     {
+        let full_path = config.project_path().join(stream_last_synced_block_file_path);
+
         if let Err(e) = update_last_synced_block_number_for_file(
             &config.contract_name(),
             &config.network_contract().network,
             &config.event_name(),
-            &config
-                .project_path()
-                .join(stream_last_synced_block_file_path)
-                .canonicalize()
-                .expect("Failed to canonicalize path"),
+            &full_path,
             to_block,
         )
         .await
@@ -443,15 +440,13 @@ pub async fn evm_trace_update_progress_and_last_synced_task(
     } else if let Some(stream_last_synced_block_file_path) =
         &config.stream_last_synced_block_file_path
     {
+        let full_path = config.project_path.join(stream_last_synced_block_file_path);
+
         if let Err(e) = update_last_synced_block_number_for_file(
             &config.contract_name,
             &config.network,
             &config.event_name,
-            &config
-                .project_path
-                .join(stream_last_synced_block_file_path)
-                .canonicalize()
-                .expect("Failed to canonicalize path"),
+            &full_path,
             to_block,
         )
         .await
@@ -603,5 +598,67 @@ pub async fn update_last_synced_cron_block(
         if let Err(e) = result {
             error!("Error updating cron last synced block in clickhouse: {:?}", e);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn file_checkpoint_update_creates_missing_parent_directories() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let full_path = temp_dir.path().join(".rindexer/rabbitmq");
+
+        update_last_synced_block_number_for_file(
+            "EntryPoint",
+            "13337",
+            "UserOperationEvent",
+            &full_path,
+            U64::from(2235535),
+        )
+        .await
+        .unwrap();
+
+        let checkpoint_path = full_path
+            .join("EntryPoint")
+            .join("last-synced-blocks")
+            .join("entrypoint-13337-useroperationevent.txt");
+
+        let contents = fs::read_to_string(checkpoint_path).await.unwrap();
+        assert_eq!(contents, "2235535");
+    }
+
+    #[tokio::test]
+    async fn file_checkpoint_update_keeps_highest_block() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let full_path = temp_dir.path().join(".rindexer/rabbitmq");
+
+        update_last_synced_block_number_for_file(
+            "EntryPoint",
+            "13337",
+            "UserOperationEvent",
+            &full_path,
+            U64::from(20),
+        )
+        .await
+        .unwrap();
+        update_last_synced_block_number_for_file(
+            "EntryPoint",
+            "13337",
+            "UserOperationEvent",
+            &full_path,
+            U64::from(10),
+        )
+        .await
+        .unwrap();
+
+        let checkpoint_path = full_path
+            .join("EntryPoint")
+            .join("last-synced-blocks")
+            .join("entrypoint-13337-useroperationevent.txt");
+
+        let contents = fs::read_to_string(checkpoint_path).await.unwrap();
+        assert_eq!(contents, "20");
     }
 }
