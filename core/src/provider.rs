@@ -923,8 +923,8 @@ impl<T: ChainProvider + ?Sized> ChainProvider for Arc<T> {
 /// A mock implementation of [`ChainProvider`] for testing.
 ///
 /// Use the builder methods to configure canned responses, then pass to
-/// functions that accept `impl ChainProvider`.
-#[cfg(test)]
+/// functions that accept `impl ChainProvider`. Compiled unconditionally so
+/// embedders (e.g. rflow) can drive registry/callback tests without a chain.
 pub mod mock {
     use super::*;
 
