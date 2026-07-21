@@ -5,6 +5,7 @@
 
 ### Bug fixes
 -------------------------------------------------
+- fix: no-code stream-only projects now create `.rindexer/<stream>/.../last-synced-blocks` checkpoint directories on write, preventing RabbitMQ/SNS/webhook/etc. runs without storage from panicking with `Failed to canonicalize path` ([#449](https://github.com/joshstevens19/rindexer/issues/449)).
 - fix: live indexing now respects the network `max_block_range` setting after historical sync, preventing oversized `eth_getLogs` requests when catching up to the chain tip.
 - fix: graceful shutdown no longer loops forever ("N active indexing tasks pending" with a huge N) when live indexing skipped empty blocks via the logs-bloom check — the skip path underflowed the active task counter ([#432](https://github.com/joshstevens19/rindexer/pull/432))
 
