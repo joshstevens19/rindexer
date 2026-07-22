@@ -1,9 +1,20 @@
+FOUNDRY_EXAMPLE_SOURCE ?= https://github.com/Uniswap/v4-periphery
+FOUNDRY_EXAMPLE_PATH ?= $(CURDIR)/../examples/rindexer_foundry_import
+FOUNDRY_EXAMPLE_NAME ?= UniswapV4PeripheryImport
+
 prod_build:
 	RUSTFLAGS='-C target-cpu=native' cargo build --release --features jemalloc,reth
 new_no_code:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- new --path $(CURDIR)/../examples no-code
 new_rust:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- new --path $(CURDIR)/../examples rust
+new_foundry:
+	rm -rf $(FOUNDRY_EXAMPLE_PATH)
+	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- foundry new $(FOUNDRY_EXAMPLE_SOURCE) --output $(FOUNDRY_EXAMPLE_PATH) --name $(FOUNDRY_EXAMPLE_NAME)
+foundry_run:
+	test -f $(FOUNDRY_EXAMPLE_PATH)/rindexer.yaml || $(MAKE) new_foundry
+	cd $(FOUNDRY_EXAMPLE_PATH) && docker compose up -d
+	RUSTFLAGS='-C target-cpu=native' RUST_BACKTRACE='full' cargo run --release --features jemalloc -- start --path $(FOUNDRY_EXAMPLE_PATH) all
 start_indexer:
 	RUSTFLAGS='-C target-cpu=native' RUST_BACKTRACE='full' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/rindexer_demo_cli indexer
 start_all:
