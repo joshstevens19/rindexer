@@ -66,6 +66,7 @@ impl TestRegistry {
 
         // Configuration
         tests.extend(crate::tests::config_validation::ConfigValidationTests::get_tests());
+        tests.extend(crate::tests::foundry_import::FoundryImportTests::get_tests());
 
         // Storage backends
         tests.extend(crate::tests::postgres_e2e::PostgresE2ETests::get_tests());

@@ -138,6 +138,17 @@ pub enum Commands {
         #[clap(long, short)]
         path: Option<String>,
     },
+
+    /// Import and sync Foundry projects with rindexer projects.
+    ///
+    /// Example:
+    /// `rindexer foundry new`
+    /// `rindexer foundry sync`
+    #[clap(name = "foundry")]
+    Foundry {
+        #[clap(subcommand)]
+        subcommand: FoundrySubcommands,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -164,6 +175,47 @@ pub enum NewSubcommands {
     Rust {
         #[clap(flatten)]
         reth: RethArgs,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum FoundrySubcommands {
+    /// Creates a no-code rindexer project from a Foundry project or Git URL.
+    ///
+    /// Example:
+    /// `rindexer foundry new`
+    /// `rindexer foundry new https://github.com/org/repo`
+    #[clap(name = "new")]
+    New {
+        /// optional - Foundry source path or Git URL, defaults to the current directory.
+        source: Option<String>,
+
+        /// optional - Output directory for the generated rindexer project.
+        #[clap(long)]
+        output: Option<String>,
+
+        /// optional - Project name for the generated rindexer project.
+        #[clap(long)]
+        name: Option<String>,
+    },
+
+    /// Sync an existing Foundry-generated rindexer project from its source.
+    ///
+    /// Example:
+    /// `rindexer foundry sync`
+    /// `rindexer foundry sync https://github.com/org/repo`
+    #[clap(name = "sync")]
+    Sync {
+        /// optional - Override the saved Foundry source path or Git URL.
+        source: Option<String>,
+
+        /// optional - The rindexer project path, default will be where the command is run.
+        #[clap(long, short)]
+        path: Option<String>,
+
+        /// Report changes without writing files.
+        #[clap(long)]
+        dry_run: bool,
     },
 }
 

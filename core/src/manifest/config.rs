@@ -55,6 +55,16 @@ pub struct Config {
     pub fetch_concurrency: Option<usize>,
 }
 
+impl Config {
+    pub fn is_empty(&self) -> bool {
+        self.buffer.is_none()
+            && self.callback_concurrency.is_none()
+            && self.timestamp_sample_rate.is_none()
+            && self.max_concurrent_view_calls.is_none()
+            && self.fetch_concurrency.is_none()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_yaml;

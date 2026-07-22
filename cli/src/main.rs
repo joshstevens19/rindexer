@@ -21,10 +21,14 @@ use rindexer::{load_env_from_project_path, manifest::core::ProjectType};
 use rindexer::manifest::reth::RethConfig;
 
 use crate::{
-    cli_interface::{AddSubcommands, Commands, NewSubcommands, CLI},
+    cli_interface::{AddSubcommands, Commands, FoundrySubcommands, NewSubcommands, CLI},
     commands::{
-        add::handle_add_contract_command, codegen::handle_codegen_command,
-        delete::handle_delete_command, new::handle_new_command, phantom::handle_phantom_commands,
+        add::handle_add_contract_command,
+        codegen::handle_codegen_command,
+        delete::handle_delete_command,
+        foundry::{handle_foundry_sync_command, handle_new_foundry_command},
+        new::handle_new_command,
+        phantom::handle_phantom_commands,
         start::start,
     },
     console::print_error_message,
@@ -107,5 +111,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             load_env_from_project_path(&resolved_path);
             handle_phantom_commands(resolved_path, subcommand).await
         }
+        Commands::Foundry { subcommand } => match subcommand {
+            FoundrySubcommands::New { source, output, name } => {
+                let current_dir = env::current_dir()
+                    .map_err(|_| "Failed to get current directory.".to_string())
+                    .inspect_err(|e| print_error_message(e))?;
+                load_env_from_project_path(&current_dir);
+                handle_new_foundry_command(
+                    current_dir,
+                    source.clone(),
+                    output.clone(),
+                    name.clone(),
+                )
+            }
+            FoundrySubcommands::Sync { source, path, dry_run } => {
+                let resolved_path = resolve_path(path).inspect_err(|e| print_error_message(e))?;
+                load_env_from_project_path(&resolved_path);
+                handle_foundry_sync_command(resolved_path, source.clone(), *dry_run).await
+            }
+        },
     }
 }
