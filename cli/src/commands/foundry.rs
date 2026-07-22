@@ -1678,17 +1678,13 @@ This rindexer project was generated from a Foundry project.
 
 1. Start the chain or RPC endpoint used by the Foundry broadcast.
 2. Set the generated `CHAIN_<id>_RPC_URL` values in `.env` to RPC endpoints that can read the deployed chains. Chain `31337` uses `ANVIL_RPC_URL=http://127.0.0.1:8545`.
-3. Start Postgres:
-
-```bash
-docker compose up -d
-```
-
-4. Start indexing and GraphQL:
+3. Make sure Docker is running, then start indexing and GraphQL:
 
 ```bash
 rindexer start all
 ```
+
+rindexer starts the generated Postgres `docker-compose.yml` automatically when the `DATABASE_URL` cannot connect. You can also start it manually with `docker compose up -d`.
 
 ## Refresh from Foundry
 

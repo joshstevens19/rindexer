@@ -155,9 +155,12 @@ Use an RPC provider with archive access for deployed contracts whose start block
 From the generated rindexer project:
 
 ```bash
-docker compose up -d
 rindexer start all
 ```
+
+:::info
+rindexer starts the generated Postgres `docker-compose.yml` for you automatically when the `DATABASE_URL` cannot connect, so you only need Docker running. You can also start it manually with `docker compose up -d`.
+:::
 
 GraphQL is available at `http://localhost:3001/graphql` when Postgres storage is enabled.
 
