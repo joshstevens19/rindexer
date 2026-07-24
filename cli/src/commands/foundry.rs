@@ -1544,6 +1544,7 @@ fn default_network(chain_id: u64, name: String) -> Network {
         reth: None,
         multicall3_address: None,
         reorg_handling: None,
+        hypersync: None,
     }
 }
 

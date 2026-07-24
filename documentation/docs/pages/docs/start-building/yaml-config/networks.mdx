@@ -100,6 +100,53 @@ networks:
   max_block_range: 10000 // [!code focus]
 ```
 
+### hypersync
+
+Use an [Envio HyperSync](https://docs.envio.dev/docs/HyperSync/overview) endpoint as the data source for historical log fetching,
+which is significantly faster than `eth_getLogs` over RPC for backfills.
+
+The `rpc` field is still required: HyperSync only serves log data, so rindexer continues to use your RPC node for everything
+else — `eth_call`, transaction receipts, traces, latest block polling and live indexing at the chain head. If HyperSync is
+briefly behind the chain head or unavailable, rindexer automatically falls back to the RPC endpoint, so indexing always
+remains correct.
+
+A HyperSync API token is required — you can create one for free at [envio.dev/app/api-tokens](https://envio.dev/app/api-tokens).
+rindexer reads it from `hypersync.api_token` or the `HYPERSYNC_API_TOKEN` / `ENVIO_API_TOKEN` environment variables.
+
+The simplest way to enable it (uses `https://{chain_id}.hypersync.xyz` and the token from your environment):
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+  hypersync: true // [!code focus]
+```
+
+All the options:
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+  hypersync: // [!code focus]
+    url: https://eth.hypersync.xyz // [!code focus] # optional, defaults to https://{chain_id}.hypersync.xyz
+    api_token: ${HYPERSYNC_API_TOKEN} // [!code focus] # optional, defaults to HYPERSYNC_API_TOKEN / ENVIO_API_TOKEN env vars
+    max_block_range: 50000 // [!code focus] # optional, block range per HyperSync request during backfill
+```
+
+Timestamp indexing (`timestamps: true`) gets an extra speed boost with HyperSync enabled: block timestamps are joined into
+the log queries directly, so rindexer does not need to fetch blocks over RPC to stamp events.
+
 ### block_poll_frequency
 
 :::info

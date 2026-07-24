@@ -1123,6 +1123,9 @@ pub enum RetryClientError {
 
     #[error("Could not start reth node for network {0}: {1}")]
     RethNodeStartError(String, String),
+
+    #[error("Could not create hypersync client for network {0}: {1}")]
+    HypersyncClientCantBeCreated(String, String),
 }
 
 fn ensure_rpc_url_not_empty(
@@ -1253,7 +1256,7 @@ pub async fn get_chain_id(rpc_url: &str) -> Result<U256, RpcError<TransportError
 pub struct CreateNetworkProvider {
     pub network_name: String,
     pub disable_logs_bloom_checks: bool,
-    pub client: Arc<JsonRpcCachedProvider>,
+    pub client: Arc<dyn ChainProvider>,
 }
 
 impl CreateNetworkProvider {
@@ -1301,10 +1304,26 @@ impl CreateNetworkProvider {
             )
             .await?;
 
+            // When hypersync is configured, historical log fetching is served by
+            // HyperSync with the RPC provider handling everything else.
+            let client: Arc<dyn ChainProvider> = match &network.hypersync {
+                Some(hypersync_config) => {
+                    crate::hypersync::create_hypersync_provider(
+                        hypersync_config,
+                        &network.name,
+                        network.chain_id,
+                        network.max_block_range,
+                        provider,
+                    )
+                    .await?
+                }
+                None => provider,
+            };
+
             Ok::<_, RetryClientError>(CreateNetworkProvider {
                 network_name: network.name.clone(),
                 disable_logs_bloom_checks: network.disable_logs_bloom_checks.unwrap_or_default(),
-                client: provider,
+                client,
             })
         });
 
@@ -1313,7 +1332,7 @@ impl CreateNetworkProvider {
 
     /// Get the chain state notification for this network
     pub fn chain_state_notification(&self) -> Option<Sender<ChainStateNotification>> {
-        self.client.chain_state_notification.clone()
+        self.client.chain_state_notification()
     }
 }
 

@@ -23,6 +23,76 @@ use crate::reth::node::start_reth_node_with_exex;
 #[cfg(feature = "reth")]
 use reth::cli::Commands;
 
+/// Configuration for using an Envio HyperSync endpoint as the log data source for a network.
+///
+/// When present, historical `eth_getLogs` traffic is served by HyperSync while everything
+/// else (`eth_call`, receipts, traces, latest-block polling and near-tip log fetches)
+/// continues to use the network `rpc` endpoint, which therefore remains required.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HypersyncConfig {
+    /// Custom HyperSync endpoint URL. Defaults to `https://{chain_id}.hypersync.xyz`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+
+    /// HyperSync API token (see https://envio.dev/app/api-tokens). Supports `${ENV_VAR}`
+    /// substitution. Falls back to the `HYPERSYNC_API_TOKEN` or `ENVIO_API_TOKEN`
+    /// environment variables when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_token: Option<String>,
+
+    /// Maximum block range per HyperSync logs request during historical sync.
+    /// Overrides the network-level `max_block_range` for HyperSync-served requests.
+    /// Defaults to 50,000 blocks when neither is set.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_option_u64_lenient",
+        serialize_with = "serialize_option_u64_as_string"
+    )]
+    pub max_block_range: Option<U64>,
+}
+
+/// Accepts both plain numbers and strings. The `hypersync` field deserializes through a
+/// `serde_yaml::Value`, which is strict about numbers, unlike the raw YAML parser used by
+/// `deserialize_option_u64_from_string`.
+fn deserialize_option_u64_lenient<'de, D>(deserializer: D) -> Result<Option<U64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error;
+    use std::str::FromStr;
+
+    let value = Option::<serde_yaml::Value>::deserialize(deserializer)?;
+    match value {
+        None | Some(serde_yaml::Value::Null) => Ok(None),
+        Some(serde_yaml::Value::Number(number)) => number
+            .as_u64()
+            .map(|n| Some(U64::from(n)))
+            .ok_or_else(|| D::Error::custom(format!("invalid u64: {number}"))),
+        Some(serde_yaml::Value::String(string)) => {
+            U64::from_str(&string).map(Some).map_err(D::Error::custom)
+        }
+        Some(other) => Err(D::Error::custom(format!("expected a number, got: {other:?}"))),
+    }
+}
+
+/// Supports `hypersync: true` shorthand alongside the full config map form.
+fn deserialize_option_hypersync<'de, D>(
+    deserializer: D,
+) -> Result<Option<HypersyncConfig>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error;
+
+    let value = serde_yaml::Value::deserialize(deserializer)?;
+    match value {
+        serde_yaml::Value::Bool(true) => Ok(Some(HypersyncConfig::default())),
+        serde_yaml::Value::Bool(false) | serde_yaml::Value::Null => Ok(None),
+        other => HypersyncConfig::deserialize(other).map(Some).map_err(D::Error::custom),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ReorgHandlingConfig {
     #[serde(default = "default_reorg_enabled")]
@@ -69,6 +139,18 @@ pub struct Network {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disable_logs_bloom_checks: Option<bool>,
+
+    /// Use an Envio HyperSync endpoint for historical log fetching on this network.
+    /// The `rpc` endpoint is still required for everything HyperSync cannot serve.
+    ///
+    /// Accepts `hypersync: true` as shorthand for the default endpoint
+    /// (`https://{chain_id}.hypersync.xyz`) or a config map for customisation.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_option_hypersync"
+    )]
+    pub hypersync: Option<HypersyncConfig>,
 
     /// Custom Multicall3 contract address for this network.
     /// If not specified, uses the standard address 0xcA11bde05977b3631167028862bE2a173976CA11.
@@ -319,6 +401,74 @@ mod tests {
         let yaml = serde_yaml::to_string(&network).unwrap();
 
         assert!(!yaml.contains("reth:"));
+    }
+
+    #[test]
+    fn test_network_hypersync_absent_by_default() {
+        let network: Network = serde_yaml::from_str(
+            r#"
+            name: ethereum
+            chain_id: 1
+            rpc: https://mainnet.gateway.tenderly.co
+            "#,
+        )
+        .unwrap();
+
+        assert!(network.hypersync.is_none());
+
+        let yaml = serde_yaml::to_string(&network).unwrap();
+        assert!(!yaml.contains("hypersync"));
+    }
+
+    #[test]
+    fn test_network_hypersync_bool_shorthand() {
+        let network: Network = serde_yaml::from_str(
+            r#"
+            name: ethereum
+            chain_id: 1
+            rpc: https://mainnet.gateway.tenderly.co
+            hypersync: true
+            "#,
+        )
+        .unwrap();
+
+        let hypersync = network.hypersync.expect("hypersync should be enabled");
+        assert!(hypersync.url.is_none());
+        assert!(hypersync.api_token.is_none());
+        assert!(hypersync.max_block_range.is_none());
+
+        let network: Network = serde_yaml::from_str(
+            r#"
+            name: ethereum
+            chain_id: 1
+            rpc: https://mainnet.gateway.tenderly.co
+            hypersync: false
+            "#,
+        )
+        .unwrap();
+
+        assert!(network.hypersync.is_none());
+    }
+
+    #[test]
+    fn test_network_hypersync_full_config() {
+        let network: Network = serde_yaml::from_str(
+            r#"
+            name: ethereum
+            chain_id: 1
+            rpc: https://mainnet.gateway.tenderly.co
+            hypersync:
+                url: https://eth.hypersync.xyz
+                api_token: test-token
+                max_block_range: 100000
+            "#,
+        )
+        .unwrap();
+
+        let hypersync = network.hypersync.expect("hypersync should be enabled");
+        assert_eq!(hypersync.url.as_deref(), Some("https://eth.hypersync.xyz"));
+        assert_eq!(hypersync.api_token.as_deref(), Some("test-token"));
+        assert_eq!(hypersync.max_block_range, Some(U64::from(100000)));
     }
 
     #[test]
