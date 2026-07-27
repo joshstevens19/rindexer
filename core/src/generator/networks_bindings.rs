@@ -151,6 +151,9 @@ fn generate_network_hypersync_provider_code(network: &Network) -> Code {
                             api_token: {api_token},
                             max_block_range: {hypersync_max_block_range},
                             stream_concurrency: {stream_concurrency},
+                            batch_size: {batch_size},
+                            max_batch_size: {max_batch_size},
+                            response_bytes_target: {response_bytes_target},
                         }};
                         let rpc_provider = {fn_name}_cache().await;
                         create_hypersync_provider(&hypersync_config, "{network_name}", {chain_id}, {network_max_block_range}, rpc_provider)
@@ -175,6 +178,22 @@ fn generate_network_hypersync_provider_code(network: &Network) -> Code {
         },
         stream_concurrency = if let Some(stream_concurrency) = hypersync.stream_concurrency {
             format!("Some({stream_concurrency})")
+        } else {
+            "None".to_string()
+        },
+        batch_size = if let Some(batch_size) = hypersync.batch_size {
+            format!("Some({batch_size})")
+        } else {
+            "None".to_string()
+        },
+        max_batch_size = if let Some(max_batch_size) = hypersync.max_batch_size {
+            format!("Some({max_batch_size})")
+        } else {
+            "None".to_string()
+        },
+        response_bytes_target = if let Some(response_bytes_target) = hypersync.response_bytes_target
+        {
+            format!("Some({response_bytes_target})")
         } else {
             "None".to_string()
         },
@@ -357,10 +376,8 @@ mod tests {
 
         let mut hypersync_network = test_network("ethereum", 1);
         hypersync_network.hypersync = Some(HypersyncConfig {
-            url: None,
             api_token: Some("HYPERSYNC_API_TOKEN".to_string()),
-            max_block_range: None,
-            stream_concurrency: None,
+            ..Default::default()
         });
         let networks = vec![hypersync_network, test_network("base", 8453)];
         let code = generate_networks_code(&networks).to_string();

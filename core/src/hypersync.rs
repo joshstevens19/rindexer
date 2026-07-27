@@ -54,7 +54,7 @@ pub struct HypersyncProvider {
     /// Fallback provider used for everything HyperSync cannot serve.
     rpc: Arc<JsonRpcCachedProvider>,
     max_block_range: Option<U64>,
-    stream_concurrency: Option<usize>,
+    stream_config: StreamConfig,
     height_cache: Mutex<Option<(Instant, u64)>>,
 }
 
@@ -124,11 +124,25 @@ pub async fn create_hypersync_provider(
         network_name, url, max_block_range
     );
 
+    // Sizing knobs for the client's internal request stream. The concurrency and
+    // response-target defaults matter most on dense ranges; `max_batch_size` matters on
+    // sparse ranges, where unbounded density projection otherwise collapses the stream
+    // to a single serial request covering the whole remaining range.
+    let stream_config = StreamConfig {
+        concurrency: config.stream_concurrency.unwrap_or(DEFAULT_STREAM_CONCURRENCY),
+        batch_size: config.batch_size.unwrap_or(StreamConfig::default_batch_size()),
+        max_batch_size: config.max_batch_size,
+        response_bytes_target: config
+            .response_bytes_target
+            .unwrap_or(StreamConfig::default_response_bytes_target()),
+        ..Default::default()
+    };
+
     Ok(Arc::new(HypersyncProvider {
         client,
         rpc,
         max_block_range,
-        stream_concurrency: config.stream_concurrency,
+        stream_config,
         height_cache: Mutex::new(None),
     }))
 }
@@ -217,16 +231,12 @@ impl HypersyncProvider {
             ])
             .select_block_fields([BlockField::Number, BlockField::Timestamp]);
 
-        let stream_config = StreamConfig {
-            concurrency: self.stream_concurrency.unwrap_or(DEFAULT_STREAM_CONCURRENCY),
-            ..Default::default()
-        };
-
         // `collect_arrow` paginates internally until the full requested range is covered,
         // so a successful return always means complete coverage of [from_block, to_block].
         // The arrow response is materialized straight into alloy types via the arrow row
         // readers, skipping the intermediate simple-types allocation pass.
-        let response = self.client.collect_arrow(query, stream_config).await.map_err(map_err)?;
+        let response =
+            self.client.collect_arrow(query, self.stream_config.clone()).await.map_err(map_err)?;
 
         let map_read =
             |e: ReadError| ProviderError::CustomError(format!("hypersync: arrow read: {e}"));

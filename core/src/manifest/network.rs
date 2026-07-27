@@ -56,6 +56,25 @@ pub struct HypersyncConfig {
     /// load on the HyperSync endpoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_concurrency: Option<usize>,
+
+    /// Initial block span per internal HyperSync request, used before the client
+    /// has measured data density. Defaults to the client default (1,000 blocks).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_size: Option<u64>,
+
+    /// Cap on the block span of a single internal HyperSync request. Unset by
+    /// default. On wide sparse ranges *with data*, a cap (e.g. 100000) keeps
+    /// multiple requests in flight instead of one serialised scan (~25-30%
+    /// faster measured); on ranges dominated by empty blocks it hurts, because
+    /// unbounded requests skip empty space in a single round trip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_batch_size: Option<u64>,
+
+    /// Response size (bytes) each internal HyperSync request is sized towards.
+    /// Defaults to the client default (400 KB). Lower values produce more,
+    /// smaller, more parallel requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_bytes_target: Option<u64>,
 }
 
 /// Accepts both plain numbers and strings. The `hypersync` field deserializes through a

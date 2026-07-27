@@ -143,6 +143,9 @@ networks:
     api_token: ${HYPERSYNC_API_TOKEN} // [!code focus] # optional, defaults to HYPERSYNC_API_TOKEN / ENVIO_API_TOKEN env vars
     max_block_range: 50000 // [!code focus] # optional, block range per HyperSync request during backfill
     stream_concurrency: 20 // [!code focus] # optional, concurrent internal requests per logs request; lower to reduce burst load
+    batch_size: 1000 // [!code focus] # optional, initial block span per internal request before density is measured
+    max_batch_size: 100000 // [!code focus] # optional, cap per internal request; helps wide sparse ranges with data, hurts empty-heavy scans
+    response_bytes_target: 400000 // [!code focus] # optional, bytes each internal response is sized towards
 ```
 
 Timestamp indexing (`timestamps: true`) gets an extra speed boost with HyperSync enabled: block timestamps are joined into
