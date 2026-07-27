@@ -43,6 +43,12 @@ const DEFAULT_HYPERSYNC_MAX_BLOCK_RANGE: u64 = 50_000;
 /// already past the requested block never needs refreshing.
 const HEIGHT_CACHE_TTL: Duration = Duration::from_secs(2);
 
+/// Default internal request concurrency per logs request, overridable via
+/// `hypersync.stream_concurrency`. Dense block ranges decompose into hundreds of
+/// adaptively-sized requests, and measured sweeps put 20 ~10-20% faster than the
+/// client default of 10, with diminishing returns beyond.
+const DEFAULT_STREAM_CONCURRENCY: usize = 20;
+
 pub struct HypersyncProvider {
     client: Client,
     /// Fallback provider used for everything HyperSync cannot serve.
@@ -211,10 +217,10 @@ impl HypersyncProvider {
             ])
             .select_block_fields([BlockField::Number, BlockField::Timestamp]);
 
-        let mut stream_config = StreamConfig::default();
-        if let Some(concurrency) = self.stream_concurrency {
-            stream_config.concurrency = concurrency;
-        }
+        let stream_config = StreamConfig {
+            concurrency: self.stream_concurrency.unwrap_or(DEFAULT_STREAM_CONCURRENCY),
+            ..Default::default()
+        };
 
         // `collect_arrow` paginates internally until the full requested range is covered,
         // so a successful return always means complete coverage of [from_block, to_block].

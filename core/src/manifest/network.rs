@@ -52,8 +52,8 @@ pub struct HypersyncConfig {
     pub max_block_range: Option<U64>,
 
     /// Number of concurrent requests the HyperSync client makes internally while
-    /// serving a single logs request. Defaults to the client default (10).
-    /// Lower this to reduce burst load on the HyperSync endpoint.
+    /// serving a single logs request. Defaults to 20. Lower this to reduce burst
+    /// load on the HyperSync endpoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_concurrency: Option<usize>,
 }
