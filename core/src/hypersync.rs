@@ -18,6 +18,7 @@ use alloy::rpc::types::trace::parity::LocalizedTransactionTrace;
 use alloy::rpc::types::Log;
 use alloy_chains::Chain;
 use async_trait::async_trait;
+use hypersync_client::arrow_reader::{BlockReader, LogReader, ReadError};
 use hypersync_client::net_types::block::BlockField;
 use hypersync_client::net_types::log::{LogField, LogFilter};
 use hypersync_client::net_types::Query;
@@ -47,6 +48,7 @@ pub struct HypersyncProvider {
     /// Fallback provider used for everything HyperSync cannot serve.
     rpc: Arc<JsonRpcCachedProvider>,
     max_block_range: Option<U64>,
+    stream_concurrency: Option<usize>,
     height_cache: Mutex<Option<(Instant, u64)>>,
 }
 
@@ -116,7 +118,13 @@ pub async fn create_hypersync_provider(
         network_name, url, max_block_range
     );
 
-    Ok(Arc::new(HypersyncProvider { client, rpc, max_block_range, height_cache: Mutex::new(None) }))
+    Ok(Arc::new(HypersyncProvider {
+        client,
+        rpc,
+        max_block_range,
+        stream_concurrency: config.stream_concurrency,
+        height_cache: Mutex::new(None),
+    }))
 }
 
 impl HypersyncProvider {
@@ -203,58 +211,65 @@ impl HypersyncProvider {
             ])
             .select_block_fields([BlockField::Number, BlockField::Timestamp]);
 
-        // `collect` paginates internally until the full requested range is covered, so a
-        // successful return always means complete coverage of [from_block, to_block].
-        let response =
-            self.client.collect(query, StreamConfig::default()).await.map_err(map_err)?;
+        let mut stream_config = StreamConfig::default();
+        if let Some(concurrency) = self.stream_concurrency {
+            stream_config.concurrency = concurrency;
+        }
 
-        let block_timestamps: HashMap<u64, u64> = response
-            .data
-            .blocks
-            .iter()
-            .flatten()
-            .filter_map(|block| {
-                let number = block.number?;
-                let timestamp = block.timestamp.as_ref()?;
-                Some((number, U256::from_be_slice(timestamp.as_ref()).to::<u64>()))
-            })
-            .collect();
+        // `collect_arrow` paginates internally until the full requested range is covered,
+        // so a successful return always means complete coverage of [from_block, to_block].
+        // The arrow response is materialized straight into alloy types via the arrow row
+        // readers, skipping the intermediate simple-types allocation pass.
+        let response = self.client.collect_arrow(query, stream_config).await.map_err(map_err)?;
 
-        let mut logs = response
-            .data
-            .logs
-            .into_iter()
-            .flatten()
-            .map(|log| {
-                let address = log
-                    .address
-                    .as_ref()
-                    .map(|a| Address::from(FixedBytes::<20>::from(a)))
-                    .unwrap_or_default();
-                let topics: Vec<B256> = log.topics.iter().flatten().map(B256::from).collect();
-                let data = log
-                    .data
-                    .as_ref()
-                    .map(|d| Bytes::copy_from_slice(d.as_ref()))
-                    .unwrap_or_default();
-                let block_number = log.block_number.map(u64::from);
+        let map_read =
+            |e: ReadError| ProviderError::CustomError(format!("hypersync: arrow read: {e}"));
 
-                Log {
-                    inner: alloy::primitives::Log {
-                        address,
-                        data: alloy::primitives::LogData::new_unchecked(topics, data),
-                    },
-                    block_hash: log.block_hash.as_ref().map(B256::from),
-                    block_number,
-                    block_timestamp: block_number
-                        .and_then(|number| block_timestamps.get(&number).copied()),
-                    transaction_hash: log.transaction_hash.as_ref().map(B256::from),
-                    transaction_index: log.transaction_index.map(u64::from),
-                    log_index: log.log_index.map(u64::from),
-                    removed: log.removed.unwrap_or(false),
+        let mut block_timestamps: HashMap<u64, u64> = HashMap::new();
+        for batch in &response.data.blocks {
+            for block in BlockReader::iter(batch) {
+                let number = block.number().map_err(map_read)?;
+                let timestamp = block.timestamp().map_err(map_read)?;
+                block_timestamps
+                    .insert(number, U256::from_be_slice(timestamp.as_ref()).to::<u64>());
+            }
+        }
+
+        let total_logs = response.data.logs.iter().map(|batch| batch.num_rows()).sum();
+        let mut logs: Vec<Log> = Vec::with_capacity(total_logs);
+
+        for batch in &response.data.logs {
+            for log in LogReader::iter(batch) {
+                let address = log.address().map_err(map_read)?;
+                let data = log.data().map_err(map_read)?;
+                let block_number = u64::from(log.block_number().map_err(map_read)?);
+
+                let mut topics: Vec<B256> = Vec::with_capacity(4);
+                for topic in [log.topic0(), log.topic1(), log.topic2(), log.topic3()] {
+                    match topic.map_err(map_read)? {
+                        Some(topic) => topics.push(B256::from(&topic)),
+                        None => break,
+                    }
                 }
-            })
-            .collect::<Vec<_>>();
+
+                logs.push(Log {
+                    inner: alloy::primitives::Log {
+                        address: Address::from(FixedBytes::<20>::from(&address)),
+                        data: alloy::primitives::LogData::new_unchecked(
+                            topics,
+                            Bytes::copy_from_slice(data.as_ref()),
+                        ),
+                    },
+                    block_hash: Some(B256::from(&log.block_hash().map_err(map_read)?)),
+                    block_number: Some(block_number),
+                    block_timestamp: block_timestamps.get(&block_number).copied(),
+                    transaction_hash: Some(B256::from(&log.transaction_hash().map_err(map_read)?)),
+                    transaction_index: Some(u64::from(log.transaction_index().map_err(map_read)?)),
+                    log_index: Some(u64::from(log.log_index().map_err(map_read)?)),
+                    removed: log.removed().map_err(map_read)?.unwrap_or(false),
+                });
+            }
+        }
 
         // rindexer tracks sync progress off the last log's block number and handlers
         // assume chain order, so guarantee (block_number, log_index) ordering.

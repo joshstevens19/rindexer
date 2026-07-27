@@ -50,6 +50,12 @@ pub struct HypersyncConfig {
         serialize_with = "serialize_option_u64_as_string"
     )]
     pub max_block_range: Option<U64>,
+
+    /// Number of concurrent requests the HyperSync client makes internally while
+    /// serving a single logs request. Defaults to the client default (10).
+    /// Lower this to reduce burst load on the HyperSync endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_concurrency: Option<usize>,
 }
 
 /// Accepts both plain numbers and strings. The `hypersync` field deserializes through a

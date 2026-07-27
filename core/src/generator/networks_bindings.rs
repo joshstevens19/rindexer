@@ -150,6 +150,7 @@ fn generate_network_hypersync_provider_code(network: &Network) -> Code {
                             url: {url},
                             api_token: {api_token},
                             max_block_range: {hypersync_max_block_range},
+                            stream_concurrency: {stream_concurrency},
                         }};
                         let rpc_provider = {fn_name}_cache().await;
                         create_hypersync_provider(&hypersync_config, "{network_name}", {chain_id}, {network_max_block_range}, rpc_provider)
@@ -169,6 +170,11 @@ fn generate_network_hypersync_provider_code(network: &Network) -> Code {
         api_token = env_or_literal_expr(&hypersync.api_token),
         hypersync_max_block_range = if let Some(max_block_range) = hypersync.max_block_range {
             format!("Some(U64::from({max_block_range}))")
+        } else {
+            "None".to_string()
+        },
+        stream_concurrency = if let Some(stream_concurrency) = hypersync.stream_concurrency {
+            format!("Some({stream_concurrency})")
         } else {
             "None".to_string()
         },
@@ -354,6 +360,7 @@ mod tests {
             url: None,
             api_token: Some("HYPERSYNC_API_TOKEN".to_string()),
             max_block_range: None,
+            stream_concurrency: None,
         });
         let networks = vec![hypersync_network, test_network("base", 8453)];
         let code = generate_networks_code(&networks).to_string();
