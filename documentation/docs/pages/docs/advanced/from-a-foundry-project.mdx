@@ -1,0 +1,192 @@
+# From A Foundry Project
+
+:::info
+Make sure you have both the rindexer CLI and Foundry installed before importing a Foundry project.
+:::
+
+The Foundry workflow creates a no-code rindexer project from contracts that have already been deployed with Foundry scripts. It reads Foundry settings with `forge config --json`, builds the source with `forge build`, reads deployment receipts from `broadcast/`, copies ABI arrays into the generated `abis/` directory, and writes a sync file named `rindexer-foundry.json`.
+
+:::warning
+rindexer does not add public RPC URLs for imported Foundry deployments. The generated project maps each non-local network to an empty `.env` value such as `CHAIN_84532_RPC_URL=`, and you must fill those values with RPC endpoints that can read the deployed chain history before running `rindexer start`.
+:::
+
+## 1. Import a Foundry project
+
+Choose the source form that matches where the Foundry project lives:
+
+:::code-group
+
+```bash [from local source]
+rindexer foundry new ./v4-periphery --output ./uniswap-v4-indexer --name UniswapV4PeripheryImport
+```
+
+```bash [from github link]
+rindexer foundry new https://github.com/Uniswap/v4-periphery --output ./uniswap-v4-indexer --name UniswapV4PeripheryImport
+```
+
+```bash [from github ssh]
+rindexer foundry new git@github.com:Uniswap/v4-periphery.git --output ./uniswap-v4-indexer --name UniswapV4PeripheryImport
+```
+
+:::
+
+When you are already inside a Foundry project, `SOURCE` is optional and defaults to the current directory, so `rindexer foundry new` works too. GitHub tree URLs and the generic suffix form `<git-url>#<ref>:<subdir>` are also supported for nested Foundry projects.
+
+For Git sources, rindexer clones the repository into a temporary directory, checks out the requested ref, and initializes Git submodules when the repository has a `.gitmodules` file. Private repositories and private submodules use your existing Git credentials. If the source points at a nested directory such as `broadcast/`, rindexer walks up to the nearest `foundry.toml` and uses that as the Foundry project root.
+
+## 2. Deployment requirements
+
+Foundry import is safe generation only. rindexer runs `forge build`, but it does not deploy contracts and it does not manage private keys.
+
+The Foundry project must build from the source rindexer sees. If a Git import fails because `forge build` cannot resolve imports, clone the project locally, install dependencies with the repository's setup command, `forge install`, or `forge soldeer install`, then import from that local path. For GitHub imports to work from a fresh clone, dependency directories must be committed or declared as Git submodules.
+
+The Foundry project must already contain broadcast deployment receipts. If the import cannot find deployment addresses or receipt block numbers, run your Foundry script locally with `--broadcast` and retry:
+
+```bash
+forge script script/Deploy.s.sol --broadcast --rpc-url $RPC_URL
+```
+
+rindexer reads `broadcast/*/<chain_id>/run-latest.json` first and falls back to the newest `run-*.json` file for each script and chain. Only `CREATE` and `CREATE2` deployments with events in their ABI are imported. Foundry profile artifacts such as `Contract.default.json` are matched to their deployed contract name, and test deployments from `test/` source paths or contracts ending in `Test` are skipped to avoid importing fixtures. Deployments are skipped with a reason when their broadcast entry is missing a contract address, receipt block number, matching artifact, or event-bearing ABI. If every deployment is skipped, the command fails and prints the reason summary plus the next action to take.
+
+## 3. Generated project
+
+The command generates:
+
+- `rindexer.yaml`
+- `rindexer-foundry.json`
+- `abis/<Contract>.abi.json`
+- `.env`
+- `.gitignore`
+- `docker-compose.yml`
+- `README.md`
+
+For example, importing Uniswap v4 periphery:
+
+```bash
+rindexer foundry new https://github.com/Uniswap/v4-periphery --output ./uniswap-v4-indexer --name UniswapV4PeripheryImport
+```
+
+generates an `rindexer.yaml` shaped like this:
+
+```yaml
+name: UniswapV4PeripheryImport
+description: Generated from a Foundry project.
+repository: https://github.com/Uniswap/v4-periphery.git
+project_type: no-code
+networks:
+- name: unichain_sepolia
+  chain_id: 1301
+  rpc: ${CHAIN_1301_RPC_URL}
+- name: base_sepolia
+  chain_id: 84532
+  rpc: ${CHAIN_84532_RPC_URL}
+- name: arbitrum_sepolia
+  chain_id: 421614
+  rpc: ${CHAIN_421614_RPC_URL}
+- name: sepolia
+  chain_id: 11155111
+  rpc: ${CHAIN_11155111_RPC_URL}
+storage:
+  postgres:
+    enabled: true
+native_transfers:
+  enabled: false
+contracts:
+- name: PoolManager
+  details:
+  - network: unichain_sepolia
+    address: 0x00b036b58a818b1bc34d502d3fe730db729e62ac
+    start_block: '7092034'
+  - network: base_sepolia
+    address: 0x05e73354cfdd6745c338b50bcfdfa3aa6fa03408
+    start_block: '19088197'
+  - network: arbitrum_sepolia
+    address: 0xfb3e0c6f74eb1a21cc1da29aec80d2dfe6c9a317
+    start_block: '105909222'
+  - network: sepolia
+    address: 0xe03a1074c86cfedd5c142c4f04f1a1536e203543
+    start_block: '7258946'
+  abi: ./abis/PoolManager.abi.json
+  include_events:
+  - name: Initialize
+  - name: ModifyLiquidity
+  - name: Swap
+  - name: Transfer
+- name: PositionManager
+  details:
+  - network: unichain_sepolia
+    address: 0xf969aee60879c54baaed9f3ed26147db216fd664
+    start_block: '7094939'
+  - network: base_sepolia
+    address: 0x4b2c77d209d3405f41a037ec6c77f7f5b8e2ca80
+    start_block: '20214494'
+  - network: arbitrum_sepolia
+    address: 0xac631556d3d4019c95769033b5e719dd77124bac
+    start_block: '105920123'
+  - network: sepolia
+    address: 0x429ba70129df741b2ca2a85bc3a2a3328e5c09b4
+    start_block: '7259148'
+  abi: ./abis/PositionManager.abi.json
+  include_events:
+  - name: Approval
+  - name: ModifyPosition
+  - name: Transfer
+global:
+  health_port: 8080
+```
+
+Each chain ID found in the Foundry broadcast files becomes a rindexer network. Known public chains get readable network names such as `ethereum`, `base`, `optimism`, `arbitrum`, and `polygon`; chain `31337` is named `anvil`; unknown chains fall back to `chain_<id>`.
+
+The generated `rindexer.yaml` uses environment-variable placeholders for RPC URLs. Chain `31337` uses `${ANVIL_RPC_URL}` and `.env` defaults it to `http://127.0.0.1:8545`. Other chains use `${CHAIN_<id>_RPC_URL}` placeholders and are intentionally left empty. rindexer will not select, validate, or apply public RPC URLs for you; fill each variable in `.env` with an endpoint that can serve historic `eth_getLogs` requests for that chain.
+
+Example generated values:
+
+```bash
+ANVIL_RPC_URL=http://127.0.0.1:8545
+CHAIN_1_RPC_URL=
+CHAIN_8453_RPC_URL=
+```
+
+Use an RPC provider with archive access for deployed contracts whose start blocks are far behind the chain tip.
+
+## 4. Run the generated project
+
+From the generated rindexer project:
+
+```bash
+rindexer start all
+```
+
+:::info
+rindexer starts the generated Postgres `docker-compose.yml` for you automatically when the `DATABASE_URL` cannot connect, so you only need Docker running. You can also start it manually with `docker compose up -d`.
+:::
+
+GraphQL is available at `http://localhost:3001/graphql` when Postgres storage is enabled.
+
+## 5. Sync later
+
+After adding new broadcasts or changing contract ABIs in the Foundry source, sync the generated rindexer project:
+
+```bash
+rindexer foundry sync
+```
+
+If you run the command outside the generated project, pass the project path:
+
+```bash
+rindexer foundry sync --path ./my-indexer
+```
+
+You can preview changes without writing files:
+
+```bash
+rindexer foundry sync --path ./my-indexer --dry-run
+```
+
+To temporarily sync from a different source, pass it as the optional argument:
+
+```bash
+rindexer foundry sync https://github.com/org/repo/tree/main/packages/contracts --path ./my-indexer
+```
+
+Sync overwrites managed ABI files and updates the managed contracts in `rindexer.yaml`. User-owned storage, GraphQL, streams, chat, tables, global settings, and non-Foundry contracts are preserved. Existing `.env` values are preserved; sync only appends missing RPC keys for newly discovered networks. Stale managed deployments are reported but not deleted.

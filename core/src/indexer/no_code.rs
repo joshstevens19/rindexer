@@ -47,7 +47,7 @@ use crate::{
         core::Manifest,
         yaml::{read_manifest, ReadManifestError},
     },
-    provider::{CreateNetworkProvider, RetryClientError},
+    provider::{validate_manifest_network_rpc_urls, CreateNetworkProvider, RetryClientError},
     setup_info_logger,
     streams::StreamsClients,
     types::core::LogParam,
@@ -172,6 +172,10 @@ pub async fn setup_no_code(
             setup_info_logger();
 
             info!("Starting rindexer no code");
+
+            if details.indexing_details.enabled {
+                validate_manifest_network_rpc_urls(&manifest)?;
+            }
 
             // Configure view call concurrency limit if specified
             if let Some(limit) = manifest.config.max_concurrent_view_calls {

@@ -5,12 +5,14 @@
 
 ### Bug fixes
 -------------------------------------------------
+- fix: empty network RPC values now fail startup with a clear network/env-var message instead of the low-level "relative URL without a base" provider error, and generated YAML omits unset `reth` config, unset `timestamps`, and empty `config` objects.
 - fix: no-code stream-only projects now create `.rindexer/<stream>/.../last-synced-blocks` checkpoint directories on write, preventing RabbitMQ/SNS/webhook/etc. runs without storage from panicking with `Failed to canonicalize path` ([#449](https://github.com/joshstevens19/rindexer/issues/449)).
 - fix: live indexing now respects the network `max_block_range` setting after historical sync, preventing oversized `eth_getLogs` requests when catching up to the chain tip.
 - fix: graceful shutdown no longer loops forever ("N active indexing tasks pending" with a huge N) when live indexing skipped empty blocks via the logs-bloom check — the skip path underflowed the active task counter ([#432](https://github.com/joshstevens19/rindexer/pull/432))
 
 ### Features
 -------------------------------------------------
+- feat: **Foundry project import and sync** — new `rindexer foundry new [SOURCE]` and `rindexer foundry sync` commands generate a runnable no-code project from local or Git Foundry deployments, initialize Git submodules, resolve nested sources such as GitHub `tree/main/broadcast` links to the nearest `foundry.toml`, match Foundry profile artifacts such as `Contract.default.json`, skip test deployments with actionable reasons, derive networks from Foundry broadcast chain IDs, leave non-local RPC URLs empty so users provide reliable archive endpoints, default chain `31337` to `ANVIL_RPC_URL=http://127.0.0.1:8545`, preserve existing `.env` values during sync while appending missing RPC keys, copy event ABI files into `abis/`, add `cli/Makefile` helpers for a runnable Uniswap v4 periphery import example, and track sync ownership in `rindexer-foundry.json`.
 
 ## Releases
 -------------------------------------------------

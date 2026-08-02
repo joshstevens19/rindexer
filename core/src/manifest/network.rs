@@ -82,6 +82,7 @@ pub struct Network {
     #[cfg(feature = "reth")]
     pub reth: Option<RethConfig>,
 
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg(not(feature = "reth"))]
     pub reth: Option<()>,
 
@@ -302,6 +303,22 @@ mod tests {
         assert_eq!(network.max_block_range, None);
         assert_eq!(network.compute_units_per_second, None);
         assert_eq!(network.block_poll_frequency, None);
+    }
+
+    #[test]
+    fn test_network_serialization_omits_empty_reth_config() {
+        let network: Network = serde_yaml::from_str(
+            r#"
+            name: ethereum
+            chain_id: 1
+            rpc: https://mainnet.gateway.tenderly.co
+            "#,
+        )
+        .unwrap();
+
+        let yaml = serde_yaml::to_string(&network).unwrap();
+
+        assert!(!yaml.contains("reth:"));
     }
 
     #[test]

@@ -1109,6 +1109,9 @@ pub enum RetryClientError {
     #[error("Provider can't be created for {0}: {1}")]
     ProviderCantBeCreated(String, String),
 
+    #[error("RPC URL for {label} is empty. Set the network `rpc` value or the referenced environment variable in `.env` before starting rindexer. Foundry imports leave non-local `CHAIN_<id>_RPC_URL` values empty by default.")]
+    RpcUrlEmpty { label: String },
+
     #[error("Invalid client chain id for {0}. Expected {1}, received {2}")]
     InvalidClientChainId(String, u64, u64),
 
@@ -1122,6 +1125,28 @@ pub enum RetryClientError {
     RethNodeStartError(String, String),
 }
 
+fn ensure_rpc_url_not_empty(
+    label: impl Into<String>,
+    rpc_url: &str,
+) -> Result<(), RetryClientError> {
+    if rpc_url.trim().is_empty() {
+        return Err(RetryClientError::RpcUrlEmpty { label: label.into() });
+    }
+
+    Ok(())
+}
+
+pub fn validate_manifest_network_rpc_urls(manifest: &Manifest) -> Result<(), RetryClientError> {
+    for network in &manifest.networks {
+        ensure_rpc_url_not_empty(
+            format!("`{}` (chain_id {})", network.name, network.chain_id),
+            &network.rpc,
+        )?;
+    }
+
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn create_client(
     rpc_url: &str,
@@ -1133,6 +1158,8 @@ pub async fn create_client(
     address_filtering: Option<AddressFiltering>,
     chain_state_notification: Option<Sender<ChainStateNotification>>,
 ) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
+    ensure_rpc_url_not_empty(format!("chain_id {chain_id}"), rpc_url)?;
+
     let chain = Chain::from(chain_id);
 
     let (client, provider) = if rpc_url.ends_with(".ipc") {
@@ -1256,6 +1283,11 @@ impl CreateNetworkProvider {
                 network.rpc.clone()
             };
 
+            ensure_rpc_url_not_empty(
+                format!("`{}` (chain_id {})", network.name, network.chain_id),
+                &provider_url,
+            )?;
+
             // create the provider
             let provider = create_client(
                 &provider_url,
@@ -1340,6 +1372,66 @@ mod tests {
         let mock: Box<dyn ChainProvider> = Box::new(MockChainProvider::new(1).with_block_number(7));
         let num = mock.get_block_number().await.unwrap();
         assert_eq!(num, U64::from(7));
+    }
+
+    #[tokio::test]
+    async fn create_client_rejects_empty_rpc_url_before_url_parsing() {
+        let error = create_client("", 1301, None, None, None, HeaderMap::new(), None, None)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, RetryClientError::RpcUrlEmpty { .. }));
+        let message = error.to_string();
+        assert!(message.contains("chain_id 1301"));
+        assert!(message.contains(".env"));
+        assert!(!message.contains("relative URL without a base"));
+    }
+
+    #[tokio::test]
+    async fn create_network_provider_rejects_empty_rpc_url_with_network_context() {
+        let manifest: Manifest = serde_yaml::from_str(
+            r#"
+            name: foundry
+            project_type: no-code
+            networks:
+              - name: unichain_sepolia
+                chain_id: 1301
+                rpc: ""
+            contracts: []
+            "#,
+        )
+        .unwrap();
+
+        let error = CreateNetworkProvider::create(&manifest).await.unwrap_err();
+
+        assert!(matches!(error, RetryClientError::RpcUrlEmpty { .. }));
+        let message = error.to_string();
+        assert!(message.contains("`unichain_sepolia` (chain_id 1301)"));
+        assert!(message.contains(".env"));
+        assert!(!message.contains("relative URL without a base"));
+    }
+
+    #[test]
+    fn validate_manifest_network_rpc_urls_rejects_empty_rpc_url_with_network_context() {
+        let manifest: Manifest = serde_yaml::from_str(
+            r#"
+            name: foundry
+            project_type: no-code
+            networks:
+              - name: unichain_sepolia
+                chain_id: 1301
+                rpc: "   "
+            contracts: []
+            "#,
+        )
+        .unwrap();
+
+        let error = validate_manifest_network_rpc_urls(&manifest).unwrap_err();
+
+        assert!(matches!(error, RetryClientError::RpcUrlEmpty { .. }));
+        let message = error.to_string();
+        assert!(message.contains("`unichain_sepolia` (chain_id 1301)"));
+        assert!(message.contains(".env"));
     }
 
     fn make_block(number: u64) -> AnyRpcBlock {
