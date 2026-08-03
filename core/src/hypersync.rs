@@ -25,7 +25,7 @@ use hypersync_client::net_types::Query;
 use hypersync_client::{Client, StreamConfig};
 use tokio::sync::broadcast::Sender;
 use tokio::sync::Mutex;
-use tracing::{debug, warn};
+use tracing::{info, warn};
 
 use crate::event::RindexerEventFilter;
 use crate::manifest::network::HypersyncConfig;
@@ -33,9 +33,12 @@ use crate::metrics::rpc as rpc_metrics;
 use crate::notifications::ChainStateNotification;
 use crate::provider::{ChainProvider, JsonRpcCachedProvider, ProviderError, RetryClientError};
 
-/// Default maximum block range per HyperSync logs request. HyperSync can serve far larger
-/// ranges than an RPC node, but each `get_logs` call buffers the whole range in memory so
-/// it needs a bound. Overridable via `hypersync.max_block_range` or `max_block_range`.
+/// Default maximum block range per HyperSync logs request. This bounds the *outer*
+/// request rindexer issues, and is intentionally far wider than a single HyperSync
+/// response: within it the client's stream decomposes the range into many
+/// adaptively-sized concurrent requests (see [`StreamConfig`]). A bound is still needed
+/// because each `get_logs` call buffers the whole range's logs in memory. Overridable
+/// via `hypersync.max_block_range` or `max_block_range`.
 const DEFAULT_HYPERSYNC_MAX_BLOCK_RANGE: u64 = 50_000;
 
 /// How long a cached archive height that is *behind* the requested block stays trusted
@@ -119,7 +122,7 @@ pub async fn create_hypersync_provider(
         .or(network_max_block_range)
         .or(Some(U64::from(DEFAULT_HYPERSYNC_MAX_BLOCK_RANGE)));
 
-    debug!(
+    info!(
         "HyperSync enabled for network {} via {} (max_block_range: {:?})",
         network_name, url, max_block_range
     );
@@ -298,6 +301,7 @@ impl HypersyncProvider {
 #[async_trait]
 impl ChainProvider for HypersyncProvider {
     fn chain(&self) -> Chain {
+        // Cached on the wrapped provider at construction — not a network call.
         self.rpc.chain
     }
 
@@ -308,6 +312,9 @@ impl ChainProvider for HypersyncProvider {
     fn chain_state_notification(&self) -> Option<Sender<ChainStateNotification>> {
         self.rpc.get_chain_state_notification()
     }
+
+    // Head tracking stays RPC-authoritative: the HyperSync archive height lags the chain
+    // head by a few blocks, so deriving the tip from it would stall live indexing.
 
     async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
         self.rpc.get_latest_block().await
@@ -357,6 +364,12 @@ impl ChainProvider for HypersyncProvider {
 
         result
     }
+
+    // Blocks, receipts and traces could also be served from HyperSync, but faithfully
+    // reconstructing `AnyRpcBlock`/`AnyTransactionReceipt` across chains is a large
+    // conversion surface, and these paths are mostly cold here: logs already carry
+    // joined timestamps, so the block clock's batch fetches are skipped entirely.
+    // Serving them from HyperSync (e.g. for native transfers) is follow-up work.
 
     async fn get_block_by_number_batch(
         &self,

@@ -395,6 +395,64 @@ mod tests {
         assert!(!code.contains("get_base_provider_hypersync"));
     }
 
+    /// Compares code ignoring indentation and blank lines, so the expected block below
+    /// stays readable without mirroring the emitter's exact whitespace.
+    fn normalized(code: &str) -> String {
+        code.lines().map(str::trim).filter(|line| !line.is_empty()).collect::<Vec<_>>().join("\n")
+    }
+
+    /// Human-readable snapshot of the full provider fn the codegen emits for a
+    /// fully-populated `hypersync` config, so reviewers can see the exact output
+    /// without running codegen. Update deliberately when changing the emitter.
+    #[test]
+    fn generated_hypersync_provider_full_output() {
+        use alloy::primitives::U64;
+
+        use crate::manifest::network::HypersyncConfig;
+
+        let mut network = test_network("ethereum", 1);
+        network.max_block_range = Some(U64::from(5000));
+        network.hypersync = Some(HypersyncConfig {
+            url: Some("HYPERSYNC_URL".to_string()),
+            api_token: Some("HYPERSYNC_API_TOKEN".to_string()),
+            max_block_range: Some(U64::from(2000000)),
+            stream_concurrency: Some(20),
+            batch_size: Some(1000),
+            max_batch_size: Some(100000),
+            response_bytes_target: Some(400000),
+        });
+
+        let code = generate_network_hypersync_provider_code(&network).to_string();
+
+        let expected = r#"
+            static ETHEREUM_PROVIDER_HYPERSYNC: OnceCell<Arc<dyn ChainProvider>> = OnceCell::const_new();
+
+            pub async fn get_ethereum_provider_hypersync() -> Arc<dyn ChainProvider> {
+                ETHEREUM_PROVIDER_HYPERSYNC
+                    .get_or_init(|| async {
+                        let hypersync_config = HypersyncConfig {
+                            url: Some(public_read_env_value("HYPERSYNC_URL").unwrap_or("HYPERSYNC_URL".to_string())),
+                            api_token: Some(public_read_env_value("HYPERSYNC_API_TOKEN").unwrap_or("HYPERSYNC_API_TOKEN".to_string())),
+                            max_block_range: Some(U64::from(2000000)),
+                            stream_concurrency: Some(20),
+                            batch_size: Some(1000),
+                            max_batch_size: Some(100000),
+                            response_bytes_target: Some(400000),
+                        };
+                        let rpc_provider = get_ethereum_provider_cache().await;
+                        create_hypersync_provider(&hypersync_config, "ethereum", 1, Some(U64::from(5000)), rpc_provider)
+                            .await
+                            .map(|provider| provider as Arc<dyn ChainProvider>)
+                            .expect("Error creating hypersync provider")
+                    })
+                    .await
+                    .clone()
+            }
+        "#;
+
+        assert_eq!(normalized(&code), normalized(expected));
+    }
+
     #[test]
     fn generated_individual_provider_cache_returns_concrete_type() {
         let networks = vec![test_network("ethereum", 1)];
