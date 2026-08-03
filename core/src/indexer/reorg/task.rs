@@ -5,7 +5,9 @@ use anyhow::Context;
 
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::postgres::client::PostgresClient;
-use crate::manifest::contract::SetAction;
+use crate::event::parse_filter_expression;
+use crate::helpers::camel_to_snake;
+use crate::manifest::contract::{IterateBinding, SetAction};
 use crate::metrics::indexing as metrics;
 use crate::provider::ChainProvider;
 
@@ -106,6 +108,8 @@ pub struct DerivedTableRollbackOp {
     pub columns: Vec<DerivedColumnRollback>,
     /// Optional SQL condition re-evaluated against event data.
     pub condition: Option<String>,
+    /// Array bindings expanded by the forward custom-table operation.
+    pub iterate: Vec<IterateBinding>,
 }
 
 impl DerivedTableRollbackOp {
@@ -129,7 +133,28 @@ impl DerivedTableRollbackOp {
         if let Some(cond) = &condition {
             validate_sql_condition(cond)?;
         }
-        Ok(Self { event_table, where_columns, columns, condition })
+        Ok(Self { event_table, where_columns, columns, condition, iterate: Vec::new() })
+    }
+
+    /// Attach the array bindings used by the forward custom-table operation.
+    pub fn with_iterate(mut self, bindings: Vec<IterateBinding>) -> anyhow::Result<Self> {
+        let mut normalized = Vec::with_capacity(bindings.len());
+        for binding in bindings {
+            let binding = IterateBinding {
+                array_field: event_field_to_db_column(&binding.array_field),
+                alias: event_field_to_db_column(&binding.alias),
+            };
+            super::validate_sql_identifier(&binding.array_field, "rollback iterate array column")?;
+            super::validate_sql_identifier(&binding.alias, "rollback iterate alias")?;
+            anyhow::ensure!(
+                !normalized.iter().any(|existing: &IterateBinding| existing.alias == binding.alias),
+                "duplicate rollback iterate alias '{}'",
+                binding.alias
+            );
+            normalized.push(binding);
+        }
+        self.iterate = normalized;
+        Ok(self)
     }
 }
 
@@ -250,6 +275,94 @@ fn quote_ch_ident(name: &str) -> String {
     format!("`{}`", name.replace('`', "\\`"))
 }
 
+#[derive(Clone, Copy)]
+enum SqlDialect {
+    Postgres,
+    Clickhouse,
+}
+
+impl SqlDialect {
+    fn quote(self, name: &str) -> String {
+        match self {
+            Self::Postgres => quote_pg_ident(name),
+            Self::Clickhouse => quote_ch_ident(name),
+        }
+    }
+}
+
+fn event_field_to_db_column(field: &str) -> String {
+    match field {
+        "rindexer_block_number" => "block_number".to_string(),
+        "rindexer_block_timestamp" => "block_timestamp".to_string(),
+        "rindexer_tx_hash" => "tx_hash".to_string(),
+        "rindexer_block_hash" => "block_hash".to_string(),
+        "rindexer_contract_address" => "contract_address".to_string(),
+        "rindexer_log_index" => "log_index".to_string(),
+        "rindexer_tx_index" => "tx_index".to_string(),
+        _ => field.split('.').map(camel_to_snake).collect::<Vec<_>>().join("_"),
+    }
+}
+
+struct ReversalSource<'a> {
+    dialect: SqlDialect,
+    iterate: &'a [IterateBinding],
+}
+
+impl ReversalSource<'_> {
+    fn column(&self, field: &str) -> String {
+        let column = event_field_to_db_column(field);
+        if let Some(index) = self.iterate.iter().position(|binding| binding.alias == column) {
+            match self.dialect {
+                SqlDialect::Postgres => {
+                    format!("_rindexer_iter.{}", self.dialect.quote(&column))
+                }
+                SqlDialect::Clickhouse => {
+                    format!("tupleElement(_rindexer_iter, {})", index + 1)
+                }
+            }
+        } else {
+            format!("_rindexer_event.{}", self.dialect.quote(&column))
+        }
+    }
+
+    fn from(&self, event_table: &str) -> String {
+        if self.iterate.is_empty() {
+            return format!("{} AS _rindexer_event", event_table);
+        }
+
+        let arrays = self
+            .iterate
+            .iter()
+            .map(|binding| format!("_rindexer_event.{}", self.dialect.quote(&binding.array_field)))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        match self.dialect {
+            SqlDialect::Postgres => {
+                let aliases = self
+                    .iterate
+                    .iter()
+                    .map(|binding| self.dialect.quote(&binding.alias))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "{} AS _rindexer_event CROSS JOIN LATERAL unnest({}) AS _rindexer_iter({})",
+                    event_table, arrays, aliases
+                )
+            }
+            SqlDialect::Clickhouse => format!(
+                "{} AS _rindexer_event ARRAY JOIN arrayZip({}) AS _rindexer_iter",
+                event_table, arrays
+            ),
+        }
+    }
+}
+
+fn render_reorg_condition(condition: &str, source: &ReversalSource<'_>) -> Option<String> {
+    let expression = parse_filter_expression(condition).ok()?;
+    expression.to_sql_event_condition(|field| source.column(field))
+}
+
 impl ReorgTask {
     /// Returns ` AND network = '<network>'` when not cross-chain, empty string otherwise.
     fn network_filter(&self, cross_chain: bool) -> String {
@@ -324,13 +437,6 @@ impl ReorgTask {
                 let where_ev_cols: Vec<&str> =
                     op.where_columns.iter().map(|(_, ev_col)| ev_col.as_str()).collect();
 
-                let network_filter = self.network_filter(dt.cross_chain);
-
-                let condition_filter = match &op.condition {
-                    Some(cond) => format!(" AND ({})", cond),
-                    None => String::new(),
-                };
-
                 // Include network + fork_point in temp table name to avoid collisions
                 // across concurrent reorg tasks on different networks.
                 // Replace hyphens with underscores so the name is a valid SQL identifier.
@@ -345,26 +451,64 @@ impl ReorgTask {
                 // columns are user-controlled identifiers that may collide with SQL
                 // reserved words (e.g. `to`, `from`), so each backend quotes them with
                 // its own convention (Postgres double quotes, ClickHouse backticks).
-                let build_select = |quote: &dyn Fn(&str) -> String| {
-                    let group =
-                        where_ev_cols.iter().map(|c| quote(c)).collect::<Vec<_>>().join(", ");
+                let build_select = |dialect: SqlDialect| {
+                    let source = ReversalSource { dialect, iterate: &op.iterate };
+                    let group_expressions = where_ev_cols
+                        .iter()
+                        .map(|column| source.column(column))
+                        .collect::<Vec<_>>();
+                    let group = group_expressions.join(", ");
+                    let mut group_select = where_ev_cols
+                        .iter()
+                        .zip(&group_expressions)
+                        .map(|(column, expression)| {
+                            format!("{} AS {}", expression, dialect.quote(column))
+                        })
+                        .collect::<Vec<_>>();
+                    if matches!(dialect, SqlDialect::Clickhouse) {
+                        // Older ClickHouse StorageJoin implementations reject
+                        // composite and UInt256 keys. A single serialized tuple
+                        // supports the full range of custom-table key types.
+                        group_select
+                            .push(format!("toJSONString(tuple({})) AS _rindexer_key", group));
+                    }
+                    let group_select = group_select.join(", ");
                     let aggs = agg_specs
                         .iter()
                         .map(|(is_counter, ev, alias)| {
                             if *is_counter {
                                 format!("COUNT(*) AS {}", alias)
                             } else {
-                                format!("SUM({}) AS {}", quote(ev), alias)
+                                format!("SUM({}) AS {}", source.column(ev), alias)
                             }
                         })
                         .collect::<Vec<_>>()
                         .join(", ");
+                    let network_filter = if dt.cross_chain {
+                        String::new()
+                    } else {
+                        format!(
+                            " AND _rindexer_event.{} = '{}'",
+                            dialect.quote("network"),
+                            self.network
+                        )
+                    };
+                    let condition_filter = match &op.condition {
+                        Some(condition) => {
+                            let condition = render_reorg_condition(condition, &source)
+                                .unwrap_or_else(|| condition.clone());
+                            format!(" AND ({})", condition)
+                        }
+                        None => String::new(),
+                    };
                     format!(
-                        "SELECT {}, {} FROM {} WHERE block_number >= {} AND block_number <= {}{}{} GROUP BY {}",
-                        group,
+                        "SELECT {}, {} FROM {} WHERE _rindexer_event.{} >= {} AND _rindexer_event.{} <= {}{}{} GROUP BY {}",
+                        group_select,
                         aggs,
-                        op.event_table,
+                        source.from(&op.event_table),
+                        dialect.quote("block_number"),
                         self.fork_point,
+                        dialect.quote("block_number"),
                         self.detection_point,
                         network_filter,
                         condition_filter,
@@ -377,7 +521,7 @@ impl ReorgTask {
                     let pg_create = format!(
                         "CREATE TEMP TABLE {} AS {}",
                         pg_temp,
-                        build_select(&quote_pg_ident)
+                        build_select(SqlDialect::Postgres)
                     );
                     pg.batch_execute(&pg_create).await.with_context(|| {
                         format!(
@@ -404,13 +548,10 @@ impl ReorgTask {
                     // aggregates via joinGet(). ClickHouse mutations don't
                     // support correlated subqueries the way Postgres does, so
                     // we cannot use `(SELECT ... WHERE snap.k = dt.k LIMIT 1)`.
-                    let ch_snap_keys: Vec<String> =
-                        where_ev_cols.iter().map(|ev_col| quote_ch_ident(ev_col)).collect();
                     let ch_create = format!(
-                        "CREATE TABLE IF NOT EXISTS {} ENGINE = Join(ANY, LEFT, {}) AS {}",
+                        "CREATE TABLE IF NOT EXISTS {} ENGINE = Join(ANY, LEFT, _rindexer_key) AS {}",
                         ch_temp,
-                        ch_snap_keys.join(", "),
-                        build_select(&quote_ch_ident),
+                        build_select(SqlDialect::Clickhouse),
                     );
                     ch.execute(&ch_create).await.with_context(|| {
                         format!(
@@ -495,12 +636,13 @@ impl ReorgTask {
                     // ClickHouse ALTER TABLE ... UPDATE with per-row aggregate lookups
                     // against a Join-engine snapshot table. joinGet() is the mutation-
                     // safe equivalent of PG's correlated subquery.
-                    let dt_keys: Vec<String> = snap
+                    let dt_keys = snap
                         .where_columns
                         .iter()
                         .map(|(dt_col, _)| quote_ch_ident(dt_col))
-                        .collect();
-                    let join_get_keys = dt_keys.join(", ");
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let join_get_key = format!("toJSONString(tuple({}))", dt_keys);
 
                     // Build CH set clauses directly from the structured ops: the
                     // per-row aggregate is looked up via joinGet() against the
@@ -512,7 +654,7 @@ impl ReorgTask {
                             let col = quote_ch_ident(&s.derived_column);
                             format!(
                                 "{} = {} {} joinGet('{}', '{}', {})",
-                                col, col, s.op_symbol, snap.temp_table, s.agg_alias, join_get_keys
+                                col, col, s.op_symbol, snap.temp_table, s.agg_alias, join_get_key
                             )
                         })
                         .collect();
@@ -524,22 +666,13 @@ impl ReorgTask {
                     };
 
                     // Only update rows that have a matching entry in the snapshot
-                    let ch_exists_filter: Vec<String> = snap
-                        .where_columns
-                        .iter()
-                        .map(|(dt_col, ev_col)| {
-                            format!(
-                                "{} IN (SELECT {} FROM {})",
-                                quote_ch_ident(dt_col),
-                                quote_ch_ident(ev_col),
-                                snap.temp_table
-                            )
-                        })
-                        .collect();
-                    let ch_scope = if ch_exists_filter.is_empty() {
+                    let ch_scope = if snap.where_columns.is_empty() {
                         ch_network.clone()
                     } else {
-                        format!("{} AND {}", ch_network, ch_exists_filter.join(" AND "))
+                        format!(
+                            "{} AND {} IN (SELECT _rindexer_key FROM {})",
+                            ch_network, join_get_key, snap.temp_table
+                        )
                     };
 
                     let ch_update = format!(
@@ -1204,6 +1337,40 @@ mod tests {
         assert_eq!(op.where_columns.len(), 1);
         assert_eq!(op.columns.len(), 1);
         assert!(op.condition.is_none());
+        assert!(op.iterate.is_empty());
+    }
+
+    #[test]
+    fn test_transfer_batch_reversal_source_expands_parallel_arrays() {
+        let op = DerivedTableRollbackOp::try_new(
+            "myschema.transfer_batch".to_string(),
+            vec![("token_id".to_string(), "token_id".to_string())],
+            vec![DerivedColumnRollback::try_new(
+                "balance".to_string(),
+                "amount".to_string(),
+                SetAction::Add,
+            )
+            .unwrap()],
+            Some("$to != 0x0000000000000000000000000000000000000000".to_string()),
+        )
+        .unwrap()
+        .with_iterate(vec![
+            IterateBinding::parse("$ids as token_id").unwrap(),
+            IterateBinding::parse("$values as amount").unwrap(),
+        ])
+        .unwrap();
+        let source = ReversalSource { dialect: SqlDialect::Postgres, iterate: &op.iterate };
+
+        assert_eq!(
+            source.from(&op.event_table),
+            "myschema.transfer_batch AS _rindexer_event CROSS JOIN LATERAL unnest(_rindexer_event.\"ids\", _rindexer_event.\"values\") AS _rindexer_iter(\"token_id\", \"amount\")"
+        );
+        assert_eq!(source.column("token_id"), "_rindexer_iter.\"token_id\"");
+        assert_eq!(source.column("amount"), "_rindexer_iter.\"amount\"");
+        assert_eq!(
+            render_reorg_condition(op.condition.as_deref().unwrap(), &source).unwrap(),
+            "_rindexer_event.\"to\" <> '0x0000000000000000000000000000000000000000'"
+        );
     }
 
     // ======================================================================

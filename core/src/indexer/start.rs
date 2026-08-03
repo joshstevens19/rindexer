@@ -510,12 +510,15 @@ fn build_derived_tables_for_event(
                 }
 
                 if !columns.is_empty() {
-                    rollback_ops.push(DerivedTableRollbackOp::try_new(
-                        event_table_name.clone(),
-                        where_columns,
-                        columns,
-                        operation.condition().map(String::from),
-                    )?);
+                    rollback_ops.push(
+                        DerivedTableRollbackOp::try_new(
+                            event_table_name.clone(),
+                            where_columns,
+                            columns,
+                            operation.condition().map(String::from),
+                        )?
+                        .with_iterate(table_event.iterate.clone())?,
+                    );
                 }
             }
         }
@@ -1947,5 +1950,58 @@ mod tests {
             op.event_table,
         );
         assert!(entry.journal_columns.is_empty(), "no non-reversible columns in this fixture");
+    }
+
+    #[test]
+    fn build_derived_tables_preserves_transfer_batch_iteration() {
+        use crate::indexer::tables::TableRuntime;
+        use crate::manifest::contract::Table;
+
+        let table: Table = serde_yaml::from_str(
+            r#"
+name: custody_balances
+columns:
+  - name: user
+  - name: token_id
+  - name: balance
+events:
+  - event: TransferBatch
+    iterate:
+      - "$ids as token_id"
+      - "$values as amount"
+    operations:
+      - type: upsert
+        where:
+          user: $to
+          token_id: $token_id
+        if: "$to != 0x0000000000000000000000000000000000000000"
+        set:
+          - column: balance
+            action: add
+            value: $amount
+"#,
+        )
+        .expect("TransferBatch table YAML should parse");
+
+        let runtime = TableRuntime::new(table, "test_indexer", "ConditionalTokens");
+        let mut accumulator = HashMap::new();
+        build_derived_tables_for_event(
+            "TransferBatch",
+            "test_indexer",
+            "ConditionalTokens",
+            "polygon",
+            &[runtime],
+            &mut accumulator,
+        )
+        .expect("TransferBatch rollback metadata should compile");
+
+        let rollback = &accumulator["polygon"][0].rollback_ops[0];
+        assert_eq!(rollback.where_columns[0].1, "token_id");
+        assert_eq!(rollback.columns[0].event_column, "amount");
+        assert_eq!(rollback.iterate.len(), 2);
+        assert_eq!(rollback.iterate[0].array_field, "ids");
+        assert_eq!(rollback.iterate[0].alias, "token_id");
+        assert_eq!(rollback.iterate[1].array_field, "values");
+        assert_eq!(rollback.iterate[1].alias, "amount");
     }
 }

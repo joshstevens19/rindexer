@@ -5,6 +5,7 @@
 
 ### Bug fixes
 -------------------------------------------------
+- fix: reorg recovery now reverses custom-table operations that use `iterate`, including paired ERC-1155 `TransferBatch` arrays and event-field conditions.
 - fix: empty network RPC values now fail startup with a clear network/env-var message instead of the low-level "relative URL without a base" provider error, and generated YAML omits unset `reth` config, unset `timestamps`, and empty `config` objects.
 - fix: no-code stream-only projects now create `.rindexer/<stream>/.../last-synced-blocks` checkpoint directories on write, preventing RabbitMQ/SNS/webhook/etc. runs without storage from panicking with `Failed to canonicalize path` ([#449](https://github.com/joshstevens19/rindexer/issues/449)).
 - fix: live indexing now respects the network `max_block_range` setting after historical sync, preventing oversized `eth_getLogs` requests when catching up to the chain tip.

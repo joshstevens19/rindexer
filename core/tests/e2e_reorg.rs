@@ -18,7 +18,7 @@ use rindexer::indexer::reorg::{
     },
     window::{BlockChainWindow, ParentValidation},
 };
-use rindexer::manifest::contract::SetAction;
+use rindexer::manifest::contract::{IterateBinding, SetAction};
 use rindexer::ClickhouseClient;
 use rindexer::PostgresClient;
 use rust_decimal::Decimal;
@@ -2129,6 +2129,7 @@ async fn test_reorg_reversal_add() {
                     action: SetAction::Add,
                 }],
                 condition: None,
+                iterate: vec![],
             }],
             journal_columns: vec![],
         }],
@@ -2241,6 +2242,7 @@ async fn test_reorg_reversal_reserved_word_column() {
                     action: SetAction::Add,
                 }],
                 condition: None,
+                iterate: vec![],
             }],
             journal_columns: vec![],
         }],
@@ -2335,6 +2337,7 @@ async fn test_reorg_reversal_subtract() {
                     action: SetAction::Subtract,
                 }],
                 condition: None,
+                iterate: vec![],
             }],
             journal_columns: vec![],
         }],
@@ -2430,6 +2433,7 @@ async fn test_reorg_reversal_increment() {
                     action: SetAction::Increment,
                 }],
                 condition: None,
+                iterate: vec![],
             }],
             journal_columns: vec![],
         }],
@@ -2524,6 +2528,7 @@ async fn test_reorg_reversal_with_condition() {
                 }],
                 // Only events where id > 7 were accumulated
                 condition: Some("id::NUMERIC > 7".to_string()),
+                iterate: vec![],
             }],
             journal_columns: vec![],
         }],
@@ -2552,6 +2557,287 @@ async fn test_reorg_reversal_with_condition() {
         rust_decimal::Decimal::from(10u64),
         "balance should be 30 - 20 = 10 (only id>7 reversed)"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Regression: ERC-1155 TransferBatch rollbacks must expand `ids` and `values`
+// pairwise and compile manifest `$from` / `$to` conditions against raw events.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_reorg_reversal_transfer_batch_iterate() {
+    let env = TestEnv::new().await;
+    let pg = env.pg_client().await;
+    env.setup_base_tables(&pg).await;
+    let ch = env.rindexer_ch().await;
+    env.setup_ch_tables(&ch).await;
+
+    pg.batch_execute(
+        "CREATE TABLE rindexer_internal.test_schema_transfer_batch (
+             network VARCHAR(50) NOT NULL PRIMARY KEY,
+             last_synced_block NUMERIC NOT NULL
+         );
+         CREATE TABLE test_schema.erc1155_transfer_batch (
+             rindexer_id SERIAL PRIMARY KEY,
+             operator CHAR(42) NOT NULL,
+             \"from\" CHAR(42) NOT NULL,
+             \"to\" CHAR(42) NOT NULL,
+             ids NUMERIC[] NOT NULL,
+             values NUMERIC[] NOT NULL,
+             tx_hash CHAR(66) NOT NULL,
+             block_number NUMERIC NOT NULL,
+             block_hash CHAR(66) NOT NULL,
+             network VARCHAR(50) NOT NULL,
+             tx_index NUMERIC NOT NULL,
+             log_index VARCHAR(78) NOT NULL
+         );
+         CREATE TABLE test_schema.custody_balances (
+             network VARCHAR(50) NOT NULL,
+             user_address CHAR(42) NOT NULL,
+             token_id NUMERIC NOT NULL,
+             balance NUMERIC NOT NULL,
+             rindexer_block_number BIGINT NOT NULL,
+             PRIMARY KEY (network, user_address, token_id)
+         );",
+    )
+    .await
+    .unwrap();
+    ch.execute(
+        "CREATE TABLE rindexer_internal.test_schema_transfer_batch (
+             network String,
+             last_synced_block UInt64
+         ) ENGINE = ReplacingMergeTree ORDER BY network",
+    )
+    .await
+    .unwrap();
+    ch.execute(
+        "CREATE TABLE test_schema.erc1155_transfer_batch (
+             operator FixedString(42),
+             `from` FixedString(42),
+             `to` FixedString(42),
+             ids Array(UInt256),
+             values Array(UInt256),
+             tx_hash FixedString(66),
+             block_number UInt64,
+             block_hash FixedString(66),
+             network String,
+             tx_index UInt64,
+             log_index UInt64
+         ) ENGINE = ReplacingMergeTree
+         ORDER BY (network, block_number, tx_hash, log_index)",
+    )
+    .await
+    .unwrap();
+    ch.execute(
+        "CREATE TABLE test_schema.custody_balances (
+             network String,
+             user_address FixedString(42),
+             token_id UInt256,
+             balance UInt256,
+             rindexer_block_number UInt64
+         ) ENGINE = ReplacingMergeTree
+         ORDER BY (network, user_address, token_id)",
+    )
+    .await
+    .unwrap();
+
+    let (contract, _) = deploy_ping_pong(&env.http, &env.rpc_url, env.deployer).await;
+    let block1 = send_ping(&env.http, &env.rpc_url, env.deployer, contract, 1).await;
+    let block2 = send_ping(&env.http, &env.rpc_url, env.deployer, contract, 2).await;
+
+    let network = "dev";
+    let accounts = get_accounts(&env.http, &env.rpc_url).await;
+    let sender = format!("{:#x}", accounts[0]);
+    let recipient = format!("{:#x}", accounts[1]);
+    let zero_tx = "0x0000000000000000000000000000000000000000000000000000000000000000";
+    let (block_hash, _) = get_block_by_number(&env.http, &env.rpc_url, block2).await;
+    let block_hash = format!("{:#x}", block_hash);
+    pg.execute(
+        "INSERT INTO test_schema.erc1155_transfer_batch
+         (operator, \"from\", \"to\", ids, values, tx_hash, block_number,
+          block_hash, network, tx_index, log_index)
+         VALUES ($1, $2, $3, ARRAY[101, 202]::NUMERIC[], ARRAY[7, 11]::NUMERIC[],
+                 $4, $5, $6, $7, 0, '0')",
+        &[
+            &sender.as_str(),
+            &sender.as_str(),
+            &recipient.as_str(),
+            &zero_tx,
+            &Decimal::from(block2),
+            &block_hash.as_str(),
+            &network,
+        ],
+    )
+    .await
+    .unwrap();
+    ch.execute(&format!(
+        "INSERT INTO test_schema.erc1155_transfer_batch
+         (operator, `from`, `to`, ids, values, tx_hash, block_number, block_hash,
+          network, tx_index, log_index)
+         VALUES ('{sender}', '{sender}', '{recipient}', [101, 202], [7, 11],
+                 '{zero_tx}', {block2}, '{block_hash}', '{network}', 0, 0)"
+    ))
+    .await
+    .unwrap();
+
+    env.insert_block_hashes(&pg, network, block1, block2).await;
+    env.insert_ch_block_hashes(&ch, network, block1, block2).await;
+    pg.execute(
+        "INSERT INTO rindexer_internal.test_schema_transfer_batch
+         (network, last_synced_block) VALUES ($1, $2)",
+        &[&network, &Decimal::from(block2)],
+    )
+    .await
+    .unwrap();
+    ch.execute(&format!(
+        "INSERT INTO rindexer_internal.test_schema_transfer_batch
+         (network, last_synced_block) VALUES ('{network}', {block2})"
+    ))
+    .await
+    .unwrap();
+
+    for (user, token_id, balance) in [
+        (sender.as_str(), 101u64, 13u64),
+        (sender.as_str(), 202, 19),
+        (recipient.as_str(), 101, 8),
+        (recipient.as_str(), 202, 13),
+    ] {
+        pg.execute(
+            "INSERT INTO test_schema.custody_balances
+             (network, user_address, token_id, balance, rindexer_block_number)
+             VALUES ($1, $2, $3, $4, $5)",
+            &[&network, &user, &Decimal::from(token_id), &Decimal::from(balance), &(block2 as i64)],
+        )
+        .await
+        .unwrap();
+        ch.execute(&format!(
+            "INSERT INTO test_schema.custody_balances
+             (network, user_address, token_id, balance, rindexer_block_number)
+             VALUES ('{network}', '{user}', {token_id}, {balance}, {block2})"
+        ))
+        .await
+        .unwrap();
+    }
+
+    trigger_reorg(&env.http, &env.rpc_url, 1).await;
+
+    let iterate = vec![
+        IterateBinding::parse("$ids as token_id").unwrap(),
+        IterateBinding::parse("$values as amount").unwrap(),
+    ];
+    let rollback_op = |user_field: &str, action: SetAction, condition: &str| {
+        DerivedTableRollbackOp::try_new(
+            "test_schema.erc1155_transfer_batch".to_string(),
+            vec![
+                ("user_address".to_string(), user_field.to_string()),
+                ("token_id".to_string(), "token_id".to_string()),
+            ],
+            vec![DerivedColumnRollback::try_new(
+                "balance".to_string(),
+                "amount".to_string(),
+                action,
+            )
+            .unwrap()],
+            Some(condition.to_string()),
+        )
+        .unwrap()
+        .with_iterate(iterate.clone())
+        .unwrap()
+    };
+    let task = ReorgTask {
+        network: network.to_string(),
+        fork_point: block2,
+        detection_point: block2,
+        event_tables: vec![EventTableInfo::try_new(
+            "test_schema".to_string(),
+            "erc1155_transfer_batch".to_string(),
+            "test_schema_transfer_batch".to_string(),
+            "test_indexer".to_string(),
+            "Erc1155".to_string(),
+            "TransferBatch".to_string(),
+        )
+        .unwrap()],
+        derived_tables: vec![DerivedTableInfo {
+            full_table_name: "test_schema.custody_balances".to_string(),
+            cross_chain: false,
+            rollback_ops: vec![
+                rollback_op(
+                    "from",
+                    SetAction::Subtract,
+                    "$from != 0x0000000000000000000000000000000000000000",
+                ),
+                rollback_op(
+                    "to",
+                    SetAction::Add,
+                    "$to != 0x0000000000000000000000000000000000000000",
+                ),
+            ],
+            journal_columns: vec![],
+        }],
+        canonical_blocks: vec![],
+    };
+
+    let rindexer_pg = env.rindexer_pg().await;
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
+    let result = task
+        .execute(&mut task_window, Some(&rindexer_pg), Some(&ch), None)
+        .await
+        .expect("TransferBatch reorg rollback failed");
+
+    assert_eq!(result.events_deleted, 1);
+    let balances = pg
+        .query(
+            "SELECT trim(user_address), token_id, balance
+             FROM test_schema.custody_balances
+             ORDER BY user_address, token_id",
+            &[],
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| (row.get::<_, String>(0), row.get::<_, Decimal>(1), row.get::<_, Decimal>(2)))
+        .collect::<Vec<_>>();
+    for (user, token_id, expected) in [
+        (sender.as_str(), 101u64, 20u64),
+        (sender.as_str(), 202, 30),
+        (recipient.as_str(), 101, 1),
+        (recipient.as_str(), 202, 2),
+    ] {
+        assert!(balances.contains(&(
+            user.to_string(),
+            Decimal::from(token_id),
+            Decimal::from(expected),
+        )));
+        let ch_balance: u64 = ch
+            .query_one(&format!(
+                "SELECT toUInt64(balance) FROM test_schema.custody_balances FINAL
+                 WHERE network = '{network}' AND user_address = '{user}'
+                   AND token_id = {token_id}"
+            ))
+            .await
+            .unwrap();
+        assert_eq!(ch_balance, expected);
+    }
+
+    let remaining_events: i64 = pg
+        .query_one("SELECT count(*) FROM test_schema.erc1155_transfer_batch", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(remaining_events, 0, "orphaned raw events should be deleted");
+    let remaining_ch_events: u64 =
+        ch.query_one("SELECT count() FROM test_schema.erc1155_transfer_batch FINAL").await.unwrap();
+    assert_eq!(remaining_ch_events, 0, "ClickHouse orphaned raw events should be deleted");
+    let checkpoint: Decimal = pg
+        .query_one(
+            "SELECT last_synced_block
+             FROM rindexer_internal.test_schema_transfer_batch WHERE network = $1",
+            &[&network],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(checkpoint, Decimal::from(block2 - 1));
 }
 
 // ---------------------------------------------------------------------------
@@ -2844,6 +3130,7 @@ async fn test_reorg_reversal_decrement() {
                     action: SetAction::Decrement,
                 }],
                 condition: None,
+                iterate: vec![],
             }],
             journal_columns: vec![],
         }],
@@ -3068,6 +3355,7 @@ async fn test_reorg_mixed_reversible_and_journal() {
                     action: SetAction::Add,
                 }],
                 condition: None,
+                iterate: vec![],
             }],
             journal_columns: vec![DerivedColumnJournal {
                 derived_column: "max_trade".to_string(),
@@ -3185,6 +3473,7 @@ async fn test_reorg_reversal_uninvolved_row_unchanged() {
                     action: SetAction::Add,
                 }],
                 condition: None,
+                iterate: vec![],
             }],
             journal_columns: vec![],
         }],
@@ -3331,6 +3620,7 @@ async fn test_reorg_clickhouse_add_reversal() {
                     action: SetAction::Add,
                 }],
                 condition: None,
+                iterate: vec![],
             }],
             journal_columns: vec![],
         }],
@@ -3471,6 +3761,7 @@ async fn test_reorg_reversal_reserved_word_column_clickhouse() {
                     action: SetAction::Add,
                 }],
                 condition: None,
+                iterate: vec![],
             }],
             journal_columns: vec![],
         }],
@@ -3639,6 +3930,7 @@ async fn test_reorg_two_events_same_table_reversible() {
                         action: SetAction::Add,
                     }],
                     condition: None,
+                    iterate: vec![],
                 },
                 DerivedTableRollbackOp {
                     event_table: "test_schema.ping_pong_pong".to_string(),
@@ -3649,6 +3941,7 @@ async fn test_reorg_two_events_same_table_reversible() {
                         action: SetAction::Subtract,
                     }],
                     condition: None,
+                    iterate: vec![],
                 },
             ],
             journal_columns: vec![],
