@@ -8,6 +8,7 @@ use rindexer::{
         core::ProjectType,
         yaml::{read_manifest, YAML_CONFIG_NAME},
     },
+    provider::validate_manifest_network_rpc_urls,
     resolve_table_column_types, rindexer_error, rindexer_info, setup_info_logger,
     start_rindexer_no_code, ClickhouseClient, ClickhouseSchemaChange, GraphqlOverrideSettings,
     IndexerNoCodeDetails, PostgresClient, SchemaChange, StartNoCodeDetails,
@@ -454,6 +455,13 @@ pub async fn start(
         print_error_message(&format!("Could not read the rindexer.yaml file: {e}"));
         e
     })?;
+
+    if matches!(command, StartSubcommands::Indexer | StartSubcommands::All { .. }) {
+        if let Err(e) = validate_manifest_network_rpc_urls(&manifest) {
+            print_error_message(&format!("Error starting the server: {e}"));
+            std::process::exit(1);
+        }
+    }
 
     if manifest.storage.postgres_enabled() {
         let client = PostgresClient::new().await;

@@ -115,7 +115,7 @@ pub struct Manifest {
     #[serde(serialize_with = "serialize_project_type")]
     pub project_type: ProjectType,
 
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Config::is_empty")]
     pub config: Config,
 
     /// User-defined constants that can be referenced in table operations using `$constant(name)`.
@@ -123,7 +123,7 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub constants: Constants,
 
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timestamps: Option<bool>,
 
     pub networks: Vec<Network>,
@@ -514,6 +514,9 @@ mod tests {
 
         assert_eq!(manifest.config.callback_concurrency, None);
         assert_eq!(manifest.config.buffer, None);
+
+        let serialized = serde_yaml::to_string(&manifest).unwrap();
+        assert!(!serialized.contains("config:"));
     }
 
     #[test]
@@ -528,6 +531,21 @@ mod tests {
 
         let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(manifest.timestamps, Some(true));
+    }
+
+    #[test]
+    fn test_timestamps_omitted_when_empty() {
+        let yaml = r#"
+        name: test
+        project_type: no-code
+        networks: []
+        contracts: []
+        "#;
+
+        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
+        let serialized = serde_yaml::to_string(&manifest).unwrap();
+
+        assert!(!serialized.contains("timestamps:"));
     }
 
     // ======================================================================

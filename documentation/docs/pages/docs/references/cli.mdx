@@ -12,6 +12,7 @@ Commands:
   codegen       Generates rust code based on rindexer.yaml or graphql queries
   delete        Delete data from the postgres database or csv files
   phantom       Use phantom events to add your own events to contracts
+  foundry       Import and sync Foundry projects with rindexer projects
   help          Print this message or the help of the given subcommand(s)
 
 Options:
@@ -42,7 +43,7 @@ Options:
 
 ### Subcommand Options
 
-Both `no-code` and `rust` subcommands support:
+The `no-code` and `rust` subcommands support:
 
 ```bash
 Options:
@@ -62,9 +63,93 @@ Examples:
 
   # Reth project with custom arguments
   rindexer new rust --reth -- --datadir /custom/path --http true
+
 ```
 
 `--reth` requires a CLI binary built with the `reth` feature. Official native Windows release binaries are built without that feature, so use Linux, macOS, Docker, or WSL/Linux for Reth mode.
+
+## foundry
+
+Imports and syncs Foundry projects with generated no-code rindexer projects.
+
+```bash
+Usage: rindexer foundry <COMMAND>
+
+Commands:
+  new   Creates a no-code rindexer project from a Foundry project or Git URL
+  sync  Sync an existing Foundry-generated rindexer project from its source
+  help  Print this message or the help of the given subcommand(s)
+```
+
+### new
+
+```bash
+Usage: rindexer foundry new [OPTIONS] [SOURCE]
+
+Arguments:
+  [SOURCE]
+          optional - Foundry source path or Git URL, defaults to the current directory
+
+Options:
+      --output <OUTPUT>
+          optional - Output directory for the generated rindexer project
+
+      --name <NAME>
+          optional - Project name for the generated rindexer project
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+Supported `SOURCE` values include local paths, GitHub repository URLs, GitHub tree URLs, any `git clone` compatible URL, and the generic suffix form `<git-url>#<ref>:<subdir>`.
+
+Git sources are cloned into a temporary directory and Git submodules are initialized when `.gitmodules` is present. The source must build with `forge build`; if dependencies are not available from a fresh clone, install them locally and import from that local path.
+
+Generated Foundry projects do not include public RPC URLs for non-local chains. The generated `rindexer.yaml` uses placeholders such as `${CHAIN_84532_RPC_URL}`, and `.env` contains matching empty values such as `CHAIN_84532_RPC_URL=`. Set those `.env` values to RPC endpoints with enough history/archive access before running `rindexer start`. Chain `31337` is the only prefilled RPC value and uses `ANVIL_RPC_URL=http://127.0.0.1:8545`.
+
+Examples:
+
+```bash
+# Foundry import from the current directory
+rindexer foundry new
+
+# Foundry import from GitHub
+rindexer foundry new https://github.com/org/repo
+
+# Foundry import to a specific output directory
+rindexer foundry new https://github.com/org/repo --output ./my-indexer
+```
+
+### sync
+
+```bash
+Usage: rindexer foundry sync [OPTIONS] [SOURCE]
+
+Arguments:
+  [SOURCE]
+          optional - Override the saved Foundry source path or Git URL
+
+Options:
+  -p, --path <PATH>
+          optional - The rindexer project path, default will be where the command is run
+
+      --dry-run
+          Report changes without writing files
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+Examples:
+
+```bash
+rindexer foundry sync
+rindexer foundry sync --path ./my-indexer
+rindexer foundry sync --path ./my-indexer --dry-run
+rindexer foundry sync https://github.com/org/repo/tree/main/packages/contracts --path ./my-indexer
+```
+
+During sync, rindexer preserves existing values in `.env` and only appends missing `CHAIN_<id>_RPC_URL` keys for newly discovered networks.
 
 ## start
 

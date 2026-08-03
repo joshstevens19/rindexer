@@ -1,6 +1,7 @@
 pub mod add;
 pub mod codegen;
 pub mod delete;
+pub mod foundry;
 pub mod new;
 pub mod phantom;
 pub mod start;
