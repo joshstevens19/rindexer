@@ -654,6 +654,12 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                 && params.postgres.is_some()
                 && params.clickhouse.is_none()
                 && params.csv.is_none()
+                // streams/chat dispatch AFTER the storage write — with the
+                // cursor already committed, a crash in that window would skip
+                // their messages on restart (at-most-once). Legacy keeps them
+                // at-least-once: a crash re-fetches and re-dispatches.
+                && params.streams_clients.is_none()
+                && params.chat_clients.is_none()
                 // factory discovery events: child-address bookkeeping persists
                 // AFTER the callback — atomic cursor would make a crash there
                 // permanently skip re-discovery (see field docs).
@@ -670,6 +676,15 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
             //   [batch + cursor] commit LAST: a crash anywhere earlier re-runs
             //   the whole batch; a crash after it never re-fetches committed
             //   raw rows.
+            //   Deliberate tradeoff: table ops commit in their OWN transactions,
+            //   so a failure/crash between them and the atomic commit re-runs
+            //   them on retry (duplicate Insert-ops / re-applied arithmetic) —
+            //   the same at-least-once exposure they have on the legacy path
+            //   today. Running them after the atomic commit instead would turn
+            //   a crash in between into a PERMANENT skip (cursor already past
+            //   the batch), which is strictly worse. Folding them into the same
+            //   transaction as the raw insert is the real fix and is the
+            //   direction of the sync_together work (PR #453's block sink).
             //   LEGACY arm (CH/CSV alongside PG, factory discovery events,
             //   concurrency > 1, or no PG): the ORIGINAL ordering — raw sinks
             //   first, table ops after — so a transient raw-sink failure retries

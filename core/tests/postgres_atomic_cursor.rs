@@ -135,3 +135,43 @@ async fn failed_cursor_update_rolls_back_the_event_batch() {
     assert!(insert_result.is_err());
     assert_eq!(event_count(&client).await, 0);
 }
+
+#[tokio::test]
+async fn missing_cursor_row_rolls_back_while_cursor_ahead_commits() {
+    let (_pg, client) = setup().await;
+    let columns = vec!["value".to_string()];
+
+    // cursor TABLE exists but holds no row for this network: the batch must
+    // roll back and error loudly — committing rows whose cursor can never
+    // advance would re-index from the manifest start forever.
+    let other_network = BulkCursorUpdate {
+        internal_table_name: CURSOR_TABLE.to_string(),
+        network: "base".to_string(),
+        to_block: 100,
+    };
+    let result =
+        client.insert_bulk_with_cursor(EVENT_TABLE, &columns, &rows(150), &other_network).await;
+    assert!(result.is_err(), "missing cursor row must fail");
+    assert!(
+        result.unwrap_err().contains("seeded row missing"),
+        "error must name the missing seeded row"
+    );
+    assert_eq!(event_count(&client).await, 0, "missing cursor row must roll back the rows");
+
+    // cursor row present but already AHEAD (the live loop of the same event
+    // committed at head while historic backfill is behind): rows MUST commit
+    // and the cursor must stay put — erroring here would retry the historic
+    // batch forever against a cursor that stays ahead.
+    client
+        .batch_execute(&format!(
+            "UPDATE rindexer_internal.{CURSOR_TABLE} SET last_synced_block = 1000 WHERE network = '{NETWORK}'"
+        ))
+        .await
+        .expect("failed to pre-advance cursor");
+    client
+        .insert_bulk_with_cursor(EVENT_TABLE, &columns, &rows(5), &cursor(100))
+        .await
+        .expect("cursor-ahead batch must still commit its rows");
+    assert_eq!(event_count(&client).await, 5);
+    assert_eq!(cursor_block(&client).await, 1000, "cursor must not rewind");
+}

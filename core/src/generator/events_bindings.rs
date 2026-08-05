@@ -11,10 +11,8 @@ use crate::{
         ParamTypeError, ReadAbiError,
     },
     database::{
-        generate::{generate_event_table_full_name, generate_indexer_contract_schema_name},
-        postgres::generate::{
-            generate_column_names_only_with_base_properties, generate_internal_event_table_name,
-        },
+        generate::generate_event_table_full_name,
+        postgres::generate::generate_column_names_only_with_base_properties,
     },
     helpers::camel_to_snake,
     manifest::{
@@ -707,7 +705,6 @@ pub fn generate_event_handlers(
     is_filter: bool,
     contract: &Contract,
     storage: &Storage,
-    callback_concurrency: Option<usize>,
 ) -> Result<Code, GenerateEventHandlersError> {
     let abi_items = ABIItem::get_abi_items(project_path, contract, is_filter)?;
     let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
@@ -904,68 +901,28 @@ use super::super::super::typings::{indexer_name_formatted}::events::{handler_reg
 
                     {insert_call}
                 "#,
-                insert_call = if storage.postgres_enabled()
-                    && !storage.csv_enabled()
-                    // Factory discovery events keep the legacy path: their
-                    // child-address bookkeeping persists only AFTER the callback
-                    // (FactoryEventProcessingConfig::trigger_event) — an atomic
-                    // cursor commit + crash there would permanently skip
-                    // re-discovery.
-                    && !contract.is_factory_only_event(&event.name)
-                    // Exactly-once needs serialized batch commits (effective
-                    // callback concurrency 1). Codegen-time check — if the yaml
-                    // later raises callback_concurrency, re-run codegen so this
-                    // falls back to the legacy path.
-                    && (contract
-                        .index_event_in_order
-                        .as_ref()
-                        .is_some_and(|v| v.contains(&event.name))
-                        || callback_concurrency.unwrap_or(1) <= 1)
-                {
-                    // Atomic [batch + last-synced cursor] commit — same contract as
-                    // the no-code path (insert_bulk_with_cursor): closes the
-                    // double-index race for Rust-mode generated storage handlers.
-                    // Postgres is the sole raw sink here by construction (the
-                    // generated context selects postgres OR clickhouse, never both);
-                    // csv-enabled projects keep the legacy path (cursor must not
-                    // commit before the csv append). Cursor advances to the batch's
-                    // max log block — the log-free tail refetches empty on restart
-                    // and the async task still bumps to the fetched to_block.
+                insert_call = {
+                    // Generated handlers always emit the legacy at-least-once
+                    // insert, even for Postgres-only projects: users own these
+                    // files and add custom logic inside the handler, and an
+                    // atomic cursor commit baked in here would silently skip
+                    // that logic on a crash between the commit and the handler
+                    // returning (a later yaml `callback_concurrency` bump would
+                    // also invalidate any codegen-time safety check). Exactly-once
+                    // storage is an explicit opt-in via the public
+                    // `insert_bulk_with_cursor` API — the emitted hint points
+                    // storage-only handlers at it when their config qualifies
+                    // (Postgres sole sink, not a factory discovery event).
+                    let atomic_optin_hint = if storage.postgres_enabled()
+                        && !storage.csv_enabled()
+                        && !contract.is_factory_only_event(&event.name)
+                    {
+                        "// Storage-only handler? `context.database.insert_bulk_with_cursor(...)`\n                    // commits this batch and the last-synced cursor in ONE transaction\n                    // (exactly-once raw events; see the rindexer changelog). Requires\n                    // `callback_concurrency` <= 1 and NO side effects after the call —\n                    // the cursor commits with the rows, so a crash after it will not\n                    // re-run this handler for the batch.\n                    "
+                    } else {
+                        ""
+                    };
                     format!(
-                        r#"let cursor = rindexer::BulkCursorUpdate {{
-                            internal_table_name: "{internal_table_name}".to_string(),
-                            network: results.first().expect("results is non-empty").tx_information.network.to_string(),
-                            to_block: results.iter().map(|r| r.tx_information.block_number).max().expect("results is non-empty"),
-                        }};
-                        let result = context
-                            .database
-                            .insert_bulk_with_cursor(
-                                "{table_name}",
-                                &rows,
-                                &postgres_bulk_data,
-                                &cursor,
-                            )
-                            .await;
-
-                        if let Err(e) = result {{
-                            rindexer_error!("{event_type_name}::{handler_name} inserting bulk data: {{:?}}", e);
-                            return Err(e.to_string());
-                        }}"#,
-                        internal_table_name = generate_internal_event_table_name(
-                            &generate_indexer_contract_schema_name(indexer_name, &contract.name),
-                            &event.name
-                        ),
-                        table_name = generate_event_table_full_name(
-                            indexer_name,
-                            &contract.name,
-                            &event.name
-                        ),
-                        event_type_name = event_type_name,
-                        handler_name = event.name,
-                    )
-                } else {
-                    format!(
-                        r#"let result = context
+                        r#"{atomic_optin_hint}let result = context
                             .database
                             .insert_bulk(
                                 "{table_name}",
@@ -1093,79 +1050,52 @@ mod tests {
 
     /// Generate handlers for `contract_yaml` against a tempdir project holding
     /// the Transfer ABI, returning the emitted source.
-    fn generated_handlers(
-        contract_yaml: &str,
-        storage_yaml: &str,
-        callback_concurrency: Option<usize>,
-    ) -> String {
+    fn generated_handlers(contract_yaml: &str, storage_yaml: &str) -> String {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("abi.json"), TRANSFER_ABI).expect("write abi");
         let contract: Contract = serde_yaml::from_str(contract_yaml).expect("contract yaml");
         let storage: Storage = serde_yaml::from_str(storage_yaml).expect("storage yaml");
-        generate_event_handlers(
-            dir.path(),
-            "TestIndexer",
-            false,
-            &contract,
-            &storage,
-            callback_concurrency,
-        )
-        .expect("generate handlers")
-        .as_string()
+        generate_event_handlers(dir.path(), "TestIndexer", false, &contract, &storage)
+            .expect("generate handlers")
+            .as_string()
     }
 
-    fn assert_atomic(code: &str) {
-        assert!(code.contains("insert_bulk_with_cursor"), "expected atomic arm:\n{code}");
-        assert!(code.contains("rindexer::BulkCursorUpdate"), "expected cursor struct:\n{code}");
-        assert!(!code.contains(".insert_bulk("), "legacy call must be absent:\n{code}");
-    }
+    const OPTIN_HINT: &str = "insert_bulk_with_cursor";
 
+    /// Generated handlers are always the legacy at-least-once insert — users own
+    /// these files and add logic inside them, so exactly-once storage is an
+    /// explicit per-handler opt-in, not a codegen default.
     fn assert_legacy(code: &str) {
-        assert!(code.contains(".insert_bulk("), "expected legacy arm:\n{code}");
-        assert!(!code.contains("insert_bulk_with_cursor"), "atomic call must be absent:\n{code}");
+        assert!(code.contains(".insert_bulk("), "expected legacy insert:\n{code}");
+        // the opt-in hint COMMENT may name the API — only a real call is a failure
+        let atomic_call = code
+            .lines()
+            .any(|l| l.contains("insert_bulk_with_cursor") && !l.trim_start().starts_with("//"));
+        assert!(!atomic_call, "atomic call must never be emitted:\n{code}");
     }
 
     #[test]
-    fn postgres_only_default_concurrency_emits_atomic_insert() {
-        let code = generated_handlers(PLAIN_CONTRACT, "postgres:\n  enabled: true", None);
-        assert_atomic(&code);
-        // the cursor targets the event's rindexer_internal tracker table
-        assert!(code.contains("test_indexer_token_transfer"), "internal table name:\n{code}");
-    }
-
-    #[test]
-    fn callback_concurrency_above_one_falls_back_to_legacy_insert() {
-        let code = generated_handlers(PLAIN_CONTRACT, "postgres:\n  enabled: true", Some(4));
+    fn postgres_only_emits_legacy_insert_with_atomic_optin_hint() {
+        let code = generated_handlers(PLAIN_CONTRACT, "postgres:\n  enabled: true");
         assert_legacy(&code);
+        assert!(code.contains(OPTIN_HINT), "expected the opt-in hint comment:\n{code}");
     }
 
     #[test]
-    fn index_event_in_order_restores_atomic_insert_despite_concurrency() {
-        let contract = r#"
-            name: Token
-            abi: ./abi.json
-            index_event_in_order:
-              - Transfer
-            details:
-              - network: ethereum
-                address: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
-                start_block: 1
-        "#;
-        let code = generated_handlers(contract, "postgres:\n  enabled: true", Some(4));
-        assert_atomic(&code);
-    }
-
-    #[test]
-    fn csv_alongside_postgres_keeps_legacy_insert() {
+    fn csv_alongside_postgres_emits_legacy_insert_without_hint() {
+        // csv alongside postgres: the cursor must not commit before the csv
+        // append, so the opt-in does not apply — no hint.
         let storage = "postgres:\n  enabled: true\ncsv:\n  enabled: true\n  path: ./generated_csv";
-        let code = generated_handlers(PLAIN_CONTRACT, storage, None);
+        let code = generated_handlers(PLAIN_CONTRACT, storage);
         assert_legacy(&code);
+        assert!(!code.contains(OPTIN_HINT), "csv configs must not get the hint:\n{code}");
     }
 
     #[test]
-    fn factory_discovery_event_keeps_legacy_insert() {
+    fn factory_discovery_event_emits_legacy_insert_without_hint() {
         // The synthesized discovery contract: every detail is a factory binding
-        // for this contract name + event.
+        // for this contract name + event — child-address bookkeeping happens
+        // after the callback, so the opt-in is unsafe and must not be suggested.
         let contract = r#"
             name: PoolFactory
             abi: ./abi.json
@@ -1178,14 +1108,15 @@ mod tests {
                   input_name: pool
                   abi: ./abi.json
         "#;
-        let code = generated_handlers(contract, "postgres:\n  enabled: true", None);
+        let code = generated_handlers(contract, "postgres:\n  enabled: true");
         assert_legacy(&code);
+        assert!(!code.contains(OPTIN_HINT), "discovery events must not get the hint:\n{code}");
     }
 
     #[test]
-    fn factory_child_contract_emits_atomic_insert() {
+    fn factory_child_contract_gets_the_optin_hint() {
         // A child contract discovered via a factory: the factory binding points
-        // at a DIFFERENT contract name/event, so its own events are exact.
+        // at a DIFFERENT contract name/event, so its own events qualify.
         let contract = r#"
             name: Pool
             abi: ./abi.json
@@ -1198,8 +1129,9 @@ mod tests {
                   input_name: pool
                   abi: ./abi.json
         "#;
-        let code = generated_handlers(contract, "postgres:\n  enabled: true", None);
-        assert_atomic(&code);
+        let code = generated_handlers(contract, "postgres:\n  enabled: true");
+        assert_legacy(&code);
+        assert!(code.contains(OPTIN_HINT), "child contracts should get the hint:\n{code}");
     }
 
     #[test]

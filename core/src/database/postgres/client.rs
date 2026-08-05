@@ -565,20 +565,55 @@ impl PostgresClient {
             .await
             .map_err(|e| e.to_string())?;
 
-        transaction.commit().await.map_err(|e| e.to_string())?;
         if cursor_rows == 0 {
-            // Under serialized single-writer operation the cursor row must exist
-            // (seeded at setup) and this batch's to_block must exceed it — zero
-            // rows means the seeded (network, 0) row is missing or another writer
-            // is ahead. Resume would then restart from the manifest start forever.
-            tracing::warn!(
-                "ATOMIC-CURSOR commit updated 0 cursor rows: {} cursor[{}]={} network={} — seeded row missing or out-of-order writer",
-                table_name,
-                cursor.internal_table_name,
-                cursor.to_block,
-                cursor.network
+            // Zero updated rows is one of two very different situations — probe
+            // the row (same transaction) to tell them apart:
+            //  - row present, already at/past to_block: benign. The historic and
+            //    live loops of the SAME event share this cursor, and the live
+            //    loop commits at head while historic backfill is still behind —
+            //    the monotonic guard correctly refuses to rewind. The rows must
+            //    still commit (they were never inserted), so this cannot error:
+            //    the batch would retry forever against a cursor that stays ahead.
+            //  - row missing: the seeded (network, 0) row is gone / setup never
+            //    ran. Committing rows while no cursor can ever advance would
+            //    restart indexing from the manifest start forever (duplicate
+            //    storm) — roll back and fail loudly instead.
+            let probe = format!(
+                "SELECT last_synced_block::TEXT FROM rindexer_internal.{} WHERE network = $1",
+                cursor.internal_table_name
             );
+            let row = transaction
+                .query_opt(&probe, &[&cursor.network])
+                .await
+                .map_err(|e| e.to_string())?;
+            match row {
+                Some(row) => {
+                    let current: String = row.get(0);
+                    transaction.commit().await.map_err(|e| e.to_string())?;
+                    tracing::debug!(
+                        "ATOMIC-CURSOR commit: {} rows={} cursor[{}] to_block={} not advanced (already at {} — concurrent live/historic loop ahead)",
+                        table_name,
+                        postgres_bulk_data.len(),
+                        cursor.internal_table_name,
+                        cursor.to_block,
+                        current
+                    );
+                }
+                None => {
+                    // dropping the transaction without commit rolls it back
+                    return Err(format!(
+                        "ATOMIC-CURSOR: no cursor row for network={} in rindexer_internal.{} — \
+                         seeded row missing, rolling back {} rows for {} (cursor could never \
+                         advance; committing would re-index from the manifest start forever)",
+                        cursor.network,
+                        cursor.internal_table_name,
+                        postgres_bulk_data.len(),
+                        table_name
+                    ));
+                }
+            }
         } else {
+            transaction.commit().await.map_err(|e| e.to_string())?;
             tracing::debug!(
                 "ATOMIC-CURSOR commit: {} rows={} cursor[{}]={} (updated={})",
                 table_name,
