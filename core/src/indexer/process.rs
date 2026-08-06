@@ -873,8 +873,15 @@ async fn trigger_event(
     };
 
     if should_update_progress {
-        // TODO: There is a double-index race condition here. If we get a crash or failure between
-        //       triggering the event and syncing the last updated block, we may double index.
+        // Double-index race NOTE: for the no-code POSTGRES-sole-sink path this is
+        // closed — no_code_callback commits [batch + rindexer_internal cursor] in
+        // ONE transaction (insert_bulk_with_cursor), so this async advance is only
+        // the empty-range / tail bump (monotonic guard makes it a no-op otherwise).
+        // The race window still exists for: ClickHouse/CSV(-alongside-PG) and
+        // streams/chat configs (deliberately kept legacy — see atomic_pg_cursor
+        // in no_code.rs), custom Rust handlers, the trace path (its outer
+        // advance ignores the callback result), and factory discovery events
+        // (child-address bookkeeping commits after the callback).
         update_progress_and_last_synced_task(config, to_block, indexing_event_processed).await;
     } else {
         indexing_event_processed();
