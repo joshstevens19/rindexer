@@ -29,6 +29,13 @@ pub fn connection_string() -> Result<String, env::VarError> {
     Ok(connection)
 }
 
+/// DATABASE_URL is process-global while tests run in parallel, so tests that
+/// point it at a per-test container must hold this lock from `set_var` until
+/// the client has connected.
+#[cfg(test)]
+pub(crate) static TEST_DATABASE_URL_LOCK: tokio::sync::Mutex<()> =
+    tokio::sync::Mutex::const_new(());
+
 #[derive(thiserror::Error, Debug)]
 pub enum PostgresConnectionError {
     #[error("The database connection string is wrong please check your environment: {0}")]

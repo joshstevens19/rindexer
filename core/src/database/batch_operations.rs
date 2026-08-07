@@ -82,6 +82,14 @@ impl BatchOperationSqlType {
         }
     }
 
+    /// Whether this is an array type. Array columns can't go through
+    /// `(array_agg(col))[1]` in GROUP BY aggregation (array_agg over arrays
+    /// adds a dimension, so `[1]` yields NULL); they use MAX instead.
+    pub fn is_array(&self) -> bool {
+        matches!(self, BatchOperationSqlType::TextArray)
+            || matches!(self, BatchOperationSqlType::Custom(t) if t.contains("[]"))
+    }
+
     /// Returns the PostgreSQL type for binary COPY operations.
     pub fn to_pg_type(self) -> PgType {
         match self {
@@ -169,6 +177,10 @@ pub struct DynamicColumnDefinition {
     pub sql_type: BatchOperationSqlType,
     pub behavior: BatchOperationColumnBehavior,
     pub action: BatchOperationAction,
+    /// Starting value when an arithmetic upsert (Add/Subtract) creates the row,
+    /// so a first-touch `subtract` yields `default - value` instead of `+value`.
+    /// Must be a validated numeric literal — it is embedded directly in SQL.
+    pub insert_default: Option<String>,
 }
 
 impl DynamicColumnDefinition {
@@ -179,6 +191,11 @@ impl DynamicColumnDefinition {
         behavior: BatchOperationColumnBehavior,
         action: BatchOperationAction,
     ) -> Self {
-        Self { name, table_column: None, value, sql_type, behavior, action }
+        Self { name, table_column: None, value, sql_type, behavior, action, insert_default: None }
+    }
+
+    pub fn with_insert_default(mut self, insert_default: Option<String>) -> Self {
+        self.insert_default = insert_default;
+        self
     }
 }

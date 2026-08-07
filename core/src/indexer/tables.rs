@@ -146,7 +146,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use alloy::dyn_abi::{DynSolType, DynSolValue};
-use alloy::primitives::{Address, Bytes, B256, U256, U64};
+use alloy::primitives::{Address, Bytes, B256, I256, U256, U64};
 use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
@@ -1435,6 +1435,41 @@ impl TableRuntime {
             full_table_name,
             indexer_name: indexer_name.to_string(),
             contract_name: contract_name.to_string(),
+        }
+    }
+}
+
+/// Warns when a column used by an add/subtract upsert has a `default` that
+/// can't be canonicalized to a numeric literal (e.g. `1e18`). Postgres may
+/// accept such a default in DDL, but rows created by the arithmetic upsert
+/// would start from 0 instead — surfacing the divergence beats silently
+/// computing wrong balances. Called once per table during manifest column
+/// resolution; requires column types to be resolved first.
+pub(crate) fn warn_on_unusable_arithmetic_defaults(table: &Table, table_label: &str) {
+    for operation in table.all_operations() {
+        // Only upserts create rows via the arithmetic insert path
+        if operation.operation_type != OperationType::Upsert {
+            continue;
+        }
+        for set_col in &operation.set {
+            if !matches!(
+                set_col.action,
+                SetAction::Add | SetAction::Subtract | SetAction::Increment | SetAction::Decrement
+            ) {
+                continue;
+            }
+            let Some(column) = table.columns.iter().find(|c| c.name == set_col.column) else {
+                continue;
+            };
+            let Some(default) = column.default.as_deref() else { continue };
+            if arithmetic_insert_default(default, column.resolved_type()).is_none() {
+                warn!(
+                    "{}: column '{}' has default '{}' which is not a plain numeric literal; \
+                     rows created by the '{:?}' operation will start from 0 instead of the \
+                     default. Use a plain decimal value (e.g. \"1000000000000000000\").",
+                    table_label, column.name, default, set_col.action
+                );
+            }
         }
     }
 }
@@ -3867,6 +3902,30 @@ fn column_type_to_batch_sql_type(column_type: &ColumnType) -> BatchOperationSqlT
     }
 }
 
+/// Canonicalizes a column's YAML `default` into a numeric SQL literal usable as
+/// the starting value of an arithmetic upsert (a row created by `subtract` must
+/// begin at `default - value`, not `+value`). Returns None for non-numeric
+/// types or unparseable values (callers fall back to 0), so no raw YAML string
+/// ever reaches the SQL text.
+fn arithmetic_insert_default(default: &str, column_type: &ColumnType) -> Option<String> {
+    let default = default.trim();
+    match column_type {
+        ColumnType::Uint8 | ColumnType::Uint16 | ColumnType::Uint32 | ColumnType::Uint64 => {
+            default.parse::<u64>().ok().map(|v| v.to_string())
+        }
+        ColumnType::Int8 | ColumnType::Int16 | ColumnType::Int32 | ColumnType::Int64 => {
+            default.parse::<i64>().ok().map(|v| v.to_string())
+        }
+        ColumnType::Uint128 | ColumnType::Uint256 => {
+            default.parse::<U256>().ok().map(|v| v.to_string())
+        }
+        ColumnType::Int128 | ColumnType::Int256 => {
+            default.parse::<I256>().ok().map(|v| v.to_string())
+        }
+        _ => None,
+    }
+}
+
 /// Maps SetAction to BatchOperationAction.
 fn set_action_to_batch_action(action: &SetAction) -> BatchOperationAction {
     match action {
@@ -3966,13 +4025,27 @@ async fn execute_postgres_operation(
                 BatchOperationAction::Nothing
             };
 
-            columns.push(DynamicColumnDefinition::new(
-                column.name.clone(),
-                value,
-                column_type_to_batch_sql_type(column_type),
-                behavior,
-                action,
-            ));
+            // Arithmetic upserts start new rows from the column default
+            let insert_default =
+                if matches!(action, BatchOperationAction::Add | BatchOperationAction::Subtract) {
+                    column
+                        .default
+                        .as_deref()
+                        .and_then(|d| arithmetic_insert_default(d, column_type))
+                } else {
+                    None
+                };
+
+            columns.push(
+                DynamicColumnDefinition::new(
+                    column.name.clone(),
+                    value,
+                    column_type_to_batch_sql_type(column_type),
+                    behavior,
+                    action,
+                )
+                .with_insert_default(insert_default),
+            );
         }
 
         // Auto-injected metadata columns
@@ -5747,5 +5820,131 @@ mod tests {
             &meta,
         );
         assert_eq!(result, Some("blk=42,log=3".to_string()));
+    }
+
+    #[test]
+    fn arithmetic_insert_default_canonicalizes_numeric_literals() {
+        // Accepted: plain decimals (trimmed), hex via alloy FromStr, signed values
+        assert_eq!(arithmetic_insert_default("0", &ColumnType::Uint256), Some("0".to_string()));
+        assert_eq!(arithmetic_insert_default(" 50 ", &ColumnType::Uint256), Some("50".to_string()));
+        assert_eq!(arithmetic_insert_default("0x10", &ColumnType::Uint256), Some("16".to_string()));
+        assert_eq!(
+            arithmetic_insert_default("1_000", &ColumnType::Uint256),
+            Some("1000".to_string())
+        );
+        assert_eq!(arithmetic_insert_default("-5", &ColumnType::Int64), Some("-5".to_string()));
+        assert_eq!(arithmetic_insert_default("-5", &ColumnType::Int256), Some("-5".to_string()));
+        assert_eq!(arithmetic_insert_default("255", &ColumnType::Uint8), Some("255".to_string()));
+
+        // Rejected (callers fall back to 0 and TableRuntime::new warns):
+        // negatives on unsigned types, scientific notation, non-numeric types
+        assert_eq!(arithmetic_insert_default("-5", &ColumnType::Uint64), None);
+        assert_eq!(arithmetic_insert_default("1e18", &ColumnType::Uint256), None);
+        assert_eq!(arithmetic_insert_default("abc", &ColumnType::Uint256), None);
+        assert_eq!(arithmetic_insert_default("0", &ColumnType::String), None);
+        assert_eq!(arithmetic_insert_default("true", &ColumnType::Bool), None);
+    }
+
+    /// End-to-end check of the YAML-declared upsert path against a real
+    /// Postgres: a `subtract` operation that creates the row must start from
+    /// the column default (`default - value`), and later deltas accumulate.
+    ///
+    /// Requires Docker.
+    #[tokio::test]
+    async fn yaml_subtract_upsert_creates_rows_from_column_default() {
+        use testcontainers::runners::AsyncRunner;
+        use testcontainers_modules::postgres::Postgres;
+
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        let table: Table = serde_yaml::from_str(
+            r#"
+name: balances
+columns:
+  - name: holder
+    type: string
+  - name: balance
+    type: uint256
+    default: "50"
+events:
+  - event: Transfer
+    operations:
+      - type: upsert
+        where:
+          holder: $from
+        set:
+          - column: balance
+            action: subtract
+            value: $value
+"#,
+        )
+        .expect("table yaml should parse");
+        let operation = &table.events[0].operations[0];
+
+        let container = Postgres::default().start().await.expect("failed to start postgres");
+        let port = container.get_host_port_ipv4(5432).await.expect("failed to get postgres port");
+        let postgres = {
+            let _guard = crate::database::postgres::client::TEST_DATABASE_URL_LOCK.lock().await;
+            std::env::set_var(
+                "DATABASE_URL",
+                format!("postgresql://postgres:postgres@127.0.0.1:{port}/postgres?sslmode=disable"),
+            );
+            PostgresClient::new().await.expect("failed to create postgres client")
+        };
+
+        postgres
+            .batch_execute(
+                "CREATE TABLE yaml_balances (
+                    network VARCHAR(50) NOT NULL,
+                    holder TEXT NOT NULL,
+                    balance NUMERIC NOT NULL DEFAULT 50,
+                    rindexer_sequence_id NUMERIC,
+                    PRIMARY KEY (network, holder)
+                )",
+            )
+            .await
+            .expect("failed to create yaml_balances table");
+
+        let row = |value: u64, seq: u128| TableRowData {
+            columns: HashMap::from([
+                ("holder".to_string(), EthereumSqlTypeWrapper::String("0xsender".to_string())),
+                ("balance".to_string(), EthereumSqlTypeWrapper::U256Numeric(U256::from(value))),
+                (
+                    injected_columns::RINDEXER_SEQUENCE_ID.to_string(),
+                    EthereumSqlTypeWrapper::U128(seq),
+                ),
+            ]),
+            network: "ethereum".to_string(),
+        };
+
+        // First touch is a debit: row must be created at 50 - 30 = 20
+        execute_postgres_operation(
+            &postgres,
+            "yaml_balances",
+            &table,
+            operation,
+            &[row(30, 1)],
+            None,
+        )
+        .await
+        .expect("first debit failed");
+        // Second debit accumulates: 20 - 25 = -5
+        execute_postgres_operation(
+            &postgres,
+            "yaml_balances",
+            &table,
+            operation,
+            &[row(25, 2)],
+            None,
+        )
+        .await
+        .expect("second debit failed");
+
+        let stored = postgres
+            .query_one("SELECT balance::TEXT AS balance FROM yaml_balances", &[])
+            .await
+            .expect("failed to query yaml_balances");
+        let balance: String = stored.get("balance");
+        assert_eq!(balance, "-5", "debits must apply against the column default");
     }
 }

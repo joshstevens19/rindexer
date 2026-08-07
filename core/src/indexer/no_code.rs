@@ -105,6 +105,12 @@ pub fn resolve_table_column_types(
         // Resolve column types in custom tables
         if let Some(tables) = &mut contract.tables {
             resolve_tables_against_abi(tables, &event_abi_types)?;
+            for table in tables.iter() {
+                super::tables::warn_on_unusable_arithmetic_defaults(
+                    table,
+                    &format!("{}.{}", contract.name, table.name),
+                );
+            }
         }
     }
 
@@ -116,6 +122,12 @@ pub fn resolve_table_column_types(
                 .map_err(|e| SetupNoCodeError::ProcessIndexersError(e.into()))?;
             let event_abi_types = build_event_abi_types(abi_items)?;
             resolve_tables_against_abi(tables, &event_abi_types)?;
+            for table in tables.iter() {
+                super::tables::warn_on_unusable_arithmetic_defaults(
+                    table,
+                    &format!("native_transfers.{}", table.name),
+                );
+            }
         }
     }
 
@@ -1049,11 +1061,10 @@ async fn process_contract(
             })
             .unwrap_or_default();
 
-        // Determine if this event should store raw events
-        // Store raw events if: (a) event is in include_events, OR (b) tables are defined
-        // (tables need raw events as source of truth for reorg recomputation)
-        let has_tables = !contract_tables.is_empty();
-        let store_raw_events = contract.is_event_in_include_events(&event_name) || has_tables;
+        // Store raw events when this event's raw event table exists — same
+        // predicate the DDL and migrations use (include_events plus events
+        // that drive custom tables, the reorg recomputation source of truth)
+        let store_raw_events = contract.stores_raw_events(&event_name);
 
         let tables_arc = Arc::new(contract_tables);
         let streams_arc = Arc::new(streams_client);

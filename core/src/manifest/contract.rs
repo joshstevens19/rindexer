@@ -1473,6 +1473,18 @@ impl Contract {
             None => false, // No include_events means no raw event storage
         }
     }
+
+    /// Whether raw events for this event are stored, and therefore whether its
+    /// raw event table exists: either the event is in `include_events`, or it
+    /// drives a custom table (raw events are the source of truth for reorg
+    /// recomputation). DDL creation, migrations, and the runtime bulk insert
+    /// must all agree on this predicate.
+    pub fn stores_raw_events(&self, event_name: &str) -> bool {
+        self.is_event_in_include_events(event_name)
+            || self.tables.as_ref().is_some_and(|tables| {
+                tables.iter().any(|t| t.events.iter().any(|e| e.event == event_name))
+            })
+    }
 }
 
 #[cfg(test)]

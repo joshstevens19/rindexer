@@ -1,5 +1,10 @@
 /// Creates a batch operation function for PostgreSQL database.
 ///
+/// Upserts with arithmetic actions (Add/Subtract/Max/Min) do not carry the
+/// sequence-id guard — it would silently drop deltas from lower-sequence
+/// events — so re-delivering the same rows re-applies them. Callers must not
+/// retry a batch whose statement already committed.
+///
 /// # Example
 ///
 /// ```ignore
@@ -65,10 +70,13 @@ macro_rules! create_batch_postgres_operation {
                 BatchOperationAction, BatchOperationColumnBehavior, BatchOperationType,
             };
             use $crate::database::postgres::batch_operations::{
-                build_cte_header, build_delete_body, build_insert_body, build_sequence_condition,
-                build_set_clause, build_to_process_cte, build_update_body, build_upsert_body,
-                build_upsert_set_clause, build_where_clause, build_where_condition,
-                format_table_name, ColumnInfo, SetClauseType, UpsertClauseType,
+                build_arithmetic_insert_expr, build_cte_header, build_delete_body,
+                build_insert_body, build_sequence_condition, build_set_clause,
+                build_to_process_cte, build_to_process_cte_aggregated, build_update_body,
+                build_upsert_body, build_upsert_set_clause, build_upsert_set_clause_arithmetic,
+                build_upsert_set_clause_latest_by_sequence, build_where_clause,
+                build_where_condition, format_table_name, ColumnAggregate, ColumnInfo,
+                SetClauseType, UpsertClauseType,
             };
 
             async fn execute_batch(
@@ -121,6 +129,22 @@ macro_rules! create_batch_postgres_operation {
                     })
                     .collect();
 
+                let max_columns: Vec<&str> = columns
+                    .iter()
+                    .filter_map(|col| match col.action {
+                        BatchOperationAction::Max => Some(col.name),
+                        _ => None,
+                    })
+                    .collect();
+
+                let min_columns: Vec<&str> = columns
+                    .iter()
+                    .filter_map(|col| match col.action {
+                        BatchOperationAction::Min => Some(col.name),
+                        _ => None,
+                    })
+                    .collect();
+
                 let where_columns: Vec<&str> = columns
                     .iter()
                     .filter_map(|col| match col.action {
@@ -155,8 +179,50 @@ macro_rules! create_batch_postgres_operation {
                 query.push_str(&placeholders.join(", "));
                 query.push_str(")");
 
-                // Add to_process CTE
-                query.push_str(&build_to_process_cte(&distinct_cols, sequence_col));
+                // Add to_process CTE.
+                // When arithmetic columns exist (add/subtract/max/min), use GROUP BY
+                // with aggregations instead of DISTINCT ON so duplicate keys within a
+                // batch accumulate rather than dropping all but one row (same fix as
+                // the dynamic path, GitHub #383). Plain Insert operations keep every
+                // row — aggregation would silently collapse duplicates.
+                let has_arithmetic = !add_columns.is_empty()
+                    || !subtract_columns.is_empty()
+                    || !max_columns.is_empty()
+                    || !min_columns.is_empty();
+                let is_plain_insert = matches!($op_type, BatchOperationType::Insert);
+
+                if has_arithmetic && !is_plain_insert && !distinct_cols.is_empty() {
+                    let agg_columns: Vec<(&str, ColumnAggregate)> = columns
+                        .iter()
+                        .map(|col| {
+                            let name = col.name;
+                            let agg =
+                                if distinct_cols.contains(&name) || where_columns.contains(&name) {
+                                    ColumnAggregate::GroupKey
+                                } else if sequence_col == Some(name) {
+                                    ColumnAggregate::Max
+                                } else if add_columns.contains(&name)
+                                    || subtract_columns.contains(&name)
+                                {
+                                    ColumnAggregate::Sum
+                                } else if max_columns.contains(&name) {
+                                    ColumnAggregate::Max
+                                } else if min_columns.contains(&name) {
+                                    ColumnAggregate::Min
+                                } else if col.sql_type.is_array() {
+                                    // array_agg over arrays adds a dimension ([1]
+                                    // yields NULL); max(anyarray) is a valid pick
+                                    ColumnAggregate::Max
+                                } else {
+                                    ColumnAggregate::LastBySeq
+                                };
+                            (name, agg)
+                        })
+                        .collect();
+                    query.push_str(&build_to_process_cte_aggregated(&agg_columns, sequence_col));
+                } else {
+                    query.push_str(&build_to_process_cte(&distinct_cols, sequence_col));
+                }
 
                 let formatted_table_name = format_table_name($table_name);
 
@@ -192,6 +258,24 @@ macro_rules! create_batch_postgres_operation {
                                 .push(build_set_clause(&col_info, SetClauseType::Subtract));
                         }
 
+                        for col_name in &max_columns {
+                            let column_def = columns.iter().find(|c| c.name == *col_name).unwrap();
+                            let col_info = ColumnInfo {
+                                name: col_name,
+                                table_column: column_def.table_column,
+                            };
+                            all_set_clauses.push(build_set_clause(&col_info, SetClauseType::Max));
+                        }
+
+                        for col_name in &min_columns {
+                            let column_def = columns.iter().find(|c| c.name == *col_name).unwrap();
+                            let col_info = ColumnInfo {
+                                name: col_name,
+                                table_column: column_def.table_column,
+                            };
+                            all_set_clauses.push(build_set_clause(&col_info, SetClauseType::Min));
+                        }
+
                         query.push_str(&build_update_body(&formatted_table_name, all_set_clauses));
                     }
                     BatchOperationType::Delete => {
@@ -219,33 +303,93 @@ macro_rules! create_batch_postgres_operation {
                         };
 
                         let mut update_clauses: Vec<String> = Vec::new();
+                        // INSERT-branch SELECT expression overrides for arithmetic
+                        // columns: a row created by add/subtract must start from 0,
+                        // not the raw delta (a first-touch subtract must go negative).
+                        let mut insert_exprs: Vec<(&str, String)> = Vec::new();
+                        // The sequence guard (EXCLUDED.seq > table.seq) would silently
+                        // drop arithmetic deltas from lower-sequence events, so it is
+                        // disabled when arithmetic columns exist; set columns then keep
+                        // the latest value via a per-column CASE on the sequence.
+                        let arithmetic_without_sequence_guard =
+                            has_arithmetic && sequence_col.is_some();
 
                         for col in &set_columns {
                             if !where_columns.contains(col) && !distinct_cols.contains(col) {
-                                update_clauses.push(build_upsert_set_clause(
-                                    col,
-                                    &formatted_table_name,
-                                    UpsertClauseType::Set,
-                                ));
+                                if arithmetic_without_sequence_guard {
+                                    if Some(*col) == sequence_col {
+                                        update_clauses.push(build_upsert_set_clause(
+                                            col,
+                                            &formatted_table_name,
+                                            UpsertClauseType::Max,
+                                        ));
+                                    } else {
+                                        update_clauses.push(
+                                            build_upsert_set_clause_latest_by_sequence(
+                                                col,
+                                                &formatted_table_name,
+                                                sequence_col.expect("sequence column exists"),
+                                            ),
+                                        );
+                                    }
+                                } else {
+                                    update_clauses.push(build_upsert_set_clause(
+                                        col,
+                                        &formatted_table_name,
+                                        UpsertClauseType::Set,
+                                    ));
+                                }
                             }
                         }
 
                         for col in &add_columns {
                             if !where_columns.contains(col) && !distinct_cols.contains(col) {
-                                update_clauses.push(build_upsert_set_clause(
+                                update_clauses.push(build_upsert_set_clause_arithmetic(
                                     col,
                                     &formatted_table_name,
-                                    UpsertClauseType::Add,
+                                    None,
+                                ));
+                                insert_exprs.push((
+                                    col,
+                                    build_arithmetic_insert_expr(col, UpsertClauseType::Add, None),
                                 ));
                             }
                         }
 
                         for col in &subtract_columns {
                             if !where_columns.contains(col) && !distinct_cols.contains(col) {
+                                update_clauses.push(build_upsert_set_clause_arithmetic(
+                                    col,
+                                    &formatted_table_name,
+                                    None,
+                                ));
+                                insert_exprs.push((
+                                    col,
+                                    build_arithmetic_insert_expr(
+                                        col,
+                                        UpsertClauseType::Subtract,
+                                        None,
+                                    ),
+                                ));
+                            }
+                        }
+
+                        for col in &max_columns {
+                            if !where_columns.contains(col) && !distinct_cols.contains(col) {
                                 update_clauses.push(build_upsert_set_clause(
                                     col,
                                     &formatted_table_name,
-                                    UpsertClauseType::Subtract,
+                                    UpsertClauseType::Max,
+                                ));
+                            }
+                        }
+
+                        for col in &min_columns {
+                            if !where_columns.contains(col) && !distinct_cols.contains(col) {
+                                update_clauses.push(build_upsert_set_clause(
+                                    col,
+                                    &formatted_table_name,
+                                    UpsertClauseType::Min,
                                 ));
                             }
                         }
@@ -255,8 +399,9 @@ macro_rules! create_batch_postgres_operation {
                             &column_names,
                             &conflict_columns,
                             update_clauses,
-                            sequence_col,
+                            if arithmetic_without_sequence_guard { None } else { sequence_col },
                             None, // custom_where - not used in macro-generated operations
+                            &insert_exprs,
                         ));
 
                         let params: Vec<&(dyn ToSql + Sync)> =

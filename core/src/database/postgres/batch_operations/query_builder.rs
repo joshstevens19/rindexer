@@ -130,8 +130,9 @@ pub fn build_to_process_cte_aggregated(
                     if let Some(ref seq) = quoted_seq {
                         format!("(array_agg({} ORDER BY {} DESC))[1] AS {}", qname, seq, qname)
                     } else {
-                        // No sequence column — fall back to MAX as a deterministic pick
-                        format!("MAX({}) AS {}", qname, qname)
+                        // No sequence column — take an arbitrary value. array_agg is
+                        // type-agnostic; MAX would fail for BOOLEAN/BYTEA columns.
+                        format!("(array_agg({}))[1] AS {}", qname, qname)
                     }
                 }
             }
@@ -204,6 +205,11 @@ pub fn build_delete_body(formatted_table_name: &str) -> String {
 /// * `update_clauses` - SET clauses for the update
 /// * `sequence_col` - Optional sequence column for ordering (adds WHERE EXCLUDED.seq > table.seq)
 /// * `custom_where` - Optional custom WHERE condition (e.g., for @table references)
+/// * `insert_exprs` - Per-column SQL expression overrides for the INSERT branch's
+///   SELECT list (e.g., `(0 - tp."balance")` so a `subtract` that creates the row
+///   starts from the column default instead of inserting the raw value). Note that
+///   `EXCLUDED.<col>` in update clauses and WHERE conditions then refers to the
+///   overridden expression's value, not the raw batch value.
 pub fn build_upsert_body(
     formatted_table_name: &str,
     all_columns: &[&str],
@@ -211,13 +217,20 @@ pub fn build_upsert_body(
     update_clauses: Vec<String>,
     sequence_col: Option<&str>,
     custom_where: Option<&str>,
+    insert_exprs: &[(&str, String)],
 ) -> String {
     let formatted_columns =
         all_columns.iter().map(|col| quote_identifier(col)).collect::<Vec<_>>().join(", ");
 
     let tp_columns = all_columns
         .iter()
-        .map(|col| format!("tp.{}", quote_identifier(col)))
+        .map(|col| {
+            insert_exprs
+                .iter()
+                .find(|(name, _)| name == col)
+                .map(|(_, expr)| expr.clone())
+                .unwrap_or_else(|| format!("tp.{}", quote_identifier(col)))
+        })
         .collect::<Vec<_>>()
         .join(", ");
 
@@ -329,6 +342,92 @@ pub fn build_upsert_set_clause(
     }
 }
 
+/// Builds the SELECT expression for the INSERT branch of an arithmetic
+/// (add/subtract) upsert column.
+///
+/// A row created by an arithmetic upsert must start from the column default,
+/// not the raw batch value — otherwise a first-touch `subtract` inserts
+/// `+value` instead of `default - value` (lost debits in running balances).
+///
+/// `insert_default` must be a validated numeric literal (see
+/// `DynamicColumnDefinition::insert_default`); when absent, 0 is used, which
+/// matches the `COALESCE(table.col, 0)` semantics of the update branch.
+pub fn build_arithmetic_insert_expr(
+    col: &str,
+    clause_type: UpsertClauseType,
+    insert_default: Option<&str>,
+) -> String {
+    let tp_col = format!("tp.{}", quote_identifier(col));
+    let default = insert_default.unwrap_or("0");
+
+    match clause_type {
+        UpsertClauseType::Add => format!("({} + {})", default, tp_col),
+        UpsertClauseType::Subtract => format!("({} - {})", default, tp_col),
+        // Set/Max/Min don't rewrite the insert value
+        _ => tp_col,
+    }
+}
+
+/// Builds the ON CONFLICT SET clause for an arithmetic (add/subtract) upsert
+/// column whose INSERT branch was built with `build_arithmetic_insert_expr`.
+///
+/// `EXCLUDED.col` carries `default ± delta` (the value the INSERT branch would
+/// have written), so the update branch recovers the delta by removing the
+/// default again:
+///   col = COALESCE(table.col, 0) + EXCLUDED.col - default
+///
+/// This same clause serves both add and subtract — the sign already lives in
+/// the EXCLUDED value.
+pub fn build_upsert_set_clause_arithmetic(
+    col: &str,
+    formatted_table_name: &str,
+    insert_default: Option<&str>,
+) -> String {
+    let column_name = quote_identifier(col);
+    match insert_default {
+        Some(default) => format!(
+            "{} = COALESCE({}.{}, 0) + EXCLUDED.{} - {}",
+            column_name, formatted_table_name, column_name, column_name, default
+        ),
+        None => format!(
+            "{} = COALESCE({}.{}, 0) + EXCLUDED.{}",
+            column_name, formatted_table_name, column_name, column_name
+        ),
+    }
+}
+
+/// Rewrites `EXCLUDED."<col>"` references in a custom WHERE condition so they
+/// keep meaning the raw batch delta for an arithmetic upsert column.
+///
+/// SQL-pushed YAML conditions render event variables as `EXCLUDED."<col>"`
+/// (see `Expression::to_sql_condition`). Once the INSERT branch is overridden
+/// with `build_arithmetic_insert_expr`, `EXCLUDED.<col>` carries
+/// `default ± delta` — sign-inverted for subtract — so conditions like
+/// `"$value <= @balance"` would silently invert. This recovers the delta:
+/// - subtract: `(default - EXCLUDED."col")`
+/// - add: `(EXCLUDED."col" - default)` (no-op when there is no default)
+pub fn rewrite_custom_where_for_arithmetic(
+    custom_where: &str,
+    col: &str,
+    clause_type: UpsertClauseType,
+    insert_default: Option<&str>,
+) -> String {
+    // Always-quoted form produced by Expression::to_sql_condition
+    let excluded_ref = format!("EXCLUDED.\"{}\"", col);
+    let replacement = match clause_type {
+        UpsertClauseType::Subtract => {
+            format!("({} - {})", insert_default.unwrap_or("0"), excluded_ref)
+        }
+        UpsertClauseType::Add => match insert_default {
+            Some(default) => format!("({} - {})", excluded_ref, default),
+            // No default: EXCLUDED already carries the raw delta
+            None => return custom_where.to_string(),
+        },
+        _ => return custom_where.to_string(),
+    };
+    custom_where.replace(&excluded_ref, &replacement)
+}
+
 /// Builds an upsert SET clause that keeps the latest value by sequence while
 /// allowing arithmetic columns in the same upsert to accumulate regardless of
 /// processing order.
@@ -353,6 +452,7 @@ pub fn build_upsert_set_clause_latest_by_sequence(
 }
 
 /// Type of upsert SET clause to generate.
+#[derive(Clone, Copy)]
 pub enum UpsertClauseType {
     Set,
     Add,
@@ -388,5 +488,148 @@ pub fn build_where_clause(conditions: &[String]) -> String {
         String::new()
     } else {
         format!("\nWHERE {}", conditions.join("\n  AND "))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arithmetic_insert_expr_negates_subtract() {
+        assert_eq!(
+            build_arithmetic_insert_expr("balance", UpsertClauseType::Subtract, None),
+            "(0 - tp.balance)"
+        );
+        assert_eq!(
+            build_arithmetic_insert_expr("balance", UpsertClauseType::Subtract, Some("100")),
+            "(100 - tp.balance)"
+        );
+    }
+
+    #[test]
+    fn arithmetic_insert_expr_offsets_add_by_default() {
+        assert_eq!(
+            build_arithmetic_insert_expr("balance", UpsertClauseType::Add, None),
+            "(0 + tp.balance)"
+        );
+        assert_eq!(
+            build_arithmetic_insert_expr("balance", UpsertClauseType::Add, Some("100")),
+            "(100 + tp.balance)"
+        );
+    }
+
+    #[test]
+    fn arithmetic_insert_expr_leaves_set_max_min_untouched() {
+        for clause_type in [UpsertClauseType::Set, UpsertClauseType::Max, UpsertClauseType::Min] {
+            assert_eq!(
+                build_arithmetic_insert_expr("balance", clause_type, Some("100")),
+                "tp.balance"
+            );
+        }
+    }
+
+    #[test]
+    fn arithmetic_upsert_set_clause_recovers_delta_from_excluded() {
+        assert_eq!(
+            build_upsert_set_clause_arithmetic("balance", "t", None),
+            "balance = COALESCE(t.balance, 0) + EXCLUDED.balance"
+        );
+        assert_eq!(
+            build_upsert_set_clause_arithmetic("balance", "t", Some("100")),
+            "balance = COALESCE(t.balance, 0) + EXCLUDED.balance - 100"
+        );
+    }
+
+    #[test]
+    fn upsert_body_applies_insert_expr_overrides() {
+        let insert_exprs = vec![(
+            "balance",
+            build_arithmetic_insert_expr("balance", UpsertClauseType::Subtract, None),
+        )];
+        let body = build_upsert_body(
+            "t",
+            &["network", "holder", "balance"],
+            &["network", "holder"],
+            vec!["balance = COALESCE(t.balance, 0) + EXCLUDED.balance".to_string()],
+            None,
+            None,
+            &insert_exprs,
+        );
+
+        assert!(
+            body.contains("SELECT tp.network, tp.holder, (0 - tp.balance)"),
+            "insert branch must start subtract rows from the default: {body}"
+        );
+        assert!(
+            !body.contains("WHERE EXCLUDED."),
+            "arithmetic upserts must not carry the sequence guard: {body}"
+        );
+    }
+
+    #[test]
+    fn custom_where_rewrite_recovers_raw_delta() {
+        let guard = "EXCLUDED.\"balance\" <= t.\"balance\"";
+
+        assert_eq!(
+            rewrite_custom_where_for_arithmetic(guard, "balance", UpsertClauseType::Subtract, None),
+            "(0 - EXCLUDED.\"balance\") <= t.\"balance\""
+        );
+        assert_eq!(
+            rewrite_custom_where_for_arithmetic(
+                guard,
+                "balance",
+                UpsertClauseType::Subtract,
+                Some("100")
+            ),
+            "(100 - EXCLUDED.\"balance\") <= t.\"balance\""
+        );
+        assert_eq!(
+            rewrite_custom_where_for_arithmetic(
+                guard,
+                "balance",
+                UpsertClauseType::Add,
+                Some("100")
+            ),
+            "(EXCLUDED.\"balance\" - 100) <= t.\"balance\""
+        );
+        // Add with no default: EXCLUDED already carries the raw delta
+        assert_eq!(
+            rewrite_custom_where_for_arithmetic(guard, "balance", UpsertClauseType::Add, None),
+            guard
+        );
+        // Other columns' EXCLUDED references are untouched
+        assert_eq!(
+            rewrite_custom_where_for_arithmetic(guard, "amount", UpsertClauseType::Subtract, None),
+            guard
+        );
+    }
+
+    #[test]
+    fn aggregated_cte_without_sequence_uses_array_agg_for_set_columns() {
+        let cte = build_to_process_cte_aggregated(
+            &[("holder", ColumnAggregate::GroupKey), ("flag", ColumnAggregate::LastBySeq)],
+            None,
+        );
+        assert!(
+            cte.contains("(array_agg(flag))[1] AS flag"),
+            "must not use MAX() which fails for BOOLEAN/BYTEA: {cte}"
+        );
+    }
+
+    #[test]
+    fn upsert_body_without_overrides_keeps_sequence_guard() {
+        let body = build_upsert_body(
+            "t",
+            &["holder", "name", "seq"],
+            &["holder"],
+            vec!["name = EXCLUDED.name".to_string()],
+            Some("seq"),
+            None,
+            &[],
+        );
+
+        assert!(body.contains("SELECT tp.holder, tp.name, tp.seq"), "{body}");
+        assert!(body.contains("WHERE EXCLUDED.seq > COALESCE(t.seq, 0)"), "{body}");
     }
 }
