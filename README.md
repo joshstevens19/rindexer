@@ -9,7 +9,7 @@ rindexer is an opensource powerful, high-speed indexing toolset developed in Rus
 This tool allows you to index chain events using a simple YAML file, requiring no additional coding.
 For more advanced needs, the rindexer provides foundations and advanced capabilities to build whatever you want.
 It's highly extendable, enabling you to construct indexing pipelines with ease and focus exclusively on the logic.
-rindexer out the box also gives you a GraphQL API to query the data you have indexed instantly.
+rindexer out the box also gives you a GraphQL API to query the data you have indexed instantly. 
 
 You can get to the full rindexer [documentation](https://rindexer.xyz/).
 
