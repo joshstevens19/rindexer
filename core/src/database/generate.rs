@@ -373,12 +373,10 @@ pub fn generate_tables_for_indexer_sql(
             sql.push_str(format!("CREATE SCHEMA IF NOT EXISTS {schema_name};").as_str());
             info!("Creating schema if not exists: {}", schema_name);
 
-            // Only create raw event tables for events in include_events (not for table-only events)
-            let raw_events: Vec<_> = events
-                .iter()
-                .filter(|e| contract.is_event_in_include_events(&e.name))
-                .cloned()
-                .collect();
+            // Create raw event tables for every event whose raw events the
+            // runtime stores (include_events plus table-driving events)
+            let raw_events: Vec<_> =
+                events.iter().filter(|e| contract.stores_raw_events(&e.name)).cloned().collect();
 
             if !raw_events.is_empty() {
                 let event_matching_name_on_other = find_clashing_event_names(
@@ -617,4 +615,76 @@ pub fn drop_tables_for_indexer_sql(project_path: &Path, indexer: &Indexer) -> Co
     }
 
     Code::new(sql)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::indexer::Indexer;
+    use crate::manifest::native_transfer::NativeTransfers;
+
+    /// Raw event tables must be created for events that drive custom tables
+    /// even without include_events — the runtime stores raw events for them
+    /// (reorg source of truth), so skipping the DDL breaks every bulk insert.
+    #[test]
+    fn raw_event_tables_created_for_table_only_events() {
+        let dir = std::env::temp_dir().join(format!("rindexer-ddl-test-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("abis")).unwrap();
+        std::fs::write(
+            dir.join("abis/ERC20.abi.json"),
+            r#"[{"anonymous":false,"inputs":[{"indexed":true,"name":"from","type":"address"},{"indexed":true,"name":"to","type":"address"},{"indexed":false,"name":"value","type":"uint256"}],"name":"Transfer","type":"event"},
+                {"anonymous":false,"inputs":[{"indexed":true,"name":"owner","type":"address"},{"indexed":true,"name":"spender","type":"address"},{"indexed":false,"name":"value","type":"uint256"}],"name":"Approval","type":"event"}]"#,
+        )
+        .unwrap();
+
+        let contract: Contract = serde_yaml::from_str(
+            r#"
+name: USDC
+details:
+  - network: ethereum
+    address: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    start_block: "1"
+abi: ./abis/ERC20.abi.json
+tables:
+  - name: balances
+    columns:
+      - name: holder
+        type: address
+      - name: balance
+        type: uint256
+        default: "0"
+    events:
+      - event: Transfer
+        operations:
+          - type: upsert
+            where:
+              holder: $to
+            set:
+              - column: balance
+                action: add
+                value: $value
+"#,
+        )
+        .unwrap();
+
+        let indexer = Indexer {
+            name: "ddltest".to_string(),
+            contracts: vec![contract],
+            native_transfers: NativeTransfers::default(),
+        };
+
+        let sql = generate_tables_for_indexer_sql(&dir, &indexer, false).unwrap();
+        let sql = sql.to_string();
+
+        assert!(
+            sql.contains("ddltest_usdc.transfer"),
+            "raw event table for the table-driving event must be created: {sql}"
+        );
+        assert!(
+            !sql.contains("ddltest_usdc.approval"),
+            "events neither included nor used by tables must not get raw tables: {sql}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
