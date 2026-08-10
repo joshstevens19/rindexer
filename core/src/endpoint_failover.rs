@@ -53,7 +53,7 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 use tokio::sync::broadcast;
 use tower::{Service, ServiceExt};
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 use url::Url;
 
 /// Consecutive transport failures on an endpoint before it is marked
@@ -182,6 +182,11 @@ impl EndpointHealth {
 
     fn set_chain_status(&self, status: u8) {
         self.chain_status.store(status, Ordering::Release);
+    }
+
+    pub(crate) fn record_tip(&self, tip: u64) {
+        self.observed_tip.store(tip, Ordering::Release);
+        self.has_observed_tip.store(true, Ordering::Release);
     }
 
     pub(crate) fn observed_tip(&self) -> Option<u64> {
@@ -370,6 +375,172 @@ impl FailoverState {
             lag,
         });
     }
+
+    fn emit_recovered(&self, index: usize) {
+        let _ = self.events.send(RpcEndpointEvent::Recovered {
+            network: self.network.clone(),
+            chain_id: self.chain_id,
+            url: self.endpoints[index].redacted_url.clone(),
+        });
+    }
+
+    /// Fold one round of `eth_blockNumber` probe results (index-aligned with
+    /// the endpoints, `None` = probe failed) into endpoint health:
+    ///
+    /// - an endpoint lagging more than `lag_threshold` blocks behind the
+    ///   furthest-ahead peer is marked unhealthy (`Degraded { lag }`),
+    /// - a previously unhealthy endpoint whose probe succeeded within the
+    ///   lag threshold is restored (`Recovered`) — this is the half-open
+    ///   recovery path for endpoints gated after request failures too,
+    /// - a failed probe changes nothing: hard failures are gated by the
+    ///   dispatch path, and a down endpoint must not "recover" here,
+    ///
+    /// then fails over when the active endpoint ended up unhealthy.
+    pub(crate) fn apply_probe_results(&self, tips: &[Option<u64>], lag_threshold: u64) {
+        debug_assert_eq!(tips.len(), self.endpoints.len());
+
+        let Some(peer_max_tip) = tips.iter().flatten().copied().max() else {
+            return; // every probe failed - nothing to compare against
+        };
+
+        for (index, (health, tip)) in self.endpoints.iter().zip(tips).enumerate() {
+            if health.chain_status() == CHAIN_MISMATCH {
+                continue;
+            }
+            let Some(tip) = tip else {
+                continue;
+            };
+            health.record_tip(*tip);
+
+            let lag = peer_max_tip.saturating_sub(*tip);
+            if lag > lag_threshold {
+                if health.is_healthy() {
+                    health.set_healthy(false);
+                    warn!(
+                        network = %self.network,
+                        url = %health.redacted_url,
+                        lag,
+                        lag_threshold,
+                        "RPC endpoint lagging behind peers - marked degraded"
+                    );
+                    self.emit_degraded(
+                        index,
+                        &format!(
+                            "lagging {lag} blocks behind the furthest-ahead endpoint (threshold {lag_threshold})"
+                        ),
+                        Some(lag),
+                    );
+                }
+            } else if !health.is_healthy() {
+                health.set_healthy(true);
+                health.record_success();
+                info!(
+                    network = %self.network,
+                    url = %health.redacted_url,
+                    "RPC endpoint recovered"
+                );
+                self.emit_recovered(index);
+            }
+        }
+
+        // If the probes left the active endpoint unhealthy, proactively move
+        // off it rather than waiting for a request to fail.
+        let active = self.active.load(Ordering::Acquire);
+        if !self.endpoints[active].is_healthy() {
+            if let Some(next) = self.best_alternative(active) {
+                self.switch_to(next, active, "active endpoint lagging behind peers");
+            }
+        }
+    }
+}
+
+/// How often the background prober polls `eth_blockNumber` on every endpoint
+/// of a multi-endpoint network.
+pub(crate) const PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Timeout for a single probe request.
+const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Spawn the background lag prober for a multi-endpoint network. Every
+/// `interval` it polls `eth_blockNumber` on each endpoint (verifying
+/// still-unverified endpoints first, so fallbacks get chain-checked in the
+/// background) and feeds the results into [`FailoverState::apply_probe_results`].
+///
+/// Holds only a `Weak` reference to the failover state: when the provider is
+/// dropped (e.g. on hot reload) the prober task exits on its next tick.
+pub(crate) fn spawn_lag_prober(
+    state: &Arc<FailoverState>,
+    probers: Vec<RpcClient>,
+    lag_threshold: u64,
+    interval: std::time::Duration,
+) {
+    debug_assert_eq!(probers.len(), state.endpoints.len());
+    let state = Arc::downgrade(state);
+
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(interval).await;
+
+            let Some(state) = state.upgrade() else {
+                break; // provider dropped - stop probing
+            };
+
+            let mut tips: Vec<Option<u64>> = Vec::with_capacity(probers.len());
+            for (index, (health, prober)) in state.endpoints.iter().zip(&probers).enumerate() {
+                // Background-verify endpoints that have not served yet;
+                // never probe (or trust tips from) wrong-chain endpoints.
+                if health.chain_status() == CHAIN_UNVERIFIED {
+                    match tokio::time::timeout(
+                        PROBE_TIMEOUT,
+                        verify_chain_id(prober, state.chain_id),
+                    )
+                    .await
+                    {
+                        Ok(Ok(Ok(()))) => health.set_chain_status(CHAIN_OK),
+                        Ok(Ok(Err(actual))) => {
+                            health.set_chain_status(CHAIN_MISMATCH);
+                            health.set_healthy(false);
+                            error!(
+                                network = %state.network,
+                                url = %health.redacted_url,
+                                expected = state.chain_id,
+                                actual,
+                                "RPC endpoint excluded from failover pool - wrong chain id"
+                            );
+                            state.emit_degraded(
+                                index,
+                                &format!(
+                                    "wrong chain id: expected {}, endpoint returned {}",
+                                    state.chain_id, actual
+                                ),
+                                None,
+                            );
+                        }
+                        _ => {
+                            tips.push(None);
+                            continue;
+                        }
+                    }
+                }
+                if health.chain_status() == CHAIN_MISMATCH {
+                    tips.push(None);
+                    continue;
+                }
+
+                let tip: Option<u64> = match tokio::time::timeout(PROBE_TIMEOUT, async {
+                    prober.request::<_, U64>("eth_blockNumber", ()).await
+                })
+                .await
+                {
+                    Ok(Ok(tip)) => Some(tip.to::<u64>()),
+                    _ => None,
+                };
+                tips.push(tip);
+            }
+
+            state.apply_probe_results(&tips, lag_threshold);
+        }
+    });
 }
 
 /// The failover transport itself. `S` is the per-endpoint transport (in
@@ -865,6 +1036,130 @@ mod tests {
         mocks[0].fail.store(false, Ordering::SeqCst);
         mocks[1].fail.store(false, Ordering::SeqCst);
         send_request(&service).await.expect("gated endpoints are still dialled as a last resort");
+    }
+
+    #[tokio::test]
+    async fn probe_results_gate_a_lagging_fallback() {
+        let mocks = [MockEndpoint::new(1), MockEndpoint::new(1)];
+        let (_service, state, mut events) = failover_over_mocks("ethereum", 1, &mocks);
+
+        state.apply_probe_results(&[Some(100), Some(40)], 20);
+
+        assert!(state.endpoints[0].is_healthy());
+        assert!(!state.endpoints[1].is_healthy(), "endpoint lagging 60 blocks must be gated");
+        assert_eq!(state.endpoint_switches(), 0, "active endpoint is fine - no switch");
+        let events = drain_events(&mut events);
+        assert!(
+            matches!(events.last(), Some(RpcEndpointEvent::Degraded { lag: Some(60), .. })),
+            "expected a Degraded event with the observed lag, got {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_results_evict_a_lagging_active_endpoint() {
+        let mocks = [MockEndpoint::new(1), MockEndpoint::new(1)];
+        let (_service, state, mut events) = failover_over_mocks("ethereum", 1, &mocks);
+
+        state.apply_probe_results(&[Some(40), Some(100)], 20);
+
+        assert!(!state.endpoints[0].is_healthy());
+        assert_eq!(state.endpoint_switches(), 1, "lagging active endpoint must be evicted");
+        let events = drain_events(&mut events);
+        assert!(matches!(events.first(), Some(RpcEndpointEvent::Degraded { .. })));
+        assert!(matches!(events.last(), Some(RpcEndpointEvent::Switched { .. })));
+    }
+
+    #[tokio::test]
+    async fn probe_results_recover_a_previously_degraded_endpoint() {
+        let mocks = [MockEndpoint::new(1), MockEndpoint::new(1)];
+        let (_service, state, mut events) = failover_over_mocks("ethereum", 1, &mocks);
+
+        state.apply_probe_results(&[Some(40), Some(100)], 20);
+        assert!(!state.endpoints[0].is_healthy());
+        drain_events(&mut events);
+
+        // The old endpoint catches back up within the lag threshold.
+        state.apply_probe_results(&[Some(98), Some(100)], 20);
+
+        assert!(state.endpoints[0].is_healthy(), "caught-up endpoint must be restored");
+        assert_eq!(
+            state.endpoint_switches(),
+            1,
+            "recovery must not switch back - the active endpoint is sticky"
+        );
+        let events = drain_events(&mut events);
+        assert!(
+            matches!(events.last(), Some(RpcEndpointEvent::Recovered { .. })),
+            "expected a Recovered event, got {events:?}"
+        );
+        assert_eq!(state.snapshot()[0].observed_tip, Some(98));
+    }
+
+    #[tokio::test]
+    async fn failed_probes_change_nothing() {
+        let mocks = [MockEndpoint::new(1), MockEndpoint::new(1)];
+        let (_service, state, mut events) = failover_over_mocks("ethereum", 1, &mocks);
+
+        // A failed probe must not gate an endpoint (hard failures are gated
+        // by the dispatch path) and must not recover one either.
+        state.apply_probe_results(&[None, Some(100)], 20);
+        assert!(state.endpoints[0].is_healthy());
+
+        state.endpoints[0].set_healthy(false);
+        state.apply_probe_results(&[None, Some(100)], 20);
+        assert!(
+            !state.endpoints[0].is_healthy(),
+            "a down endpoint must not recover on probe failure"
+        );
+
+        state.apply_probe_results(&[None, None], 20);
+        assert_eq!(state.endpoint_switches(), 1, "eviction of the gated active endpoint only");
+        drain_events(&mut events);
+    }
+
+    #[tokio::test]
+    async fn lag_prober_evicts_and_recovers_in_the_background() {
+        let mocks = [MockEndpoint::new(1), MockEndpoint::new(1)];
+        mocks[0].block_number.store(100, Ordering::SeqCst);
+        mocks[1].block_number.store(200, Ordering::SeqCst);
+        let (_service, state, mut events) = failover_over_mocks("ethereum", 1, &mocks);
+
+        let probers =
+            mocks.iter().map(|mock| RpcClient::new(mock.clone(), false)).collect::<Vec<_>>();
+        spawn_lag_prober(&state, probers, 20, std::time::Duration::from_millis(20));
+
+        // Wait for the prober to verify both endpoints and evict the
+        // lagging primary.
+        for _ in 0..100 {
+            if state.endpoint_switches() >= 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(state.endpoint_switches(), 1, "prober must evict the lagging primary");
+        assert!(!state.endpoints[0].is_healthy());
+        let snapshots = state.snapshot();
+        assert_eq!(
+            snapshots[0].chain_id_ok,
+            Some(true),
+            "prober verifies endpoints in the background"
+        );
+        assert_eq!(snapshots[1].chain_id_ok, Some(true));
+
+        // The primary catches up - the prober restores it.
+        mocks[0].block_number.store(200, Ordering::SeqCst);
+        for _ in 0..100 {
+            if state.endpoints[0].is_healthy() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(state.endpoints[0].is_healthy(), "prober must recover a caught-up endpoint");
+
+        let events = drain_events(&mut events);
+        assert!(events.iter().any(|event| matches!(event, RpcEndpointEvent::Degraded { .. })));
+        assert!(events.iter().any(|event| matches!(event, RpcEndpointEvent::Switched { .. })));
+        assert!(events.iter().any(|event| matches!(event, RpcEndpointEvent::Recovered { .. })));
     }
 
     #[tokio::test]

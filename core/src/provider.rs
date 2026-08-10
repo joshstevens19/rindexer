@@ -51,10 +51,11 @@ use url::Url;
 use async_trait::async_trait;
 
 use crate::endpoint_failover::{
-    rpc_endpoint_event_sender, EndpointHealth, EndpointHealthSnapshot, FailoverService,
-    FailoverState,
+    rpc_endpoint_event_sender, spawn_lag_prober, EndpointHealth, EndpointHealthSnapshot,
+    FailoverService, FailoverState, PROBE_INTERVAL,
 };
 use crate::helpers::chunk_hashset;
+use crate::indexer::reorg::reorg_safe_distance_for_chain;
 use crate::layer_extensions::{RpcLoggingLayer, RpcLoggingService};
 use crate::manifest::network::{AddressFiltering, BlockPollFrequency};
 use crate::metrics::rpc as rpc_metrics;
@@ -70,6 +71,12 @@ pub trait ChainProvider: Send + Sync + Debug {
     fn chain(&self) -> Chain;
     fn max_block_range(&self) -> Option<U64>;
     fn chain_state_notification(&self) -> Option<Sender<ChainStateNotification>>;
+
+    /// Signal from the indexing loops that the active rpc endpoint looks
+    /// unhealthy (stalled chain tip, repeated `get_latest_block` failures).
+    /// Providers backed by a failover transport mark the endpoint degraded
+    /// and switch to an alternative when one exists; the default is a no-op.
+    fn flag_active_endpoint_degraded(&self, _reason: &str) {}
 
     async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError>;
     async fn get_block_number(&self) -> Result<U64, ProviderError>;
@@ -811,6 +818,10 @@ impl ChainProvider for JsonRpcCachedProvider {
         self.chain_state_notification.clone()
     }
 
+    fn flag_active_endpoint_degraded(&self, reason: &str) {
+        JsonRpcCachedProvider::flag_active_endpoint_degraded(self, reason)
+    }
+
     async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
         self.get_latest_block().await
     }
@@ -895,6 +906,10 @@ impl<T: ChainProvider + ?Sized> ChainProvider for Arc<T> {
 
     fn chain_state_notification(&self) -> Option<Sender<ChainStateNotification>> {
         (**self).chain_state_notification()
+    }
+
+    fn flag_active_endpoint_degraded(&self, reason: &str) {
+        (**self).flag_active_endpoint_degraded(reason)
     }
 
     async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
@@ -983,6 +998,7 @@ pub mod mock {
         block_number: U64,
         receipts: Vec<AnyTransactionReceipt>,
         traces: Vec<LocalizedTransactionTrace>,
+        flagged_endpoint_reasons: std::sync::Mutex<Vec<String>>,
     }
 
     impl MockChainProvider {
@@ -995,7 +1011,13 @@ pub mod mock {
                 block_number: U64::ZERO,
                 receipts: vec![],
                 traces: vec![],
+                flagged_endpoint_reasons: std::sync::Mutex::new(vec![]),
             }
+        }
+
+        /// Reasons passed to `flag_active_endpoint_degraded`, in call order.
+        pub fn flagged_endpoint_reasons(&self) -> Vec<String> {
+            self.flagged_endpoint_reasons.lock().expect("mutex poisoned").clone()
         }
 
         pub fn with_block_number(mut self, n: u64) -> Self {
@@ -1036,6 +1058,10 @@ pub mod mock {
 
         fn chain_state_notification(&self) -> Option<Sender<ChainStateNotification>> {
             None
+        }
+
+        fn flag_active_endpoint_degraded(&self, reason: &str) {
+            self.flagged_endpoint_reasons.lock().expect("mutex poisoned").push(reason.to_string());
         }
 
         async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
@@ -1306,6 +1332,22 @@ pub async fn create_client(
             healths,
             rpc_endpoint_event_sender(),
         ));
+
+        // Multi-endpoint networks get a background prober: it polls
+        // eth_blockNumber on every endpoint so a lagging-but-alive endpoint
+        // is evicted (and later restored) even when requests keep
+        // succeeding. The lag threshold defaults to the chain's reorg safe
+        // distance - beyond that a lagging endpoint endangers the reorg
+        // window, not just freshness.
+        if transports.len() > 1 {
+            spawn_lag_prober(
+                &failover_state,
+                verifiers.clone(),
+                reorg_safe_distance_for_chain(chain_id),
+                PROBE_INTERVAL,
+            );
+        }
+
         let failover_service =
             FailoverService::new(Arc::clone(&failover_state), transports, verifiers);
 

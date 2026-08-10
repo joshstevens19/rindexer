@@ -32,6 +32,12 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
+/// Consecutive `get_latest_block` failures in the live loop before the
+/// active endpoint is flagged degraded. Errors surfacing there have already
+/// been retried through the transport-level failover, so a short streak is
+/// enough evidence.
+const LATEST_BLOCK_ERRORS_BEFORE_FLAG: u32 = 3;
+
 /// Metadata for a processed block, used for reorg detection via parent hash chain validation.
 #[allow(dead_code)]
 pub struct BlockMeta {
@@ -1106,6 +1112,7 @@ async fn live_indexing_stream(
     let mut last_seen_block_number = last_seen_block_number;
     let mut log_response_to_large_to_block: Option<U64> = None;
     let mut heartbeat = HeartbeatTracker::new(Duration::from_secs(300));
+    let mut consecutive_latest_block_errors: u32 = 0;
     let target_iteration_duration = Duration::from_millis(200);
 
     // Channel for reth-provided reorg signals (feature-gated, None for HTTP RPC).
@@ -1203,6 +1210,7 @@ async fn live_indexing_stream(
         let latest_block = cached_provider.get_latest_block().await;
         match latest_block {
             Ok(latest_block) => {
+                consecutive_latest_block_errors = 0;
                 if let Some(latest_block) = latest_block {
                     // Keep block cache for timestamp lookups
                     block_cache.put(
@@ -1233,6 +1241,12 @@ async fn live_indexing_stream(
                                 IndexingEventProgressStatus::live_log(),
                                 latest_tip
                             );
+                            // A stalled-but-responsive endpoint never errors at
+                            // the transport level, so the failover transport
+                            // cannot see it - flag it from here.
+                            cached_provider.flag_active_endpoint_degraded(&format!(
+                                "chain tip stalled at block {latest_tip} for 5 minutes"
+                            ));
                         }
                     }
 
@@ -1650,6 +1664,17 @@ async fn live_indexing_stream(
                 }
             }
             Err(e) => {
+                consecutive_latest_block_errors = consecutive_latest_block_errors.saturating_add(1);
+                if consecutive_latest_block_errors == LATEST_BLOCK_ERRORS_BEFORE_FLAG {
+                    // Errors reaching this arm already went through the
+                    // transport-level failover, so persistent failure here
+                    // means the active endpoint (or all of them) is sick -
+                    // flag it so the health gate deprioritises it and the
+                    // prober owns recovery.
+                    cached_provider.flag_active_endpoint_degraded(&format!(
+                        "get_latest_block failed {consecutive_latest_block_errors} times in a row"
+                    ));
+                }
                 error!(
                     "Error getting latest block, will try again in 1 second - err: {}",
                     e.to_string()
