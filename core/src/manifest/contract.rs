@@ -1348,6 +1348,19 @@ impl Contract {
         self.name = name;
     }
 
+    /// True when `event_name` exists on this contract ONLY as a factory
+    /// discovery event — every detail is a factory binding pointing at this
+    /// contract's name + this event. Discovery events do child-address
+    /// bookkeeping after the callback (`FactoryEventProcessingConfig::trigger_event`),
+    /// so exactly-once storage paths must keep them at-least-once: an atomic
+    /// cursor commit plus a crash there would permanently skip child
+    /// re-discovery. Mirrors `EventCallbackRegistryInformation::is_factory_filter_event`.
+    pub fn is_factory_only_event(&self, event_name: &str) -> bool {
+        self.details.iter().all(|d| {
+            d.factory.as_ref().is_some_and(|f| f.name == self.name && f.event_name == event_name)
+        })
+    }
+
     pub fn parse_abi(&self, project_path: &Path) -> Result<String, ParseAbiError> {
         match &self.abi {
             StringOrArray::Single(abi_path) => {
@@ -1473,6 +1486,18 @@ impl Contract {
             None => false, // No include_events means no raw event storage
         }
     }
+
+    /// Whether raw events for this event are stored, and therefore whether its
+    /// raw event table exists: either the event is in `include_events`, or it
+    /// drives a custom table (raw events are the source of truth for reorg
+    /// recomputation). DDL creation, migrations, and the runtime bulk insert
+    /// must all agree on this predicate.
+    pub fn stores_raw_events(&self, event_name: &str) -> bool {
+        self.is_event_in_include_events(event_name)
+            || self.tables.as_ref().is_some_and(|tables| {
+                tables.iter().any(|t| t.events.iter().any(|e| e.event == event_name))
+            })
+    }
 }
 
 #[cfg(test)]
@@ -1480,6 +1505,82 @@ mod tests {
     use serde_yaml;
 
     use super::*;
+
+    #[test]
+    fn is_factory_only_event_false_for_plain_address_contract() {
+        let yaml = r#"
+            name: Token
+            abi: ./abi.json
+            details:
+              - network: ethereum
+                address: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
+                start_block: 1
+        "#;
+        let contract: Contract = serde_yaml::from_str(yaml).unwrap();
+        assert!(!contract.is_factory_only_event("Transfer"));
+    }
+
+    #[test]
+    fn is_factory_only_event_true_for_discovery_event_only() {
+        let yaml = r#"
+            name: PoolFactory
+            abi: ./abi.json
+            details:
+              - network: ethereum
+                factory:
+                  name: PoolFactory
+                  address: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
+                  event_name: PoolCreated
+                  input_name: pool
+                  abi: ./abi.json
+        "#;
+        let contract: Contract = serde_yaml::from_str(yaml).unwrap();
+        assert!(contract.is_factory_only_event("PoolCreated"));
+        // any other event on the same contract is not the discovery event
+        assert!(!contract.is_factory_only_event("Transfer"));
+    }
+
+    #[test]
+    fn is_factory_only_event_false_for_factory_child_contract() {
+        // Child contract shape: the factory binding names a DIFFERENT contract.
+        let yaml = r#"
+            name: Pool
+            abi: ./abi.json
+            details:
+              - network: ethereum
+                factory:
+                  name: PoolFactory
+                  address: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
+                  event_name: PoolCreated
+                  input_name: pool
+                  abi: ./abi.json
+        "#;
+        let contract: Contract = serde_yaml::from_str(yaml).unwrap();
+        assert!(!contract.is_factory_only_event("PoolCreated"));
+    }
+
+    #[test]
+    fn is_factory_only_event_false_when_any_detail_is_not_factory() {
+        // Mixed details: one factory binding + one plain address — the event
+        // does not exist ONLY as a discovery event.
+        let yaml = r#"
+            name: PoolFactory
+            abi: ./abi.json
+            details:
+              - network: ethereum
+                factory:
+                  name: PoolFactory
+                  address: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
+                  event_name: PoolCreated
+                  input_name: pool
+                  abi: ./abi.json
+              - network: base
+                address: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
+                start_block: 1
+        "#;
+        let contract: Contract = serde_yaml::from_str(yaml).unwrap();
+        assert!(!contract.is_factory_only_event("PoolCreated"));
+    }
 
     #[test]
     fn test_contract_include_events_simple() {

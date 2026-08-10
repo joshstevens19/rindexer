@@ -3,11 +3,12 @@
 use tokio_postgres::types::ToSql;
 
 use super::query_builder::{
-    build_cte_header, build_delete_body, build_sequence_condition, build_set_clause,
-    build_to_process_cte, build_to_process_cte_aggregated, build_update_body, build_upsert_body,
-    build_upsert_set_clause, build_upsert_set_clause_latest_by_sequence, build_where_clause,
-    build_where_condition, format_table_name, ColumnAggregate, ColumnInfo, SetClauseType,
-    UpsertClauseType,
+    build_arithmetic_insert_expr, build_cte_header, build_delete_body, build_sequence_condition,
+    build_set_clause, build_to_process_cte, build_to_process_cte_aggregated, build_update_body,
+    build_upsert_body, build_upsert_set_clause, build_upsert_set_clause_arithmetic,
+    build_upsert_set_clause_latest_by_sequence, build_where_clause, build_where_condition,
+    format_table_name, rewrite_custom_where_for_arithmetic, ColumnAggregate, ColumnInfo,
+    SetClauseType, UpsertClauseType,
 };
 use crate::database::batch_operations::{
     BatchOperationAction, BatchOperationColumnBehavior, BatchOperationType, DynamicColumnDefinition,
@@ -177,6 +178,10 @@ async fn execute_batch(
                     ColumnAggregate::Max
                 } else if min_columns.contains(&name) {
                     ColumnAggregate::Min
+                } else if col.sql_type.is_array() {
+                    // array_agg over arrays adds a dimension ([1] yields NULL);
+                    // max(anyarray) is a valid deterministic pick
+                    ColumnAggregate::Max
                 } else if set_columns.contains(&name) {
                     ColumnAggregate::LastBySeq
                 } else {
@@ -275,6 +280,14 @@ async fn execute_batch(
             };
 
             let mut update_clauses: Vec<String> = Vec::new();
+            // INSERT-branch SELECT expression overrides for arithmetic columns:
+            // a row created by add/subtract must start from the column default
+            // (default ± delta), not the raw delta.
+            let mut insert_exprs: Vec<(&str, String)> = Vec::new();
+            // Overriding the INSERT branch changes what EXCLUDED.<col> carries,
+            // so EXCLUDED references to arithmetic columns inside the pushed-down
+            // condition must be rewritten back to the raw delta.
+            let mut rewritten_where = custom_where.map(str::to_string);
             let arithmetic_without_sequence_guard = has_arithmetic && sequence_col.is_some();
 
             for col in &set_columns {
@@ -303,23 +316,34 @@ async fn execute_batch(
                 }
             }
 
-            for col in &add_columns {
-                if !where_columns.contains(col) && !distinct_cols.contains(col) {
-                    update_clauses.push(build_upsert_set_clause(
-                        col,
-                        &formatted_table_name,
-                        UpsertClauseType::Add,
-                    ));
-                }
-            }
-
-            for col in &subtract_columns {
-                if !where_columns.contains(col) && !distinct_cols.contains(col) {
-                    update_clauses.push(build_upsert_set_clause(
-                        col,
-                        &formatted_table_name,
-                        UpsertClauseType::Subtract,
-                    ));
+            for (cols, clause_type) in [
+                (&add_columns, UpsertClauseType::Add),
+                (&subtract_columns, UpsertClauseType::Subtract),
+            ] {
+                for col in cols {
+                    if !where_columns.contains(col) && !distinct_cols.contains(col) {
+                        let insert_default = columns
+                            .iter()
+                            .find(|c| c.name == *col)
+                            .and_then(|c| c.insert_default.as_deref());
+                        update_clauses.push(build_upsert_set_clause_arithmetic(
+                            col,
+                            &formatted_table_name,
+                            insert_default,
+                        ));
+                        insert_exprs.push((
+                            col,
+                            build_arithmetic_insert_expr(col, clause_type, insert_default),
+                        ));
+                        if let Some(w) = rewritten_where.as_mut() {
+                            *w = rewrite_custom_where_for_arithmetic(
+                                w,
+                                col,
+                                clause_type,
+                                insert_default,
+                            );
+                        }
+                    }
                 }
             }
 
@@ -349,7 +373,8 @@ async fn execute_batch(
                 &conflict_columns,
                 update_clauses,
                 if arithmetic_without_sequence_guard { None } else { sequence_col },
-                custom_where,
+                rewritten_where.as_deref(),
+                &insert_exprs,
             ));
 
             let params: Vec<&(dyn ToSql + Sync)> =

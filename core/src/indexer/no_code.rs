@@ -17,7 +17,11 @@ use super::native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME}
 use super::tables::{process_table_operations, ProgressCheckpointConfig, TableRuntime, TxMetadata};
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::clickhouse::setup::{setup_clickhouse, SetupClickhouseError};
-use crate::database::generate::generate_event_table_full_name;
+use crate::database::generate::{
+    generate_event_table_full_name, generate_indexer_contract_schema_name,
+};
+use crate::database::postgres::client::BulkCursorUpdate;
+use crate::database::postgres::generate::generate_internal_event_table_name;
 use crate::database::sql_type_wrapper::{
     map_ethereum_wrapper_to_json, map_log_params_to_ethereum_wrapper, EthereumSqlTypeWrapper,
 };
@@ -105,6 +109,12 @@ pub fn resolve_table_column_types(
         // Resolve column types in custom tables
         if let Some(tables) = &mut contract.tables {
             resolve_tables_against_abi(tables, &event_abi_types)?;
+            for table in tables.iter() {
+                super::tables::warn_on_unusable_arithmetic_defaults(
+                    table,
+                    &format!("{}.{}", contract.name, table.name),
+                );
+            }
         }
     }
 
@@ -116,6 +126,12 @@ pub fn resolve_table_column_types(
                 .map_err(|e| SetupNoCodeError::ProcessIndexersError(e.into()))?;
             let event_abi_types = build_event_abi_types(abi_items)?;
             resolve_tables_against_abi(tables, &event_abi_types)?;
+            for table in tables.iter() {
+                super::tables::warn_on_unusable_arithmetic_defaults(
+                    table,
+                    &format!("native_transfers.{}", table.name),
+                );
+            }
         }
     }
 
@@ -351,6 +367,18 @@ struct NoCodeCallbackParams {
     constants: Arc<Constants>,
     /// Custom Multicall3 addresses per network (keyed by network name)
     multicall_addresses: Arc<HashMap<String, Option<String>>>,
+    /// Factory discovery event: child-address bookkeeping persists only AFTER
+    /// the callback returns (FactoryEventProcessingConfig::trigger_event), so
+    /// these events must stay on the legacy cursor path — an atomically
+    /// committed cursor + crash before the address persist would permanently
+    /// skip re-discovery of child contracts.
+    is_factory_event: bool,
+    /// Effective callback concurrency is 1 (event indexed in order, or global
+    /// callback_concurrency <= 1). The atomic cursor is only ordering-safe when
+    /// batches of one stream commit serially — with concurrency > 1 a later
+    /// batch's monotonic cursor commit can leapfrog an uncommitted earlier
+    /// batch and a crash then permanently skips it.
+    atomic_safe_concurrency: bool,
 }
 
 struct EventCallbacks {
@@ -634,93 +662,216 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                 indexed_count += 1;
             }
 
-            // Only store raw events if include_events was specified for this event
-            if params.store_raw_events {
-                if let Some(postgres) = &params.postgres {
-                    if !sql_bulk_data.is_empty() {
-                        if let Err(e) = postgres
-                            .insert_bulk(
-                                &params.sql_event_table_name,
-                                &params.sql_column_names,
-                                &sql_bulk_data,
-                            )
-                            .await
-                        {
+            // Atomic-cursor eligibility: ONLY when Postgres is the SOLE raw-event
+            // sink. With ClickHouse/CSV alongside, committing the cursor at the PG
+            // write would turn their crash-recovery from at-least-once into silent
+            // at-most-once (a committed cursor skips the range on restart before
+            // the other sinks ever saw it) — those configs keep the legacy path
+            // (plain insert_bulk; the async task advances the cursor only after
+            // the whole callback succeeds). The exactly-once contract additionally
+            // requires a SINGLE writer process and effective callback concurrency 1
+            // (the default; see trigger_event in process.rs).
+            let atomic_pg_cursor = params.store_raw_events
+                && params.postgres.is_some()
+                && params.clickhouse.is_none()
+                && params.csv.is_none()
+                // streams/chat dispatch AFTER the storage write — with the
+                // cursor already committed, a crash in that window would skip
+                // their messages on restart (at-most-once). Legacy keeps them
+                // at-least-once: a crash re-fetches and re-dispatches.
+                && params.streams_clients.is_none()
+                && params.chat_clients.is_none()
+                // factory discovery events: child-address bookkeeping persists
+                // AFTER the callback — atomic cursor would make a crash there
+                // permanently skip re-discovery (see field docs).
+                && !params.is_factory_event
+                // exactly-once needs serialized batch commits (see field docs).
+                && params.atomic_safe_concurrency;
+
+            // ORDERING CONTRACT (two arms):
+            //   ATOMIC arm (postgres sole raw sink, non-factory, serialized
+            //   commits): table operations FIRST — their shutdown checkpoint is
+            //   suppressed because it advances the SAME rindexer_internal row the
+            //   atomic commit owns (a SIGTERM mid-table-ops would otherwise skip
+            //   un-inserted raw rows on restart) — then the atomic
+            //   [batch + cursor] commit LAST: a crash anywhere earlier re-runs
+            //   the whole batch; a crash after it never re-fetches committed
+            //   raw rows.
+            //   Deliberate tradeoff: table ops commit in their OWN transactions,
+            //   so a failure/crash between them and the atomic commit re-runs
+            //   them on retry (duplicate Insert-ops / re-applied arithmetic) —
+            //   the same at-least-once exposure they have on the legacy path
+            //   today. Running them after the atomic commit instead would turn
+            //   a crash in between into a PERMANENT skip (cursor already past
+            //   the batch), which is strictly worse. Folding them into the same
+            //   transaction as the raw insert is the real fix and is the
+            //   direction of the sync_together work (PR #453's block sink).
+            //   LEGACY arm (CH/CSV alongside PG, factory discovery events,
+            //   concurrency > 1, or no PG): the ORIGINAL ordering — raw sinks
+            //   first, table ops after — so a transient raw-sink failure retries
+            //   BEFORE table ops ran. Insert-type table ops are append-only (no
+            //   dedup) and arithmetic upserts are not idempotent, so re-running
+            //   them on every callback retry would duplicate/double-apply.
+            //   Cursor advance stays with the async task after the callback
+            //   succeeds (at-least-once, pre-existing semantics).
+            // Streams/chat run after either arm and deliberately never propagate
+            // errors (see the stream error arm below).
+            let run_table_ops = !params.tables.is_empty() && !table_events_data.is_empty();
+
+            if atomic_pg_cursor {
+                if run_table_ops {
+                    if let Err(e) = process_table_operations(
+                        &params.tables,
+                        &params.event_info.name,
+                        &table_events_data,
+                        params.postgres.clone(),
+                        params.clickhouse.clone(),
+                        params.providers.clone(),
+                        &params.constants,
+                        &params.multicall_addresses,
+                        None,
+                    )
+                    .await
+                    {
+                        // Don't log as error if it's a graceful shutdown
+                        if e.contains("Shutdown") {
+                            info!(
+                                "{}::{} - Graceful shutdown during table processing",
+                                params.contract_name, params.event_info.name
+                            );
+                        } else {
                             error!(
-                                "{}::{} - Error performing postgres bulk insert: {}",
+                                "{}::{} - Error processing table operations: {}",
                                 params.contract_name, params.event_info.name, e
                             );
-                            return Err(e.to_string());
+                        }
+                        return Err(e);
+                    }
+                }
+
+                if params.store_raw_events {
+                    if let Some(postgres) = &params.postgres {
+                        if !sql_bulk_data.is_empty() {
+                            // Atomic [batch + last-synced cursor] commit: closes the
+                            // double-index race (crash between batch insert and the
+                            // async cursor task re-fetched and re-inserted the logs).
+                            let schema = generate_indexer_contract_schema_name(
+                                &params.indexer_name,
+                                &params.contract_name,
+                            );
+                            let cursor = BulkCursorUpdate {
+                                internal_table_name: generate_internal_event_table_name(
+                                    &schema,
+                                    &params.event_info.name,
+                                ),
+                                network: network.clone(),
+                                to_block: to_block.to(),
+                            };
+                            if let Err(e) = postgres
+                                .insert_bulk_with_cursor(
+                                    &params.sql_event_table_name,
+                                    &params.sql_column_names,
+                                    &sql_bulk_data,
+                                    &cursor,
+                                )
+                                .await
+                            {
+                                error!(
+                                    "{}::{} - Error performing postgres bulk insert: {}",
+                                    params.contract_name, params.event_info.name, e
+                                );
+                                return Err(e.to_string());
+                            }
+                        }
+                    }
+                }
+            } else {
+                // LEGACY arm — original ordering + original semantics.
+                if params.store_raw_events {
+                    if let Some(postgres) = &params.postgres {
+                        if !sql_bulk_data.is_empty() {
+                            if let Err(e) = postgres
+                                .insert_bulk(
+                                    &params.sql_event_table_name,
+                                    &params.sql_column_names,
+                                    &sql_bulk_data,
+                                )
+                                .await
+                            {
+                                error!(
+                                    "{}::{} - Error performing postgres bulk insert: {}",
+                                    params.contract_name, params.event_info.name, e
+                                );
+                                return Err(e.to_string());
+                            }
+                        }
+                    }
+
+                    if let Some(clickhouse) = &params.clickhouse {
+                        if !sql_bulk_data.is_empty() {
+                            if let Err(e) = clickhouse
+                                .insert_bulk(
+                                    &params.sql_event_table_name,
+                                    &params.sql_column_names,
+                                    &sql_bulk_data,
+                                )
+                                .await
+                            {
+                                error!(
+                                    "{}::{} - Error performing clickhouse bulk insert: {}",
+                                    params.contract_name, params.event_info.name, e
+                                );
+                                return Err(e.to_string());
+                            };
+                        }
+                    }
+
+                    if let Some(csv) = &params.csv {
+                        if !csv_bulk_data.is_empty() {
+                            if let Err(e) = csv.append_bulk(csv_bulk_data).await {
+                                return Err(e.to_string());
+                            }
                         }
                     }
                 }
 
-                if let Some(clickhouse) = &params.clickhouse {
-                    if !sql_bulk_data.is_empty() {
-                        if let Err(e) = clickhouse
-                            .insert_bulk(
-                                &params.sql_event_table_name,
-                                &params.sql_column_names,
-                                &sql_bulk_data,
-                            )
-                            .await
-                        {
+                if run_table_ops {
+                    // Create checkpoint config for saving progress on shutdown
+                    let checkpoint_config = ProgressCheckpointConfig::new(
+                        params.indexer_name.clone(),
+                        params.contract_name.clone(),
+                        params.event_info.name.clone(),
+                        params.postgres.clone(),
+                    );
+                    if let Err(e) = process_table_operations(
+                        &params.tables,
+                        &params.event_info.name,
+                        &table_events_data,
+                        params.postgres.clone(),
+                        params.clickhouse.clone(),
+                        params.providers.clone(),
+                        &params.constants,
+                        &params.multicall_addresses,
+                        Some(&checkpoint_config),
+                    )
+                    .await
+                    {
+                        // Don't log as error if it's a graceful shutdown
+                        if e.contains("Shutdown") {
+                            info!(
+                                "{}::{} - Graceful shutdown during table processing",
+                                params.contract_name, params.event_info.name
+                            );
+                        } else {
                             error!(
-                                "{}::{} - Error performing clickhouse bulk insert: {}",
+                                "{}::{} - Error processing table operations: {}",
                                 params.contract_name, params.event_info.name, e
                             );
-                            return Err(e.to_string());
-                        };
-                    }
-                }
-
-                if let Some(csv) = &params.csv {
-                    if !csv_bulk_data.is_empty() {
-                        if let Err(e) = csv.append_bulk(csv_bulk_data).await {
-                            return Err(e.to_string());
                         }
+                        return Err(e);
                     }
                 }
             }
-
-            // Process table operations
-            if !params.tables.is_empty() && !table_events_data.is_empty() {
-                // Create checkpoint config for saving progress on shutdown
-                let checkpoint_config = ProgressCheckpointConfig::new(
-                    params.indexer_name.clone(),
-                    params.contract_name.clone(),
-                    params.event_info.name.clone(),
-                    params.postgres.clone(),
-                );
-                if let Err(e) = process_table_operations(
-                    &params.tables,
-                    &params.event_info.name,
-                    &table_events_data,
-                    params.postgres.clone(),
-                    params.clickhouse.clone(),
-                    params.providers.clone(),
-                    &params.constants,
-                    &params.multicall_addresses,
-                    Some(&checkpoint_config),
-                )
-                .await
-                {
-                    // Don't log as error if it's a graceful shutdown
-                    if e.contains("Shutdown") {
-                        info!(
-                            "{}::{} - Graceful shutdown during table processing",
-                            params.contract_name, params.event_info.name
-                        );
-                    } else {
-                        error!(
-                            "{}::{} - Error processing table operations: {}",
-                            params.contract_name, params.event_info.name, e
-                        );
-                    }
-                    return Err(e);
-                }
-            }
-
             // Build the cross-block chat payload first (one clone per event)
             // so the streams path can consume `event_message_data` into
             // per-block buckets without a second clone pass. Finalized
@@ -1058,11 +1209,14 @@ async fn process_contract(
             })
             .unwrap_or_default();
 
-        // Determine if this event should store raw events
-        // Store raw events if: (a) event is in include_events, OR (b) tables are defined
-        // (tables need raw events as source of truth for reorg recomputation)
-        let has_tables = !contract_tables.is_empty();
-        let store_raw_events = contract.is_event_in_include_events(&event_name) || has_tables;
+        // Store raw events when this event's raw event table exists — same
+        // predicate the DDL and migrations use (include_events plus events
+        // that drive custom tables, the reorg recomputation source of truth)
+        let store_raw_events = contract.stores_raw_events(&event_name);
+
+        let is_factory_event = contract.is_factory_only_event(&event_info.name);
+        let atomic_safe_concurrency =
+            index_event_in_order || manifest.config.callback_concurrency.unwrap_or(1) <= 1;
 
         let tables_arc = Arc::new(contract_tables);
         let streams_arc = Arc::new(streams_client);
@@ -1091,6 +1245,8 @@ async fn process_contract(
                 providers: providers.clone(),
                 constants: Arc::new(manifest.constants.clone()),
                 multicall_addresses: multicall_addresses.clone(),
+                is_factory_event,
+                atomic_safe_concurrency,
             }))
             .event_callback,
             tables: tables_arc,
@@ -1239,6 +1395,12 @@ pub async fn process_trace_events(
             providers,
             constants: Arc::new(manifest.constants.clone()),
             multicall_addresses,
+            is_factory_event: false,
+            // Trace/native-transfer streams keep legacy cursor semantics: their
+            // OUTER cursor advance is unconditional (evm_trace_update_progress…
+            // ignores the callback result), so the atomic path buys nothing and
+            // must not engage.
+            atomic_safe_concurrency: false,
         });
 
         let event = TraceCallbackRegistryInformation {

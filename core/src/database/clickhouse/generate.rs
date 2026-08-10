@@ -64,10 +64,11 @@ pub fn generate_tables_for_indexer_clickhouse(
             sql.push_str(format!("CREATE DATABASE IF NOT EXISTS {};", schema_name).as_str());
             info!("Creating database if not exists: {}", schema_name);
 
-            // Only create raw event tables for events in include_events (not for table-only events)
+            // Create raw event tables for every event whose raw events the
+            // runtime stores (include_events plus table-driving events)
             let raw_events: Vec<_> = event_names
                 .iter()
-                .filter(|e| contract.is_event_in_include_events(&e.name))
+                .filter(|e| contract.stores_raw_events(&e.name))
                 .cloned()
                 .collect();
 

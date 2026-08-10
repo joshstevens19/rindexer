@@ -1,6 +1,7 @@
 import { defineConfig } from "vocs";
 
 export default defineConfig({
+  renderStrategy: "full-static",
   head: (
     <>
       <meta property="og:type" content="website" />

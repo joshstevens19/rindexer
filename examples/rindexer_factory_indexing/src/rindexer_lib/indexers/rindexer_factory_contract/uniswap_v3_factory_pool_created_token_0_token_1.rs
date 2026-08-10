@@ -62,18 +62,18 @@ EthereumSqlTypeWrapper::U256(result.tx_information.log_index)
                     let rows = ["contract_address".to_string(), "token_0".to_string(), "token_1".to_string(), "fee".to_string(), "tick_spacing".to_string(), "pool".to_string(), "tx_hash".to_string(), "block_number".to_string(), "block_timestamp".to_string(), "block_hash".to_string(), "network".to_string(), "tx_index".to_string(), "log_index".to_string()];
 
                     let result = context
-                        .database
-                        .insert_bulk(
-                            "rindexer_factory_contract_uniswap_v3_factory_pool_created_token_0_token_1.pool_created",
-                            &rows,
-                            &postgres_bulk_data,
-                        )
-                        .await;
+                            .database
+                            .insert_bulk(
+                                "rindexer_factory_contract_uniswap_v3_factory_pool_created_token_0_token_1.pool_created",
+                                &rows,
+                                &postgres_bulk_data,
+                            )
+                            .await;
 
-                    if let Err(e) = result {
-                        rindexer_error!("UniswapV3FactoryPoolCreatedToken0Token1EventType::PoolCreated inserting bulk data: {:?}", e);
-                        return Err(e.to_string());
-                    }
+                        if let Err(e) = result {
+                            rindexer_error!("UniswapV3FactoryPoolCreatedToken0Token1EventType::PoolCreated inserting bulk data: {:?}", e);
+                            return Err(e.to_string());
+                        }
 
 
                                 rindexer_info!(
