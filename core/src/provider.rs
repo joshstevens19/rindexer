@@ -124,6 +124,20 @@ const DEFAULT_RPC_SUPPORTED_ACCOUNT_FILTERS: usize = 1000;
 /// Maximum RPC batching size available for the provider.
 pub const RPC_CHUNK_SIZE: usize = 1000;
 
+/// Maximum retries the transport-level retry layer performs on retryable
+/// (rate-limit shaped) errors before surfacing the error.
+///
+/// This used to be 5000, which meant a sick endpoint could spin inside the
+/// retry layer for hours and neither the failover transport nor the indexing
+/// loops (which have their own recovery: range halving, 1s poll retries)
+/// ever saw the error. Kept in single digits so persistent failure surfaces
+/// quickly; the failover layer owns persistence across endpoints.
+pub(crate) const MAX_RATE_LIMIT_RETRIES: u32 = 5;
+
+// Compile-time guard on the retune: single digits or the failover layer and
+// the indexing loops never see persistent endpoint failure.
+const _: () = assert!(MAX_RATE_LIMIT_RETRIES <= 9);
+
 /// Recommended chunk sizes for batch RPC requests.
 /// See: https://www.alchemy.com/docs/best-practices-when-using-alchemy#2-avoid-high-batch-cardinality
 pub const RECOMMENDED_RPC_CHUNK_SIZE: usize = 50;
@@ -1211,7 +1225,11 @@ pub async fn create_client(
         ));
     };
 
-    let retry_layer = RetryBackoffLayer::new(5000, 1000, compute_units_per_second.unwrap_or(660));
+    let retry_layer = RetryBackoffLayer::new(
+        MAX_RATE_LIMIT_RETRIES,
+        1000,
+        compute_units_per_second.unwrap_or(660),
+    );
 
     let (client, provider, failover) = if primary_url.ends_with(".ipc") {
         // IPC endpoints (usually a local reth node) are excluded from
