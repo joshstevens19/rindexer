@@ -78,6 +78,14 @@ pub trait ChainProvider: Send + Sync + Debug {
     /// and switch to an alternative when one exists; the default is a no-op.
     fn flag_active_endpoint_degraded(&self, _reason: &str) {}
 
+    /// Monotonic count of endpoint failovers performed by the underlying
+    /// transport since boot. The indexing loops poll this to notice a switch
+    /// and reset endpoint-specific state (block range shrink state, the
+    /// reorg parent-hash window). Always 0 for single-endpoint providers.
+    fn endpoint_switches(&self) -> u64 {
+        0
+    }
+
     async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError>;
     async fn get_block_number(&self) -> Result<U64, ProviderError>;
     async fn get_logs(&self, event_filter: &RindexerEventFilter)
@@ -822,6 +830,10 @@ impl ChainProvider for JsonRpcCachedProvider {
         JsonRpcCachedProvider::flag_active_endpoint_degraded(self, reason)
     }
 
+    fn endpoint_switches(&self) -> u64 {
+        JsonRpcCachedProvider::endpoint_switches(self)
+    }
+
     async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
         self.get_latest_block().await
     }
@@ -912,6 +924,10 @@ impl<T: ChainProvider + ?Sized> ChainProvider for Arc<T> {
         (**self).flag_active_endpoint_degraded(reason)
     }
 
+    fn endpoint_switches(&self) -> u64 {
+        (**self).endpoint_switches()
+    }
+
     async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
         (**self).get_latest_block().await
     }
@@ -999,6 +1015,7 @@ pub mod mock {
         receipts: Vec<AnyTransactionReceipt>,
         traces: Vec<LocalizedTransactionTrace>,
         flagged_endpoint_reasons: std::sync::Mutex<Vec<String>>,
+        endpoint_switches: std::sync::atomic::AtomicU64,
     }
 
     impl MockChainProvider {
@@ -1012,12 +1029,19 @@ pub mod mock {
                 receipts: vec![],
                 traces: vec![],
                 flagged_endpoint_reasons: std::sync::Mutex::new(vec![]),
+                endpoint_switches: std::sync::atomic::AtomicU64::new(0),
             }
         }
 
         /// Reasons passed to `flag_active_endpoint_degraded`, in call order.
         pub fn flagged_endpoint_reasons(&self) -> Vec<String> {
             self.flagged_endpoint_reasons.lock().expect("mutex poisoned").clone()
+        }
+
+        /// Simulate an endpoint failover on this provider (bumps the counter
+        /// returned by `ChainProvider::endpoint_switches`).
+        pub fn bump_endpoint_switches(&self) {
+            self.endpoint_switches.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         }
 
         pub fn with_block_number(mut self, n: u64) -> Self {
@@ -1062,6 +1086,10 @@ pub mod mock {
 
         fn flag_active_endpoint_degraded(&self, reason: &str) {
             self.flagged_endpoint_reasons.lock().expect("mutex poisoned").push(reason.to_string());
+        }
+
+        fn endpoint_switches(&self) -> u64 {
+            self.endpoint_switches.load(std::sync::atomic::Ordering::Acquire)
         }
 
         async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use alloy::primitives::{B256, U64};
 use anyhow::Context;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::event::callback_registry::ReorgNotification;
 use crate::metrics::indexing as metrics;
@@ -35,6 +35,16 @@ pub struct ReorgCoordinator {
     /// expected to pre-filter out `None`-valued entries at construction time.
     streams_clients: Vec<Arc<Option<StreamsClients>>>,
     blocks_since_flush: u64,
+    /// When `Some(watermark)`, parent-hash validation is suspended following
+    /// an RPC endpoint switch. A lagging replacement endpoint can serve
+    /// different-but-canonical hashes for blocks the previous endpoint
+    /// already validated; treating those as parent-hash mismatches would
+    /// trigger a spurious rollback (DB deletes + stream retractions). While
+    /// suspended, tips at or below the watermark (the last validated window
+    /// block at switch time) are ignored; the first tip past it revalidates
+    /// the whole window against the new endpoint and either resumes cleanly
+    /// or reports the divergence as a real reorg.
+    suspended_below: Option<u64>,
 }
 
 impl ReorgCoordinator {
@@ -57,7 +67,33 @@ impl ReorgCoordinator {
             derived_tables,
             streams_clients,
             blocks_since_flush: 0,
+            suspended_below: None,
         })
+    }
+
+    /// Suspend parent-hash validation because the provider failed over to a
+    /// different RPC endpoint. The watermark is the last validated window
+    /// block: tips at or below it are ignored (a lagging replacement
+    /// endpoint must not be compared against blocks the previous endpoint
+    /// validated), and the first tip past it triggers a full window
+    /// revalidation against the new endpoint before validation resumes.
+    ///
+    /// No-op when the window is empty (nothing validated yet) or validation
+    /// is already suspended (the watermark cannot move while suspended -
+    /// nothing is inserted).
+    pub fn suspend_for_endpoint_switch(&mut self) {
+        if self.suspended_below.is_some() {
+            return;
+        }
+        let Some(watermark) = self.window.latest_block() else {
+            return;
+        };
+        self.suspended_below = Some(watermark);
+        warn!(
+            network = %self.network,
+            watermark,
+            "RPC endpoint switched - suspending parent-hash reorg validation until the new endpoint's tip passes the last validated block"
+        );
     }
 
     /// Called on each new block during live indexing.
@@ -68,6 +104,26 @@ impl ReorgCoordinator {
         block_hash: B256,
         parent_hash: B256,
     ) -> anyhow::Result<Option<ReorgTask>> {
+        if let Some(watermark) = self.suspended_below {
+            if block_number <= watermark {
+                // The replacement endpoint is still behind the blocks the
+                // previous endpoint validated. Its (possibly
+                // different-but-canonical) hashes must not be compared
+                // against the window - ignore the tip until it passes the
+                // watermark.
+                debug!(
+                    network = %self.network,
+                    block_number,
+                    watermark,
+                    "Ignoring tip at/below the validated watermark while reorg validation is suspended (endpoint switch)"
+                );
+                return Ok(None);
+            }
+            if let Some(task) = self.resume_after_endpoint_switch(watermark).await? {
+                return Ok(Some(task));
+            }
+        }
+
         match self.window.validate_parent(block_number, parent_hash) {
             ParentValidation::Valid => {
                 self.window.insert(block_number, block_hash, parent_hash);
@@ -142,6 +198,103 @@ impl ReorgCoordinator {
                 self.handle_mismatch(block_number, expected, got).await
             }
         }
+    }
+
+    /// The new endpoint's tip passed the suspension watermark: revalidate the
+    /// whole window against its canonical view before resuming parent-hash
+    /// validation.
+    ///
+    /// - Every window hash the new endpoint confirms → resume cleanly.
+    /// - A divergent hash at or below the watermark → the blocks we indexed
+    ///   from the previous endpoint were orphaned: that is a REAL reorg from
+    ///   this indexer's perspective, so a `ReorgTask` rolling back from the
+    ///   first divergent block is returned.
+    /// - Window cannot be refetched (or no provider) → rebuild the window
+    ///   from scratch: conservative, no rollback without evidence, at the
+    ///   cost of a shallow-reorg detection blind spot for blocks at or below
+    ///   the watermark.
+    async fn resume_after_endpoint_switch(
+        &mut self,
+        watermark: u64,
+    ) -> anyhow::Result<Option<ReorgTask>> {
+        self.suspended_below = None;
+
+        let block_numbers = self.window.block_numbers();
+        if block_numbers.is_empty() {
+            return Ok(None);
+        }
+
+        let Some(provider) = &self.provider else {
+            warn!(
+                network = %self.network,
+                watermark,
+                "No provider available to revalidate the reorg window after an endpoint switch - rebuilding the window from scratch"
+            );
+            self.window.clear();
+            return Ok(None);
+        };
+
+        let block_numbers_u64: Vec<U64> = block_numbers.iter().map(|&n| U64::from(n)).collect();
+        let blocks = match provider.get_block_by_number_batch(&block_numbers_u64, false).await {
+            Ok(blocks) => blocks,
+            Err(e) => {
+                warn!(
+                    network = %self.network,
+                    watermark,
+                    error = %e,
+                    "Failed to refetch the reorg window from the new endpoint - rebuilding the window from scratch (shallow reorgs at or below the watermark will not be detected)"
+                );
+                self.window.clear();
+                return Ok(None);
+            }
+        };
+
+        // Compare the window against the new endpoint's canonical view.
+        // Blocks the endpoint did not return are inconclusive and skipped
+        // rather than treated as divergence.
+        let canonical: std::collections::BTreeMap<u64, B256> =
+            blocks.iter().map(|b| (b.header.number, b.header.hash)).collect();
+
+        let divergence = block_numbers.iter().copied().find(|number| {
+            match (canonical.get(number), self.window.get(*number)) {
+                (Some(canonical_hash), Some((stored_hash, _))) => canonical_hash != stored_hash,
+                _ => false,
+            }
+        });
+
+        let Some(fork_point) = divergence else {
+            info!(
+                network = %self.network,
+                watermark,
+                "Reorg window revalidated after endpoint switch - resuming parent-hash validation"
+            );
+            return Ok(None);
+        };
+
+        // The new endpoint disagrees about blocks we already validated and
+        // indexed: those blocks were orphaned while (or before) we switched.
+        let depth = watermark.saturating_sub(fork_point) + 1;
+        warn!(
+            network = %self.network,
+            fork_point,
+            watermark,
+            depth,
+            "Endpoint switch revealed a reorg - window hashes diverge from the new endpoint's canonical chain"
+        );
+        metrics::record_reorg_detection_source(&self.network, "endpoint_switch");
+        metrics::record_reorg(&self.network, depth);
+
+        let canonical_blocks: Vec<(u64, B256, B256)> =
+            blocks.iter().map(|b| (b.header.number, b.header.hash, b.header.parent_hash)).collect();
+
+        Ok(Some(ReorgTask {
+            network: self.network.clone(),
+            fork_point,
+            detection_point: watermark,
+            event_tables: self.event_tables.clone(),
+            derived_tables: self.derived_tables.clone(),
+            canonical_blocks,
+        }))
     }
 
     /// Insert a block after validation, or trigger reorg detection on mismatch.
@@ -565,6 +718,7 @@ mod tests {
             derived_tables: vec![],
             streams_clients: vec![],
             blocks_since_flush: 0,
+            suspended_below: None,
         }
     }
 
@@ -648,6 +802,193 @@ mod tests {
 
         let guard = coordinator.lock().await;
         assert!(guard.window.get(12).is_some(), "block 12 should remain in the window");
+    }
+
+    // ======================================================================
+    // Endpoint-switch suspension of parent-hash validation
+    //
+    // Failing over near the tip can hand the window different-but-canonical
+    // hashes from a lagging replacement endpoint. These tests lock in the
+    // mitigation: no rollback while suspended, full window revalidation on
+    // resume, and real reorgs still detected (both below the watermark via
+    // the revalidation and above it via normal parent-hash validation).
+    // ======================================================================
+
+    use crate::provider::mock::MockChainProvider;
+    use alloy::network::AnyRpcBlock;
+
+    fn make_canonical_block(number: u64, block_hash: B256, parent_hash: B256) -> AnyRpcBlock {
+        use alloy::network::{AnyHeader, AnyRpcHeader};
+        use alloy::rpc::types::{Block, BlockTransactions};
+        AnyRpcBlock::new(
+            Block::new(
+                AnyRpcHeader::from_sealed(
+                    AnyHeader { number, parent_hash, ..Default::default() }.seal(block_hash),
+                ),
+                BlockTransactions::Full(vec![]),
+            )
+            .into(),
+        )
+    }
+
+    fn make_coordinator_with_provider(
+        window: BlockChainWindow,
+        provider: Arc<dyn ChainProvider>,
+    ) -> ReorgCoordinator {
+        let persistence = Arc::new(ReorgBlockHashPersistence::new(None, None));
+        ReorgCoordinator {
+            network: "test".to_string(),
+            window,
+            persistence,
+            provider: Some(provider),
+            event_tables: vec![],
+            derived_tables: vec![],
+            streams_clients: vec![],
+            blocks_since_flush: 0,
+            suspended_below: None,
+        }
+    }
+
+    fn window_100_to(latest: u64) -> BlockChainWindow {
+        let mut window = BlockChainWindow::try_new(1000).unwrap();
+        for n in 100..=latest {
+            window.insert(n, hash(n as u8), hash(n as u8 - 1));
+        }
+        window
+    }
+
+    #[tokio::test]
+    async fn test_switch_suspension_ignores_lagging_endpoint_tips() {
+        // Window validated up to 110 on the old endpoint. After the switch
+        // the new (lagging) endpoint reports tips at/below the watermark
+        // whose hashes differ from the window - different-but-canonical is
+        // indistinguishable from a fork at this point, so NOTHING may roll
+        // back.
+        let provider: Arc<dyn ChainProvider> = Arc::new(MockChainProvider::new(1));
+        let mut coordinator = make_coordinator_with_provider(window_100_to(110), provider);
+
+        coordinator.suspend_for_endpoint_switch();
+
+        // Block 108 from the lagging endpoint: parent hash does NOT match
+        // the window's block 107 - pre-mitigation this was a "reorg".
+        let result = coordinator.on_new_block(108, hash(208), hash(207)).await.unwrap();
+        assert!(result.is_none(), "no rollback may be triggered while suspended");
+        assert_eq!(
+            coordinator.window.get(108),
+            Some(&(hash(108), hash(107))),
+            "the validated window must stay untouched while suspended"
+        );
+
+        // Still suspended for further lagging tips, including the watermark itself.
+        let result = coordinator.on_new_block(110, hash(210), hash(209)).await.unwrap();
+        assert!(result.is_none());
+        assert_eq!(coordinator.window.get(110), Some(&(hash(110), hash(109))));
+    }
+
+    #[tokio::test]
+    async fn test_switch_resume_revalidates_and_continues_when_canonical_matches() {
+        // The new endpoint catches up and agrees with every window hash:
+        // validation resumes with no rollback and the new tip is inserted.
+        let canonical: Vec<AnyRpcBlock> = (100..=106)
+            .map(|n| make_canonical_block(n, hash(n as u8), hash(n as u8 - 1)))
+            .collect();
+        let provider: Arc<dyn ChainProvider> =
+            Arc::new(MockChainProvider::new(1).with_blocks(canonical));
+        let mut coordinator = make_coordinator_with_provider(window_100_to(105), provider);
+
+        coordinator.suspend_for_endpoint_switch();
+
+        // Lagging tip first - ignored.
+        assert!(coordinator.on_new_block(104, hash(204), hash(203)).await.unwrap().is_none());
+
+        // Tip passes the watermark: window revalidates against the new
+        // endpoint (all hashes match) and normal validation resumes.
+        let result = coordinator.on_new_block(106, hash(106), hash(105)).await.unwrap();
+        assert!(result.is_none(), "matching canonical view must not produce a rollback");
+        assert_eq!(coordinator.window.get(106), Some(&(hash(106), hash(105))));
+        assert!(coordinator.suspended_below.is_none(), "suspension must be lifted");
+    }
+
+    #[tokio::test]
+    async fn test_real_reorg_above_watermark_detected_after_window_rebuild() {
+        // After a clean resume, a REAL reorg on the new endpoint (parent-hash
+        // mismatch above the validated watermark) must still be detected.
+        let canonical: Vec<AnyRpcBlock> = (100..=106)
+            .map(|n| make_canonical_block(n, hash(n as u8), hash(n as u8 - 1)))
+            .collect();
+        let provider: Arc<dyn ChainProvider> =
+            Arc::new(MockChainProvider::new(1).with_blocks(canonical));
+        let mut coordinator = make_coordinator_with_provider(window_100_to(105), provider);
+
+        coordinator.suspend_for_endpoint_switch();
+        let result = coordinator.on_new_block(106, hash(106), hash(105)).await.unwrap();
+        assert!(result.is_none(), "clean resume first");
+
+        // Block 107 whose parent hash does not match block 106 → fork.
+        let result = coordinator.on_new_block(107, hash(231), hash(230)).await.unwrap();
+        let task = result.expect("a real reorg above the watermark must still be detected");
+        assert_eq!(task.fork_point, 107, "window matches canonical through 106");
+        assert_eq!(task.detection_point, 107);
+    }
+
+    #[tokio::test]
+    async fn test_switch_resume_detects_real_reorg_below_watermark() {
+        // The blocks we validated (and indexed) from the old endpoint were
+        // orphaned: once the new endpoint passes the watermark and disagrees
+        // about hashes at/below it, that is a REAL reorg and must roll back
+        // from the first divergent block.
+        let canonical: Vec<AnyRpcBlock> = (100..=105)
+            .map(|n| {
+                if n < 103 {
+                    make_canonical_block(n, hash(n as u8), hash(n as u8 - 1))
+                } else {
+                    // Canonical chain diverges at 103.
+                    let parent = if n == 103 { hash(102) } else { hash(n as u8 - 1 + 100) };
+                    make_canonical_block(n, hash(n as u8 + 100), parent)
+                }
+            })
+            .collect();
+        let provider: Arc<dyn ChainProvider> =
+            Arc::new(MockChainProvider::new(1).with_blocks(canonical));
+        let mut coordinator = make_coordinator_with_provider(window_100_to(105), provider);
+
+        coordinator.suspend_for_endpoint_switch();
+
+        let result = coordinator.on_new_block(106, hash(206), hash(205)).await.unwrap();
+        let task = result.expect("divergence below the watermark is a real reorg");
+        assert_eq!(task.fork_point, 103, "rollback must start at the first divergent block");
+        assert_eq!(task.detection_point, 105, "detected at the suspension watermark");
+        assert_eq!(task.canonical_blocks.len(), 6, "canonical blocks reused from the refetch");
+    }
+
+    #[tokio::test]
+    async fn test_suspend_with_empty_window_is_a_noop() {
+        let provider: Arc<dyn ChainProvider> = Arc::new(MockChainProvider::new(1));
+        let mut coordinator =
+            make_coordinator_with_provider(BlockChainWindow::try_new(1000).unwrap(), provider);
+
+        coordinator.suspend_for_endpoint_switch();
+        assert!(coordinator.suspended_below.is_none(), "nothing validated - nothing to protect");
+
+        // Normal processing continues untouched.
+        let result = coordinator.on_new_block(100, hash(1), hash(0)).await.unwrap();
+        assert!(result.is_none());
+        assert!(coordinator.window.get(100).is_some());
+    }
+
+    #[tokio::test]
+    async fn test_switch_resume_rebuilds_window_when_refetch_impossible() {
+        // No provider to revalidate against: rebuild from scratch rather
+        // than risk a spurious rollback (honest trade-off: shallow reorgs
+        // at/below the watermark go undetected).
+        let window = window_100_to(105);
+        let mut coordinator = make_coordinator(window);
+        coordinator.suspended_below = Some(105);
+
+        let result = coordinator.on_new_block(106, hash(106), hash(105)).await.unwrap();
+        assert!(result.is_none(), "no rollback without evidence");
+        assert_eq!(coordinator.window.get(106), Some(&(hash(106), hash(105))));
+        assert!(coordinator.window.get(105).is_none(), "old window rebuilt from scratch");
     }
 
     #[tokio::test]
@@ -818,6 +1159,7 @@ mod tests {
             ],
             streams_clients: vec![],
             blocks_since_flush: 0,
+            suspended_below: None,
         };
 
         // on_exex_reorg creates a task — verify derived_tables are included
@@ -847,6 +1189,7 @@ mod tests {
             }],
             streams_clients: vec![],
             blocks_since_flush: 0,
+            suspended_below: None,
         };
 
         let task = coordinator.try_create_reorg_task_for_block_range(10, 11).unwrap();
@@ -875,6 +1218,7 @@ mod tests {
             derived_tables: vec![],
             streams_clients: vec![],
             blocks_since_flush: 0,
+            suspended_below: None,
         };
 
         let task = coordinator.on_exex_reorg(101, 110).unwrap();
@@ -907,6 +1251,7 @@ mod tests {
             derived_tables: vec![],
             streams_clients,
             blocks_since_flush: 0,
+            suspended_below: None,
         }
     }
 
