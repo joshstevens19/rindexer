@@ -810,7 +810,7 @@ fn build_redaction_rules(url: &str, redacted_url: &str) -> Vec<(String, String)>
         }
     }
 
-    rules.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    rules.sort_by_key(|rule| std::cmp::Reverse(rule.0.len()));
     rules
 }
 
