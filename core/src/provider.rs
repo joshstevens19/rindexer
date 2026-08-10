@@ -44,13 +44,19 @@ use std::{
 use thiserror::Error;
 use tokio::sync::{broadcast::Sender, Mutex, Semaphore};
 use tokio::task::JoinError;
-use tracing::{debug, debug_span, error, Instrument};
+use tower::Layer;
+use tracing::{debug, debug_span, error, warn, Instrument};
 use url::Url;
 
 use async_trait::async_trait;
 
+use crate::endpoint_failover::{
+    rpc_endpoint_event_sender, spawn_lag_prober, EndpointHealth, EndpointHealthSnapshot,
+    FailoverService, FailoverState, PROBE_INTERVAL,
+};
 use crate::helpers::chunk_hashset;
-use crate::layer_extensions::RpcLoggingLayer;
+use crate::indexer::reorg::reorg_safe_distance_for_chain;
+use crate::layer_extensions::{RpcLoggingLayer, RpcLoggingService};
 use crate::manifest::network::{AddressFiltering, BlockPollFrequency};
 use crate::metrics::rpc as rpc_metrics;
 use crate::{event::RindexerEventFilter, manifest::core::Manifest};
@@ -65,6 +71,28 @@ pub trait ChainProvider: Send + Sync + Debug {
     fn chain(&self) -> Chain;
     fn max_block_range(&self) -> Option<U64>;
     fn chain_state_notification(&self) -> Option<Sender<ChainStateNotification>>;
+
+    /// Signal from the indexing loops that the active rpc endpoint looks
+    /// unhealthy (stalled chain tip, repeated `get_latest_block` failures).
+    /// Providers backed by a failover transport mark the endpoint degraded
+    /// and switch to an alternative when one exists; the default is a no-op.
+    fn flag_active_endpoint_degraded(&self, _reason: &str) {}
+
+    /// Monotonic count of endpoint failovers performed by the underlying
+    /// transport since boot. The indexing loops poll this to notice a switch
+    /// and reset endpoint-specific state (block range shrink state, the
+    /// reorg parent-hash window). Always 0 for single-endpoint providers.
+    fn endpoint_switches(&self) -> u64 {
+        0
+    }
+
+    /// Per-endpoint health snapshots (active endpoint, gate state, chain-id
+    /// verification status, observed tip, last error) for the transport
+    /// backing this provider. Urls are credential-redacted. Empty for
+    /// providers without a failover transport (IPC/reth, mocks).
+    fn rpc_health(&self) -> Vec<EndpointHealthSnapshot> {
+        Vec::new()
+    }
 
     async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError>;
     async fn get_block_number(&self) -> Result<U64, ProviderError>;
@@ -119,6 +147,20 @@ const DEFAULT_RPC_SUPPORTED_ACCOUNT_FILTERS: usize = 1000;
 /// Maximum RPC batching size available for the provider.
 pub const RPC_CHUNK_SIZE: usize = 1000;
 
+/// Maximum retries the transport-level retry layer performs on retryable
+/// (rate-limit shaped) errors before surfacing the error.
+///
+/// This used to be 5000, which meant a sick endpoint could spin inside the
+/// retry layer for hours and neither the failover transport nor the indexing
+/// loops (which have their own recovery: range halving, 1s poll retries)
+/// ever saw the error. Kept in single digits so persistent failure surfaces
+/// quickly; the failover layer owns persistence across endpoints.
+pub(crate) const MAX_RATE_LIMIT_RETRIES: u32 = 5;
+
+// Compile-time guard on the retune: single digits or the failover layer and
+// the indexing loops never see persistent endpoint failure.
+const _: () = assert!(MAX_RATE_LIMIT_RETRIES <= 9);
+
 /// Recommended chunk sizes for batch RPC requests.
 /// See: https://www.alchemy.com/docs/best-practices-when-using-alchemy#2-avoid-high-batch-cardinality
 pub const RECOMMENDED_RPC_CHUNK_SIZE: usize = 50;
@@ -134,6 +176,10 @@ pub struct JsonRpcCachedProvider {
     address_filtering: Option<AddressFiltering>,
     pub max_block_range: Option<U64>,
     pub chain_state_notification: Option<Sender<ChainStateNotification>>,
+    /// Present when the provider dials more than one HTTP endpoint through
+    /// the failover transport. `None` for IPC/reth and single-purpose mock
+    /// providers.
+    failover: Option<Arc<FailoverState>>,
 }
 
 #[derive(Error, Debug)]
@@ -710,6 +756,28 @@ impl JsonRpcCachedProvider {
         self.chain_state_notification.clone()
     }
 
+    /// Per-endpoint health snapshots for the failover transport backing this
+    /// provider. Empty for single-endpoint (IPC/reth) providers.
+    pub fn rpc_health(&self) -> Vec<EndpointHealthSnapshot> {
+        self.failover.as_ref().map(|failover| failover.snapshot()).unwrap_or_default()
+    }
+
+    /// Monotonic count of endpoint failovers performed by the underlying
+    /// transport since boot. Always 0 for single-endpoint providers.
+    pub fn endpoint_switches(&self) -> u64 {
+        self.failover.as_ref().map(|failover| failover.endpoint_switches()).unwrap_or(0)
+    }
+
+    /// Signal from the indexing loops that the active endpoint looks
+    /// unhealthy (stalled chain tip, repeated `get_latest_block` failures).
+    /// Marks the endpoint degraded and fails over when an alternative
+    /// endpoint is available. No-op for single-endpoint providers.
+    pub fn flag_active_endpoint_degraded(&self, reason: &str) {
+        if let Some(failover) = &self.failover {
+            failover.flag_active_degraded(reason);
+        }
+    }
+
     #[cfg(test)]
     pub fn mock(chain_id: u64) -> Arc<Self> {
         let (provider, _asserter) = Self::mock_with_asserter(chain_id);
@@ -745,6 +813,7 @@ impl JsonRpcCachedProvider {
             address_filtering: None,
             max_block_range: None,
             chain_state_notification: None,
+            failover: None,
         });
 
         (cached, asserter)
@@ -763,6 +832,18 @@ impl ChainProvider for JsonRpcCachedProvider {
 
     fn chain_state_notification(&self) -> Option<Sender<ChainStateNotification>> {
         self.chain_state_notification.clone()
+    }
+
+    fn flag_active_endpoint_degraded(&self, reason: &str) {
+        JsonRpcCachedProvider::flag_active_endpoint_degraded(self, reason)
+    }
+
+    fn endpoint_switches(&self) -> u64 {
+        JsonRpcCachedProvider::endpoint_switches(self)
+    }
+
+    fn rpc_health(&self) -> Vec<EndpointHealthSnapshot> {
+        JsonRpcCachedProvider::rpc_health(self)
     }
 
     async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
@@ -851,6 +932,18 @@ impl<T: ChainProvider + ?Sized> ChainProvider for Arc<T> {
         (**self).chain_state_notification()
     }
 
+    fn flag_active_endpoint_degraded(&self, reason: &str) {
+        (**self).flag_active_endpoint_degraded(reason)
+    }
+
+    fn endpoint_switches(&self) -> u64 {
+        (**self).endpoint_switches()
+    }
+
+    fn rpc_health(&self) -> Vec<EndpointHealthSnapshot> {
+        (**self).rpc_health()
+    }
+
     async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
         (**self).get_latest_block().await
     }
@@ -923,8 +1016,8 @@ impl<T: ChainProvider + ?Sized> ChainProvider for Arc<T> {
 /// A mock implementation of [`ChainProvider`] for testing.
 ///
 /// Use the builder methods to configure canned responses, then pass to
-/// functions that accept `impl ChainProvider`.
-#[cfg(test)]
+/// functions that accept `impl ChainProvider`. Compiled unconditionally so
+/// embedders (e.g. rflow) can drive registry/callback tests without a chain.
 pub mod mock {
     use super::*;
 
@@ -937,6 +1030,8 @@ pub mod mock {
         block_number: U64,
         receipts: Vec<AnyTransactionReceipt>,
         traces: Vec<LocalizedTransactionTrace>,
+        flagged_endpoint_reasons: std::sync::Mutex<Vec<String>>,
+        endpoint_switches: std::sync::atomic::AtomicU64,
     }
 
     impl MockChainProvider {
@@ -949,7 +1044,20 @@ pub mod mock {
                 block_number: U64::ZERO,
                 receipts: vec![],
                 traces: vec![],
+                flagged_endpoint_reasons: std::sync::Mutex::new(vec![]),
+                endpoint_switches: std::sync::atomic::AtomicU64::new(0),
             }
+        }
+
+        /// Reasons passed to `flag_active_endpoint_degraded`, in call order.
+        pub fn flagged_endpoint_reasons(&self) -> Vec<String> {
+            self.flagged_endpoint_reasons.lock().expect("mutex poisoned").clone()
+        }
+
+        /// Simulate an endpoint failover on this provider (bumps the counter
+        /// returned by `ChainProvider::endpoint_switches`).
+        pub fn bump_endpoint_switches(&self) {
+            self.endpoint_switches.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         }
 
         pub fn with_block_number(mut self, n: u64) -> Self {
@@ -990,6 +1098,14 @@ pub mod mock {
 
         fn chain_state_notification(&self) -> Option<Sender<ChainStateNotification>> {
             None
+        }
+
+        fn flag_active_endpoint_degraded(&self, reason: &str) {
+            self.flagged_endpoint_reasons.lock().expect("mutex poisoned").push(reason.to_string());
+        }
+
+        fn endpoint_switches(&self) -> u64 {
+            self.endpoint_switches.load(std::sync::atomic::Ordering::Acquire)
         }
 
         async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
@@ -1138,18 +1254,26 @@ fn ensure_rpc_url_not_empty(
 
 pub fn validate_manifest_network_rpc_urls(manifest: &Manifest) -> Result<(), RetryClientError> {
     for network in &manifest.networks {
-        ensure_rpc_url_not_empty(
-            format!("`{}` (chain_id {})", network.name, network.chain_id),
-            &network.rpc,
-        )?;
+        for rpc_url in network.rpc.iter() {
+            ensure_rpc_url_not_empty(
+                format!("`{}` (chain_id {})", network.name, network.chain_id),
+                rpc_url,
+            )?;
+        }
     }
 
     Ok(())
 }
 
+/// The per-endpoint transport used inside the failover service for HTTP
+/// networks: the logging layer (which feeds endpoint health) over a plain
+/// HTTP transport.
+type HttpEndpointTransport = RpcLoggingService<Http<Client>>;
+
 #[allow(clippy::too_many_arguments)]
 pub async fn create_client(
-    rpc_url: &str,
+    network: &str,
+    rpc_urls: &[String],
     chain_id: u64,
     compute_units_per_second: Option<u64>,
     max_block_range: Option<U64>,
@@ -1158,15 +1282,39 @@ pub async fn create_client(
     address_filtering: Option<AddressFiltering>,
     chain_state_notification: Option<Sender<ChainStateNotification>>,
 ) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
-    ensure_rpc_url_not_empty(format!("chain_id {chain_id}"), rpc_url)?;
+    for rpc_url in rpc_urls {
+        ensure_rpc_url_not_empty(format!("chain_id {chain_id}"), rpc_url)?;
+    }
 
     let chain = Chain::from(chain_id);
 
-    let (client, provider) = if rpc_url.ends_with(".ipc") {
-        let ipc = IpcConnect::new(rpc_url.to_string());
-        let retry_layer =
-            RetryBackoffLayer::new(5000, 1000, compute_units_per_second.unwrap_or(660));
-        let logging_layer = RpcLoggingLayer::new(chain_id, rpc_url.to_string());
+    let Some(primary_url) = rpc_urls.first() else {
+        return Err(RetryClientError::ProviderCantBeCreated(
+            network.to_string(),
+            "no rpc urls configured".to_string(),
+        ));
+    };
+
+    let retry_layer = RetryBackoffLayer::new(
+        MAX_RATE_LIMIT_RETRIES,
+        1000,
+        compute_units_per_second.unwrap_or(660),
+    );
+
+    let (client, provider, failover) = if primary_url.ends_with(".ipc") {
+        // IPC endpoints (usually a local reth node) are excluded from
+        // failover pools - there is no meaningful fallback for a node the
+        // indexer is co-located with.
+        if rpc_urls.len() > 1 {
+            warn!(
+                "network {} uses an IPC endpoint; ignoring {} additional rpc url(s) - IPC networks are excluded from failover",
+                network,
+                rpc_urls.len() - 1
+            );
+        }
+
+        let ipc = IpcConnect::new(primary_url.to_string());
+        let logging_layer = RpcLoggingLayer::new(chain_id, primary_url.to_string());
 
         let rpc_client =
             RpcClient::builder().layer(retry_layer).layer(logging_layer).ipc(ipc.clone()).await?;
@@ -1174,41 +1322,97 @@ pub async fn create_client(
         let provider =
             ProviderBuilder::new().network::<AnyNetwork>().connect_ipc(ipc).await.map_err(|e| {
                 RetryClientError::ProviderCantBeCreated(
-                    rpc_url.to_string(),
+                    primary_url.to_string(),
                     format!("IPC connection failed: {e}"),
                 )
             })?;
 
-        (rpc_client, provider)
+        (rpc_client, provider, None)
     } else {
-        let rpc_url = Url::parse(rpc_url).map_err(|e| {
-            RetryClientError::ProviderCantBeCreated(rpc_url.to_string(), e.to_string())
-        })?;
-
         let client_with_auth = Client::builder()
             .default_headers(custom_headers)
             .timeout(Duration::from_secs(90))
             .build()?;
 
-        let logging_layer = RpcLoggingLayer::new(chain_id, rpc_url.to_string());
-        let http = Http::with_client(client_with_auth, rpc_url);
-        let retry_layer =
-            RetryBackoffLayer::new(5000, 1000, compute_units_per_second.unwrap_or(660));
-        let rpc_client =
-            RpcClient::builder().layer(retry_layer).layer(logging_layer).transport(http, false);
+        let mut healths: Vec<Arc<EndpointHealth>> = Vec::with_capacity(rpc_urls.len());
+        let mut transports: Vec<HttpEndpointTransport> = Vec::with_capacity(rpc_urls.len());
+        let mut verifiers: Vec<RpcClient> = Vec::with_capacity(rpc_urls.len());
+
+        for rpc_url in rpc_urls {
+            if rpc_url.ends_with(".ipc") {
+                warn!(
+                    "network {} mixes an IPC url into its rpc fallbacks; ignoring {} - IPC endpoints are excluded from failover pools",
+                    network, rpc_url
+                );
+                continue;
+            }
+
+            let parsed_url = Url::parse(rpc_url).map_err(|e| {
+                RetryClientError::ProviderCantBeCreated(rpc_url.to_string(), e.to_string())
+            })?;
+
+            let health = Arc::new(EndpointHealth::new(rpc_url));
+            let transport = RpcLoggingLayer::new(chain_id, rpc_url.to_string())
+                .with_health(Arc::clone(&health))
+                .layer(Http::with_client(client_with_auth.clone(), parsed_url));
+
+            // A thin per-endpoint client reused for lazy chain-id
+            // verification and background tip probing.
+            verifiers.push(RpcClient::new(transport.clone(), false));
+            transports.push(transport);
+            healths.push(health);
+        }
+
+        if transports.is_empty() {
+            return Err(RetryClientError::ProviderCantBeCreated(
+                network.to_string(),
+                "no usable http rpc urls configured".to_string(),
+            ));
+        }
+
+        let failover_state = Arc::new(FailoverState::new(
+            network.to_string(),
+            chain_id,
+            healths,
+            rpc_endpoint_event_sender(),
+        ));
+
+        // Multi-endpoint networks get a background prober: it polls
+        // eth_blockNumber on every endpoint so a lagging-but-alive endpoint
+        // is evicted (and later restored) even when requests keep
+        // succeeding. The lag threshold defaults to the chain's reorg safe
+        // distance - beyond that a lagging endpoint endangers the reorg
+        // window, not just freshness.
+        if transports.len() > 1 {
+            spawn_lag_prober(
+                &failover_state,
+                verifiers.clone(),
+                reorg_safe_distance_for_chain(chain_id),
+                PROBE_INTERVAL,
+            );
+        }
+
+        let failover_service =
+            FailoverService::new(Arc::clone(&failover_state), transports, verifiers);
+
+        let rpc_client = RpcClient::builder().layer(retry_layer).transport(failover_service, false);
         let provider =
             ProviderBuilder::new().network::<AnyNetwork>().connect_client(rpc_client.clone());
 
-        (rpc_client, provider)
+        (rpc_client, provider, Some(failover_state))
     };
 
+    // Endpoints are lazily chain-id verified inside the failover transport,
+    // so this first call both confirms connectivity and - because only
+    // verified endpoints may serve - that the answering endpoint is on the
+    // configured chain. Boot only fails when no endpoint can serve at all.
     let real_rpc_chain_id = provider.get_chain_id().await.map_err(|e| {
         RetryClientError::CouldNotConnectClient(RpcError::LocalUsageError(Box::new(e)))
     })?;
 
     if real_rpc_chain_id != chain_id {
         return Err(RetryClientError::InvalidClientChainId(
-            rpc_url.to_string(),
+            primary_url.to_string(),
             chain_id,
             real_rpc_chain_id,
         ));
@@ -1238,6 +1442,7 @@ pub async fn create_client(
         block_poll_frequency,
         address_filtering,
         chain_state_notification,
+        failover,
     }))
 }
 
@@ -1262,7 +1467,7 @@ impl CreateNetworkProvider {
     ) -> Result<Vec<CreateNetworkProvider>, RetryClientError> {
         let provider_futures = manifest.networks.iter().map(|network| async move {
             #[cfg(not(feature = "reth"))]
-            let provider_url = network.rpc.clone();
+            let provider_urls: Vec<String> = network.rpc.all().to_vec();
 
             #[cfg(not(feature = "reth"))]
             let reth_tx: Option<Sender<ChainStateNotification>> = None;
@@ -1275,22 +1480,25 @@ impl CreateNetworkProvider {
             })?;
 
             // if reth is enabled and started successfully, we can use the reth ipc path to create a provider.
-            // else, we will use the rpc url provided in the manifest.
+            // else, we will use the rpc urls provided in the manifest.
             #[cfg(feature = "reth")]
-            let provider_url = if reth_tx.is_some() {
-                network.get_reth_ipc_path().unwrap()
+            let provider_urls: Vec<String> = if reth_tx.is_some() {
+                vec![network.get_reth_ipc_path().unwrap()]
             } else {
-                network.rpc.clone()
+                network.rpc.all().to_vec()
             };
 
-            ensure_rpc_url_not_empty(
-                format!("`{}` (chain_id {})", network.name, network.chain_id),
-                &provider_url,
-            )?;
+            for provider_url in &provider_urls {
+                ensure_rpc_url_not_empty(
+                    format!("`{}` (chain_id {})", network.name, network.chain_id),
+                    provider_url,
+                )?;
+            }
 
             // create the provider
             let provider = create_client(
-                &provider_url,
+                &network.name,
+                &provider_urls,
                 network.chain_id,
                 network.compute_units_per_second,
                 network.max_block_range,
@@ -1376,9 +1584,19 @@ mod tests {
 
     #[tokio::test]
     async fn create_client_rejects_empty_rpc_url_before_url_parsing() {
-        let error = create_client("", 1301, None, None, None, HeaderMap::new(), None, None)
-            .await
-            .unwrap_err();
+        let error = create_client(
+            "unichain_sepolia",
+            &["".to_string()],
+            1301,
+            None,
+            None,
+            None,
+            HeaderMap::new(),
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
 
         assert!(matches!(error, RetryClientError::RpcUrlEmpty { .. }));
         let message = error.to_string();

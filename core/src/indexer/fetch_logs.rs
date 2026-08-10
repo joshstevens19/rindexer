@@ -32,6 +32,57 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
+/// Consecutive `get_latest_block` failures in the live loop before the
+/// active endpoint is flagged degraded. Errors surfacing there have already
+/// been retried through the transport-level failover, so a short streak is
+/// enough evidence.
+const LATEST_BLOCK_ERRORS_BEFORE_FLAG: u32 = 3;
+
+/// Polls a provider's endpoint switch counter so the indexing loops can
+/// notice transport failovers and reset endpoint-specific state: the
+/// per-endpoint block range shrink state, and - critically - the reorg
+/// coordinator's parent-hash window, which must not compare a lagging
+/// replacement endpoint's view against blocks the previous endpoint
+/// validated (that shape triggers a spurious rollback).
+struct EndpointSwitchWatcher {
+    last_seen: u64,
+}
+
+impl EndpointSwitchWatcher {
+    fn new<P: ChainProvider + ?Sized>(provider: &P) -> Self {
+        Self { last_seen: provider.endpoint_switches() }
+    }
+
+    /// Returns true when the provider failed over since the last check.
+    fn switched<P: ChainProvider + ?Sized>(&mut self, provider: &P) -> bool {
+        let current = provider.endpoint_switches();
+        if current == self.last_seen {
+            return false;
+        }
+        self.last_seen = current;
+        true
+    }
+}
+
+/// Handle an observed endpoint switch in the live loop: drop the block range
+/// shrink state (it belonged to the previous endpoint) and suspend the reorg
+/// coordinator's parent-hash validation until the new endpoint's tip passes
+/// the last validated block.
+async fn handle_live_endpoint_switch(
+    log_response_to_large_to_block: &mut Option<U64>,
+    reorg_coordinator: Option<&Arc<Mutex<ReorgCoordinator>>>,
+    info_log_name: &str,
+) {
+    *log_response_to_large_to_block = None;
+    if let Some(coordinator) = reorg_coordinator {
+        coordinator.lock().await.suspend_for_endpoint_switch();
+    }
+    info!(
+        "{} - RPC endpoint switched - resetting block range state and suspending reorg window validation until the new endpoint catches up",
+        info_log_name
+    );
+}
+
 /// Metadata for a processed block, used for reorg detection via parent hash chain validation.
 #[allow(dead_code)]
 pub struct BlockMeta {
@@ -275,9 +326,18 @@ pub fn fetch_logs_stream(
             }
         }
 
+        let mut switch_watcher =
+            EndpointSwitchWatcher::new(&config.network_contract().cached_provider);
+
         while current_filter.from_block() <= snapshot_to_block {
             if !is_running() || config.cancel_token().is_cancelled() {
                 break;
+            }
+
+            // The shrunken block range belonged to the previous endpoint -
+            // start the new endpoint from the configured limit.
+            if switch_watcher.switched(&config.network_contract().cached_provider) {
+                max_block_range_limitation = original_max_limit;
             }
 
             let result = fetch_historic_logs_stream(
@@ -1106,6 +1166,8 @@ async fn live_indexing_stream(
     let mut last_seen_block_number = last_seen_block_number;
     let mut log_response_to_large_to_block: Option<U64> = None;
     let mut heartbeat = HeartbeatTracker::new(Duration::from_secs(300));
+    let mut consecutive_latest_block_errors: u32 = 0;
+    let mut switch_watcher = EndpointSwitchWatcher::new(cached_provider.as_ref());
     let target_iteration_duration = Duration::from_millis(200);
 
     // Channel for reth-provided reorg signals (feature-gated, None for HTTP RPC).
@@ -1139,6 +1201,15 @@ async fn live_indexing_stream(
 
         if !is_running() || cancel_token.is_cancelled() {
             break;
+        }
+
+        if switch_watcher.switched(cached_provider.as_ref()) {
+            handle_live_endpoint_switch(
+                &mut log_response_to_large_to_block,
+                reorg_coordinator.as_ref(),
+                info_log_name,
+            )
+            .await;
         }
 
         // Reth reorg signal — instant detection via ExEx notification.
@@ -1201,8 +1272,26 @@ async fn live_indexing_stream(
         }
 
         let latest_block = cached_provider.get_latest_block().await;
+
+        // The call above can itself trigger the failover (the request died on
+        // the old endpoint and was answered by a replacement), in which case
+        // the block below already comes from the NEW endpoint. Re-check the
+        // switch counter BEFORE any reorg validation - otherwise a lagging
+        // replacement's first block would be compared against a window the
+        // previous endpoint validated, which is exactly the spurious-rollback
+        // shape the suspension exists to prevent.
+        if switch_watcher.switched(cached_provider.as_ref()) {
+            handle_live_endpoint_switch(
+                &mut log_response_to_large_to_block,
+                reorg_coordinator.as_ref(),
+                info_log_name,
+            )
+            .await;
+        }
+
         match latest_block {
             Ok(latest_block) => {
+                consecutive_latest_block_errors = 0;
                 if let Some(latest_block) = latest_block {
                     // Keep block cache for timestamp lookups
                     block_cache.put(
@@ -1233,6 +1322,12 @@ async fn live_indexing_stream(
                                 IndexingEventProgressStatus::live_log(),
                                 latest_tip
                             );
+                            // A stalled-but-responsive endpoint never errors at
+                            // the transport level, so the failover transport
+                            // cannot see it - flag it from here.
+                            cached_provider.flag_active_endpoint_degraded(&format!(
+                                "chain tip stalled at block {latest_tip} for 5 minutes"
+                            ));
                         }
                     }
 
@@ -1650,6 +1745,17 @@ async fn live_indexing_stream(
                 }
             }
             Err(e) => {
+                consecutive_latest_block_errors = consecutive_latest_block_errors.saturating_add(1);
+                if consecutive_latest_block_errors == LATEST_BLOCK_ERRORS_BEFORE_FLAG {
+                    // Errors reaching this arm already went through the
+                    // transport-level failover, so persistent failure here
+                    // means the active endpoint (or all of them) is sick -
+                    // flag it so the health gate deprioritises it and the
+                    // prober owns recovery.
+                    cached_provider.flag_active_endpoint_degraded(&format!(
+                        "get_latest_block failed {consecutive_latest_block_errors} times in a row"
+                    ));
+                }
                 error!(
                     "Error getting latest block, will try again in 1 second - err: {}",
                     e.to_string()
@@ -2432,6 +2538,430 @@ mod tests {
             (live_start_block.to::<u64>(), expected_live_to_block.to::<u64>()),
             "live indexing should cap the first get_logs request to from_block + max_block_range",
         );
+    }
+
+    // --- endpoint switch handling ---
+
+    use crate::indexer::reorg::{BlockChainWindow, ReorgBlockHashPersistence};
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+
+    fn h(n: u64) -> B256 {
+        let mut bytes = [0u8; 32];
+        bytes[24..].copy_from_slice(&n.to_be_bytes());
+        B256::from(bytes)
+    }
+
+    fn make_hashed_block(number: u64, block_hash: B256, parent_hash: B256) -> AnyRpcBlock {
+        AnyRpcBlock::new(
+            alloy::rpc::types::Block::new(
+                AnyRpcHeader::from_sealed(
+                    AnyHeader { number, parent_hash, ..Default::default() }.seal(block_hash),
+                ),
+                BlockTransactions::Full(vec![]),
+            )
+            .into(),
+        )
+    }
+
+    /// Drives `live_indexing_stream` through an endpoint switch: serves a
+    /// scripted sequence of `get_latest_block` answers (each step also sets
+    /// the endpoint switch counter visible from the NEXT loop iteration),
+    /// records the `get_logs` ranges the loop requests, delegates canonical
+    /// block lookups (window revalidation, fork point search) to the inner
+    /// mock, and cancels the loop when the script runs out.
+    #[derive(Debug)]
+    struct ScriptedLiveProvider {
+        inner: MockChainProvider,
+        script: StdMutex<VecDeque<(AnyRpcBlock, u64)>>,
+        switches: AtomicU64,
+        queried_ranges: Arc<StdMutex<Vec<(u64, u64)>>>,
+        cancel_token: CancellationToken,
+    }
+
+    impl ScriptedLiveProvider {
+        fn new(
+            inner: MockChainProvider,
+            script: Vec<(AnyRpcBlock, u64)>,
+            queried_ranges: Arc<StdMutex<Vec<(u64, u64)>>>,
+            cancel_token: CancellationToken,
+        ) -> Self {
+            Self {
+                inner,
+                script: StdMutex::new(script.into()),
+                switches: AtomicU64::new(0),
+                queried_ranges,
+                cancel_token,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ChainProvider for ScriptedLiveProvider {
+        fn chain(&self) -> alloy_chains::Chain {
+            self.inner.chain()
+        }
+
+        fn max_block_range(&self) -> Option<U64> {
+            self.inner.max_block_range()
+        }
+
+        fn chain_state_notification(
+            &self,
+        ) -> Option<tokio::sync::broadcast::Sender<crate::notifications::ChainStateNotification>>
+        {
+            self.inner.chain_state_notification()
+        }
+
+        fn endpoint_switches(&self) -> u64 {
+            self.switches.load(AtomicOrdering::Acquire)
+        }
+
+        async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
+            let next = self.script.lock().expect("script mutex poisoned").pop_front();
+            match next {
+                Some((block, switches_after)) => {
+                    self.switches.store(switches_after, AtomicOrdering::Release);
+                    Ok(Some(Arc::new(block)))
+                }
+                None => {
+                    self.cancel_token.cancel();
+                    Ok(None)
+                }
+            }
+        }
+
+        async fn get_block_number(&self) -> Result<U64, ProviderError> {
+            self.inner.get_block_number().await
+        }
+
+        async fn get_logs(
+            &self,
+            event_filter: &RindexerEventFilter,
+        ) -> Result<Vec<Log>, ProviderError> {
+            self.queried_ranges
+                .lock()
+                .expect("recorded ranges mutex poisoned")
+                .push((event_filter.from_block().to::<u64>(), event_filter.to_block().to::<u64>()));
+            self.inner.get_logs(event_filter).await
+        }
+
+        async fn get_block_by_number_batch(
+            &self,
+            block_numbers: &[U64],
+            include_txs: bool,
+        ) -> Result<Vec<AnyRpcBlock>, ProviderError> {
+            self.inner.get_block_by_number_batch(block_numbers, include_txs).await
+        }
+
+        async fn get_block_by_number_batch_with_size(
+            &self,
+            block_numbers: &[U64],
+            include_txs: bool,
+            rpc_batch_size: Option<usize>,
+        ) -> Result<Vec<AnyRpcBlock>, ProviderError> {
+            self.inner
+                .get_block_by_number_batch_with_size(block_numbers, include_txs, rpc_batch_size)
+                .await
+        }
+
+        async fn get_tx_receipts_batch(
+            &self,
+            hashes: &[TxHash],
+        ) -> Result<Vec<AnyTransactionReceipt>, ProviderError> {
+            self.inner.get_tx_receipts_batch(hashes).await
+        }
+
+        async fn trace_block(
+            &self,
+            block_number: U64,
+        ) -> Result<Vec<LocalizedTransactionTrace>, ProviderError> {
+            self.inner.trace_block(block_number).await
+        }
+
+        async fn debug_trace_block_by_number(
+            &self,
+            block_number: U64,
+        ) -> Result<Vec<LocalizedTransactionTrace>, ProviderError> {
+            self.inner.debug_trace_block_by_number(block_number).await
+        }
+
+        async fn eth_call(
+            &self,
+            to: Address,
+            data: Bytes,
+            block_number: u64,
+        ) -> Result<String, ProviderError> {
+            self.inner.eth_call(to, data, block_number).await
+        }
+
+        async fn eth_call_latest(&self, to: Address, data: Bytes) -> Result<String, ProviderError> {
+            self.inner.eth_call_latest(to, data).await
+        }
+    }
+
+    /// Coordinator over a window validated up to `latest` (blocks 100..=latest
+    /// with `h(n)` hashes), using `provider` for canonical lookups.
+    fn coordinator_with_window(provider: Arc<dyn ChainProvider>, latest: u64) -> ReorgCoordinator {
+        let mut window = BlockChainWindow::try_new(1000).expect("window size > 0");
+        for n in 100..=latest {
+            window.insert(n, h(n), h(n - 1));
+        }
+        ReorgCoordinator::new(
+            "test".to_string(),
+            window,
+            Arc::new(ReorgBlockHashPersistence::new(None, None)),
+            provider,
+            vec![],
+            vec![],
+            vec![],
+        )
+        .expect("valid coordinator")
+    }
+
+    fn registry_capturing_reorgs() -> (
+        EventCallbackRegistry,
+        Arc<StdMutex<Vec<crate::event::callback_registry::ReorgNotification>>>,
+    ) {
+        let captured = Arc::new(StdMutex::new(Vec::new()));
+        let captured_clone = Arc::clone(&captured);
+        let mut registry = EventCallbackRegistry::new();
+        registry.register_on_reorg(Arc::new(move |notification| {
+            let captured = Arc::clone(&captured_clone);
+            Box::pin(async move {
+                captured.lock().expect("captured mutex poisoned").push(notification);
+            })
+        }));
+        (registry, captured)
+    }
+
+    #[tokio::test]
+    async fn endpoint_switch_watcher_fires_once_per_switch() {
+        let mock = MockChainProvider::new(1);
+        let mut watcher = EndpointSwitchWatcher::new(&mock);
+        assert!(!watcher.switched(&mock));
+
+        mock.bump_endpoint_switches();
+        assert!(watcher.switched(&mock));
+        assert!(!watcher.switched(&mock), "a switch must only fire once");
+
+        mock.bump_endpoint_switches();
+        mock.bump_endpoint_switches();
+        assert!(watcher.switched(&mock), "coalesced switches still fire");
+        assert!(!watcher.switched(&mock));
+    }
+
+    #[tokio::test]
+    async fn live_switch_to_lagging_endpoint_triggers_no_spurious_rollback() {
+        // THE failure mode this exists for: the transport fails over near the
+        // tip and the replacement endpoint lags behind blocks the previous
+        // endpoint already validated, reporting different-but-canonical
+        // hashes for them. Pre-mitigation the parent-hash window treated
+        // that as a reorg and rolled back (DB deletes + stream retractions).
+        //
+        // Script (window pre-validated up to 110; the switch counter flips
+        // during the call that returns the replacement endpoint's block):
+        //   iter1: block 111 (canonical, still the old endpoint) - extends
+        //          the window.
+        //   iter2: the transport fails over and the lagging endpoint reports
+        //          block 109 with alien hashes; the loop must notice the
+        //          switch, suspend validation and IGNORE the block.
+        //   iter3: the new endpoint catches up: block 112 building on the
+        //          canonical 111. The window revalidates against the mock's
+        //          canonical blocks (all matching) and indexing continues.
+        let cancel_token = CancellationToken::new();
+        let queried_ranges = Arc::new(StdMutex::new(Vec::new()));
+        let canonical: Vec<AnyRpcBlock> =
+            (100..=111).map(|n| make_hashed_block(n, h(n), h(n - 1))).collect();
+        let provider = Arc::new(ScriptedLiveProvider::new(
+            MockChainProvider::new(1).with_blocks(canonical),
+            vec![
+                (make_hashed_block(111, h(111), h(110)), 0),
+                (make_hashed_block(109, h(9109), h(9108)), 1),
+                (make_hashed_block(112, h(112), h(111)), 1),
+            ],
+            queried_ranges.clone(),
+            cancel_token.clone(),
+        ));
+        let coordinator = Arc::new(Mutex::new(coordinator_with_window(provider.clone(), 110)));
+        let (registry, captured_reorgs) = registry_capturing_reorgs();
+        let block_clock = BlockClock::new(None, None, provider.clone());
+        let (tx, _rx) = mpsc::channel(8);
+
+        live_indexing_stream(
+            false,
+            block_clock,
+            provider,
+            &tx,
+            U64::from(110),
+            &B256::ZERO,
+            &U64::ZERO,
+            RindexerEventFilter::empty_for_test()
+                .set_from_block(U64::from(111))
+                .set_to_block(U64::from(111)),
+            "test",
+            "test",
+            true,
+            None,
+            cancel_token,
+            Some(Arc::clone(&coordinator)),
+            None,
+            None,
+            &registry,
+            None,
+        )
+        .await;
+
+        assert!(
+            captured_reorgs.lock().expect("captured mutex poisoned").is_empty(),
+            "switching to a lagging endpoint must NOT trigger a reorg rollback"
+        );
+        let ranges = queried_ranges.lock().expect("ranges mutex poisoned").clone();
+        assert!(
+            ranges.contains(&(112, 112)),
+            "indexing must continue past the switch once the new endpoint catches up, got {ranges:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn live_switch_during_get_latest_block_triggers_no_spurious_rollback() {
+        // Sharper variant of the scenario above: the primary dies on the
+        // get_latest_block call itself, so the failover happens MID-ITERATION
+        // and the very block returned by that call already comes from the
+        // lagging replacement endpoint (the scripted provider flips the
+        // switch counter during the call, before returning). The loop must
+        // notice the switch AFTER the call and BEFORE reorg validation -
+        // otherwise the alien-hash block is compared against the previous
+        // endpoint's validated window and rolled back spuriously.
+        //
+        // Script (window pre-validated up to 110):
+        //   iter1: get_latest_block fails over mid-call and returns the
+        //          lagging endpoint's block 109 with alien hashes; the
+        //          switch counter flips during that same call.
+        //   iter2: the new endpoint catches up with the canonical block 111;
+        //          the window revalidates (all hashes match) and indexing
+        //          continues.
+        let cancel_token = CancellationToken::new();
+        let queried_ranges = Arc::new(StdMutex::new(Vec::new()));
+        let canonical: Vec<AnyRpcBlock> =
+            (100..=111).map(|n| make_hashed_block(n, h(n), h(n - 1))).collect();
+        let provider = Arc::new(ScriptedLiveProvider::new(
+            MockChainProvider::new(1).with_blocks(canonical),
+            vec![
+                // Switch counter flips DURING this call - the returned block
+                // is already the lagging replacement's view.
+                (make_hashed_block(109, h(9109), h(9108)), 1),
+                (make_hashed_block(111, h(111), h(110)), 1),
+            ],
+            queried_ranges.clone(),
+            cancel_token.clone(),
+        ));
+        let coordinator = Arc::new(Mutex::new(coordinator_with_window(provider.clone(), 110)));
+        let (registry, captured_reorgs) = registry_capturing_reorgs();
+        let block_clock = BlockClock::new(None, None, provider.clone());
+        let (tx, _rx) = mpsc::channel(8);
+
+        live_indexing_stream(
+            false,
+            block_clock,
+            provider,
+            &tx,
+            U64::from(110),
+            &B256::ZERO,
+            &U64::ZERO,
+            RindexerEventFilter::empty_for_test()
+                .set_from_block(U64::from(111))
+                .set_to_block(U64::from(111)),
+            "test",
+            "test",
+            true,
+            None,
+            cancel_token,
+            Some(Arc::clone(&coordinator)),
+            None,
+            None,
+            &registry,
+            None,
+        )
+        .await;
+
+        assert!(
+            captured_reorgs.lock().expect("captured mutex poisoned").is_empty(),
+            "a failover during get_latest_block must NOT trigger a reorg rollback"
+        );
+        let ranges = queried_ranges.lock().expect("ranges mutex poisoned").clone();
+        assert!(
+            ranges.contains(&(111, 111)),
+            "indexing must continue once the new endpoint catches up, got {ranges:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn live_switch_still_detects_real_reorg_after_window_revalidation() {
+        // The counterpart guarantee: suspension must not mask a REAL reorg.
+        // Here the new endpoint (once past the watermark) disagrees with the
+        // window about blocks 105..=111 - those blocks were orphaned, so the
+        // revalidation on resume must roll back from the divergence point.
+        let cancel_token = CancellationToken::new();
+        let queried_ranges = Arc::new(StdMutex::new(Vec::new()));
+        let canonical: Vec<AnyRpcBlock> = (100..=112)
+            .map(|n| {
+                if n < 105 {
+                    make_hashed_block(n, h(n), h(n - 1))
+                } else {
+                    let parent = if n == 105 { h(104) } else { h(9000 + n - 1) };
+                    make_hashed_block(n, h(9000 + n), parent)
+                }
+            })
+            .collect();
+        let provider = Arc::new(ScriptedLiveProvider::new(
+            MockChainProvider::new(1).with_blocks(canonical),
+            vec![
+                // Old endpoint extends the window to 111, then the switch
+                // lands on the new endpoint whose 112 builds on a different
+                // chain.
+                (make_hashed_block(111, h(111), h(110)), 0),
+                (make_hashed_block(112, h(9112), h(9111)), 1),
+            ],
+            queried_ranges.clone(),
+            cancel_token.clone(),
+        ));
+        let coordinator = Arc::new(Mutex::new(coordinator_with_window(provider.clone(), 110)));
+        let (registry, captured_reorgs) = registry_capturing_reorgs();
+        let block_clock = BlockClock::new(None, None, provider.clone());
+        let (tx, _rx) = mpsc::channel(8);
+
+        live_indexing_stream(
+            false,
+            block_clock,
+            provider,
+            &tx,
+            U64::from(110),
+            &B256::ZERO,
+            &U64::ZERO,
+            RindexerEventFilter::empty_for_test()
+                .set_from_block(U64::from(111))
+                .set_to_block(U64::from(111)),
+            "test",
+            "test",
+            true,
+            None,
+            cancel_token,
+            Some(Arc::clone(&coordinator)),
+            None,
+            None,
+            &registry,
+            None,
+        )
+        .await;
+
+        let reorgs = captured_reorgs.lock().expect("captured mutex poisoned").clone();
+        assert_eq!(reorgs.len(), 1, "exactly one real reorg must be detected");
+        assert_eq!(
+            reorgs[0].fork_block, 105,
+            "rollback must start at the first block the new endpoint disagrees on"
+        );
+        assert_eq!(reorgs[0].detection_block, 111, "detected at the suspension watermark");
     }
 
     // --- retry_with_block_range tests ---

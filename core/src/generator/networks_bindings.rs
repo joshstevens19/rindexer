@@ -46,15 +46,23 @@ fn generate_reth_init_fn(network: &Network) -> Code {
     }
 }
 
-fn get_network_url(network: &Network) -> String {
+fn get_network_urls(network: &Network) -> Vec<String> {
     #[cfg(feature = "reth")]
     if network.is_reth_enabled() {
-        network.get_reth_ipc_path().unwrap()
-    } else {
-        network.rpc.clone()
+        return vec![network.get_reth_ipc_path().unwrap()];
     }
-    #[cfg(not(feature = "reth"))]
-    network.rpc.clone()
+    network.rpc.all().to_vec()
+}
+
+/// Expression resolving the configured rpc urls at runtime: each entry reads
+/// the env var of that name when set, falling back to the literal value.
+fn network_urls_expression(network: &Network) -> String {
+    let url_expressions = get_network_urls(network)
+        .iter()
+        .map(|url| format!(r#"public_read_env_value("{url}").unwrap_or("{url}".to_string())"#))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("&[{url_expressions}]")
 }
 
 fn generate_network_lazy_provider_code(network: &Network) -> Code {
@@ -63,7 +71,7 @@ fn generate_network_lazy_provider_code(network: &Network) -> Code {
         {network_name}
             .get_or_init(|| async {{
                 {reth_init_fn}
-                {client_fn}(&public_read_env_value("{network_url}").unwrap_or("{network_url}".to_string()), {chain_id}, {compute_units_per_second}, {max_block_range}, {block_poll_frq} {placeholder_headers}, {get_logs_settings}, {chain_state_notification})
+                {client_fn}("{raw_network_name}", {network_urls}, {chain_id}, {compute_units_per_second}, {max_block_range}, {block_poll_frq} {placeholder_headers}, {get_logs_settings}, {chain_state_notification})
                 .await
                 .expect("Error creating provider")
             }})
@@ -71,7 +79,8 @@ fn generate_network_lazy_provider_code(network: &Network) -> Code {
             .clone()
         "#,
         network_name = network_provider_name(network),
-        network_url = get_network_url(network),
+        raw_network_name = network.name,
+        network_urls = network_urls_expression(network),
         chain_id = network.chain_id,
         compute_units_per_second =
             if let Some(compute_units_per_second) = network.compute_units_per_second {
@@ -94,10 +103,13 @@ fn generate_network_lazy_provider_code(network: &Network) -> Code {
         } else {
             "None".to_string()
         },
-        client_fn =
-            if network.rpc.contains("shadow") { "create_shadow_client" } else { "create_client" },
+        client_fn = if network.rpc.primary().contains("shadow") {
+            "create_shadow_client"
+        } else {
+            "create_client"
+        },
         placeholder_headers =
-            if network.rpc.contains("shadow") { "" } else { ", HeaderMap::new()" },
+            if network.rpc.primary().contains("shadow") { "" } else { ", HeaderMap::new()" },
         chain_state_notification = "chain_state_notification",
         reth_init_fn = generate_reth_init_fn(network),
     ))
@@ -165,7 +177,8 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
 
     #[allow(dead_code)]
     async fn create_shadow_client(
-        rpc_url: &str,
+        network: &str,
+        rpc_urls: &[String],
         chain_id: u64,
         compute_units_per_second: Option<u64>,
         block_poll_frequency: Option<BlockPollFrequency>,
@@ -178,7 +191,7 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
             "X-SHADOW-API-KEY",
             public_read_env_value("RINDEXER_PHANTOM_API_KEY").unwrap().parse().unwrap(),
         );
-        create_client(rpc_url, chain_id, compute_units_per_second, max_block_range, block_poll_frequency, header, address_filtering, chain_state_notification).await
+        create_client(network, rpc_urls, chain_id, compute_units_per_second, max_block_range, block_poll_frequency, header, address_filtering, chain_state_notification).await
     }
         "#
         .to_string(),
@@ -210,7 +223,7 @@ mod tests {
         Network {
             name: name.to_string(),
             chain_id,
-            rpc: format!("https://{name}.example.com"),
+            rpc: format!("https://{name}.example.com").into(),
             block_poll_frequency: None,
             compute_units_per_second: None,
             max_block_range: None,

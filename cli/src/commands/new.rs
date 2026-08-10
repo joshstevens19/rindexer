@@ -226,7 +226,7 @@ pub fn handle_new_command(
         networks: vec![Network {
             name: "ethereum".to_string(),
             chain_id: 1,
-            rpc: "https://mainnet.gateway.tenderly.co".to_string(),
+            rpc: "https://mainnet.gateway.tenderly.co".into(),
             block_poll_frequency: None,
             compute_units_per_second: None,
             max_block_range: None,

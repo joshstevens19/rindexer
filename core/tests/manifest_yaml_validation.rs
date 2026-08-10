@@ -205,7 +205,7 @@ contracts: []
     let manifest = read_manifest(&path).expect("manifest reads");
 
     assert_eq!(manifest.project_type, ProjectType::Rust);
-    assert_eq!(manifest.networks[0].rpc, "COVERAGE_RPC_URL");
+    assert_eq!(manifest.networks[0].rpc.primary(), "COVERAGE_RPC_URL");
 }
 
 #[test]
