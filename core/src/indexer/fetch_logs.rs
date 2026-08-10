@@ -1272,6 +1272,23 @@ async fn live_indexing_stream(
         }
 
         let latest_block = cached_provider.get_latest_block().await;
+
+        // The call above can itself trigger the failover (the request died on
+        // the old endpoint and was answered by a replacement), in which case
+        // the block below already comes from the NEW endpoint. Re-check the
+        // switch counter BEFORE any reorg validation - otherwise a lagging
+        // replacement's first block would be compared against a window the
+        // previous endpoint validated, which is exactly the spurious-rollback
+        // shape the suspension exists to prevent.
+        if switch_watcher.switched(cached_provider.as_ref()) {
+            handle_live_endpoint_switch(
+                &mut log_response_to_large_to_block,
+                reorg_coordinator.as_ref(),
+                info_log_name,
+            )
+            .await;
+        }
+
         match latest_block {
             Ok(latest_block) => {
                 consecutive_latest_block_errors = 0;
@@ -2742,12 +2759,13 @@ mod tests {
         // hashes for them. Pre-mitigation the parent-hash window treated
         // that as a reorg and rolled back (DB deletes + stream retractions).
         //
-        // Script (window pre-validated up to 110):
-        //   iter1: block 111 (canonical) - extends the window; switch counter
-        //          flips to 1 afterwards.
-        //   iter2: loop notices the switch and suspends validation; the
-        //          lagging endpoint reports block 109 with alien hashes -
-        //          must be IGNORED.
+        // Script (window pre-validated up to 110; the switch counter flips
+        // during the call that returns the replacement endpoint's block):
+        //   iter1: block 111 (canonical, still the old endpoint) - extends
+        //          the window.
+        //   iter2: the transport fails over and the lagging endpoint reports
+        //          block 109 with alien hashes; the loop must notice the
+        //          switch, suspend validation and IGNORE the block.
         //   iter3: the new endpoint catches up: block 112 building on the
         //          canonical 111. The window revalidates against the mock's
         //          canonical blocks (all matching) and indexing continues.
@@ -2758,7 +2776,7 @@ mod tests {
         let provider = Arc::new(ScriptedLiveProvider::new(
             MockChainProvider::new(1).with_blocks(canonical),
             vec![
-                (make_hashed_block(111, h(111), h(110)), 1),
+                (make_hashed_block(111, h(111), h(110)), 0),
                 (make_hashed_block(109, h(9109), h(9108)), 1),
                 (make_hashed_block(112, h(112), h(111)), 1),
             ],
@@ -2806,6 +2824,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn live_switch_during_get_latest_block_triggers_no_spurious_rollback() {
+        // Sharper variant of the scenario above: the primary dies on the
+        // get_latest_block call itself, so the failover happens MID-ITERATION
+        // and the very block returned by that call already comes from the
+        // lagging replacement endpoint (the scripted provider flips the
+        // switch counter during the call, before returning). The loop must
+        // notice the switch AFTER the call and BEFORE reorg validation -
+        // otherwise the alien-hash block is compared against the previous
+        // endpoint's validated window and rolled back spuriously.
+        //
+        // Script (window pre-validated up to 110):
+        //   iter1: get_latest_block fails over mid-call and returns the
+        //          lagging endpoint's block 109 with alien hashes; the
+        //          switch counter flips during that same call.
+        //   iter2: the new endpoint catches up with the canonical block 111;
+        //          the window revalidates (all hashes match) and indexing
+        //          continues.
+        let cancel_token = CancellationToken::new();
+        let queried_ranges = Arc::new(StdMutex::new(Vec::new()));
+        let canonical: Vec<AnyRpcBlock> =
+            (100..=111).map(|n| make_hashed_block(n, h(n), h(n - 1))).collect();
+        let provider = Arc::new(ScriptedLiveProvider::new(
+            MockChainProvider::new(1).with_blocks(canonical),
+            vec![
+                // Switch counter flips DURING this call - the returned block
+                // is already the lagging replacement's view.
+                (make_hashed_block(109, h(9109), h(9108)), 1),
+                (make_hashed_block(111, h(111), h(110)), 1),
+            ],
+            queried_ranges.clone(),
+            cancel_token.clone(),
+        ));
+        let coordinator = Arc::new(Mutex::new(coordinator_with_window(provider.clone(), 110)));
+        let (registry, captured_reorgs) = registry_capturing_reorgs();
+        let block_clock = BlockClock::new(None, None, provider.clone());
+        let (tx, _rx) = mpsc::channel(8);
+
+        live_indexing_stream(
+            false,
+            block_clock,
+            provider,
+            &tx,
+            U64::from(110),
+            &B256::ZERO,
+            &U64::ZERO,
+            RindexerEventFilter::empty_for_test()
+                .set_from_block(U64::from(111))
+                .set_to_block(U64::from(111)),
+            "test",
+            "test",
+            true,
+            None,
+            cancel_token,
+            Some(Arc::clone(&coordinator)),
+            None,
+            None,
+            &registry,
+            None,
+        )
+        .await;
+
+        assert!(
+            captured_reorgs.lock().expect("captured mutex poisoned").is_empty(),
+            "a failover during get_latest_block must NOT trigger a reorg rollback"
+        );
+        let ranges = queried_ranges.lock().expect("ranges mutex poisoned").clone();
+        assert!(
+            ranges.contains(&(111, 111)),
+            "indexing must continue once the new endpoint catches up, got {ranges:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn live_switch_still_detects_real_reorg_after_window_revalidation() {
         // The counterpart guarantee: suspension must not mask a REAL reorg.
         // Here the new endpoint (once past the watermark) disagrees with the
@@ -2826,7 +2917,10 @@ mod tests {
         let provider = Arc::new(ScriptedLiveProvider::new(
             MockChainProvider::new(1).with_blocks(canonical),
             vec![
-                (make_hashed_block(111, h(111), h(110)), 1),
+                // Old endpoint extends the window to 111, then the switch
+                // lands on the new endpoint whose 112 builds on a different
+                // chain.
+                (make_hashed_block(111, h(111), h(110)), 0),
                 (make_hashed_block(112, h(9112), h(9111)), 1),
             ],
             queried_ranges.clone(),
