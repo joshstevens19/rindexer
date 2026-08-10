@@ -582,6 +582,7 @@ serde = {{ version = "1.0", features = ["derive"] }}
                             watch: false,
                             manage_process_signals: true,
                             disable_health_server: false,
+                            rpc_endpoint_events: None,
                         })
                         .await;
 

@@ -56,6 +56,9 @@ pub use abi::ABIItem;
 mod chat;
 pub mod event;
 pub mod notifications;
+pub use endpoint_failover::{
+    subscribe_rpc_endpoint_events, EndpointHealthSnapshot, RpcEndpointEvent,
+};
 pub use indexer::reorg::ReorgEvent;
 pub use notifications::ChainStateNotification;
 pub mod blockclock;

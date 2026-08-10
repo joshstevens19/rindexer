@@ -6,6 +6,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use crate::database::clickhouse::setup::SetupClickhouseError;
+use crate::endpoint_failover::{spawn_rpc_endpoint_event_forwarder, RpcEndpointEvent};
 use crate::events::RindexerEventEmitter;
 use crate::hot_reload::orchestrator::ReloadOrchestrator;
 use crate::hot_reload::watcher::ManifestWatcher;
@@ -56,6 +57,10 @@ pub struct StartDetails<'a> {
     /// When true, the health server is never started (useful when embedding rindexer
     /// inside another application which exposes its own health endpoints).
     pub disable_health_server: bool,
+    /// Optional sender the embedding host supplies to observe RPC endpoint
+    /// failover events (`Switched`/`Degraded`/`Recovered`) across every
+    /// network. Urls in the events are credential-redacted.
+    pub rpc_endpoint_events: Option<tokio::sync::broadcast::Sender<RpcEndpointEvent>>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -142,6 +147,12 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
         details.indexing_details.is_some()
     );
     let project_path = details.manifest_path.parent();
+
+    // Surface RPC endpoint failover events to the embedding host when it
+    // supplied a sender.
+    if let Some(host_events) = details.rpc_endpoint_events.clone() {
+        spawn_rpc_endpoint_event_forwarder(host_events);
+    }
 
     match project_path {
         Some(project_path) => {
@@ -484,6 +495,10 @@ pub struct StartNoCodeDetails<'a> {
     pub indexing_details: IndexerNoCodeDetails,
     pub graphql_details: GraphqlOverrideSettings,
     pub watch: bool,
+    /// Optional sender the embedding host supplies to observe RPC endpoint
+    /// failover events (`Switched`/`Degraded`/`Recovered`) across every
+    /// network. Urls in the events are credential-redacted.
+    pub rpc_endpoint_events: Option<tokio::sync::broadcast::Sender<RpcEndpointEvent>>,
 }
 
 #[derive(thiserror::Error, Debug)]

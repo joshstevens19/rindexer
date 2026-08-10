@@ -86,6 +86,14 @@ pub trait ChainProvider: Send + Sync + Debug {
         0
     }
 
+    /// Per-endpoint health snapshots (active endpoint, gate state, chain-id
+    /// verification status, observed tip, last error) for the transport
+    /// backing this provider. Urls are credential-redacted. Empty for
+    /// providers without a failover transport (IPC/reth, mocks).
+    fn rpc_health(&self) -> Vec<EndpointHealthSnapshot> {
+        Vec::new()
+    }
+
     async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError>;
     async fn get_block_number(&self) -> Result<U64, ProviderError>;
     async fn get_logs(&self, event_filter: &RindexerEventFilter)
@@ -834,6 +842,10 @@ impl ChainProvider for JsonRpcCachedProvider {
         JsonRpcCachedProvider::endpoint_switches(self)
     }
 
+    fn rpc_health(&self) -> Vec<EndpointHealthSnapshot> {
+        JsonRpcCachedProvider::rpc_health(self)
+    }
+
     async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
         self.get_latest_block().await
     }
@@ -926,6 +938,10 @@ impl<T: ChainProvider + ?Sized> ChainProvider for Arc<T> {
 
     fn endpoint_switches(&self) -> u64 {
         (**self).endpoint_switches()
+    }
+
+    fn rpc_health(&self) -> Vec<EndpointHealthSnapshot> {
+        (**self).rpc_health()
     }
 
     async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {

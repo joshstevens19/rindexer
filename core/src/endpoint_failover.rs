@@ -78,6 +78,28 @@ pub(crate) fn rpc_endpoint_event_sender() -> broadcast::Sender<RpcEndpointEvent>
     RPC_ENDPOINT_EVENTS.clone()
 }
 
+/// Forward every process-wide endpoint event into a host-supplied sender
+/// (the optional `rpc_endpoint_events` field on `StartDetails` /
+/// `StartNoCodeDetails`). The task exits when the host drops all receivers.
+pub(crate) fn spawn_rpc_endpoint_event_forwarder(host: broadcast::Sender<RpcEndpointEvent>) {
+    let mut events = subscribe_rpc_endpoint_events();
+    tokio::spawn(async move {
+        loop {
+            match events.recv().await {
+                Ok(event) => {
+                    if host.send(event).is_err() {
+                        break; // host dropped every receiver
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                    warn!(skipped, "host rpc endpoint event forwarder lagged - events skipped");
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+}
+
 /// A failover event for one of a network's rpc endpoints.
 ///
 /// All urls carried by these events are credential-redacted — they are safe
@@ -1226,6 +1248,43 @@ mod tests {
         assert_eq!(redact_rpc_url("https://rpc.example.com/"), "https://rpc.example.com");
         assert_eq!(redact_rpc_url("/var/run/reth.ipc"), "/var/run/reth.ipc");
         assert_eq!(redact_rpc_url("not a url"), "<unparseable-rpc-url>");
+    }
+
+    #[tokio::test]
+    async fn forwarder_relays_events_to_a_host_sender() {
+        let (host_tx, mut host_rx) = broadcast::channel(16);
+        spawn_rpc_endpoint_event_forwarder(host_tx);
+
+        // Give the forwarder task a beat to subscribe before emitting.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        let healths = vec![
+            Arc::new(EndpointHealth::new("https://one.example.com")),
+            Arc::new(EndpointHealth::new("https://two.example.com")),
+        ];
+        let state = FailoverState::new(
+            "forwarder-relays-test".to_string(),
+            1,
+            healths,
+            rpc_endpoint_event_sender(),
+        );
+        state.flag_active_degraded("test reason");
+
+        let mut saw_switch = false;
+        for _ in 0..50 {
+            match tokio::time::timeout(std::time::Duration::from_millis(100), host_rx.recv()).await
+            {
+                Ok(Ok(RpcEndpointEvent::Switched { network, .. }))
+                    if network == "forwarder-relays-test" =>
+                {
+                    saw_switch = true;
+                    break;
+                }
+                Ok(Ok(_)) => continue,
+                _ => break,
+            }
+        }
+        assert!(saw_switch, "the host sender must receive forwarded failover events");
     }
 
     #[tokio::test]

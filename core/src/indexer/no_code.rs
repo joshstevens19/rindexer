@@ -204,6 +204,7 @@ pub async fn setup_no_code(
                     watch: details.watch,
                     manage_process_signals: true,
                     disable_health_server: false,
+                    rpc_endpoint_events: details.rpc_endpoint_events,
                 });
             }
 
@@ -302,6 +303,7 @@ pub async fn setup_no_code(
                     watch: details.watch,
                     manage_process_signals: true,
                     disable_health_server: false,
+                    rpc_endpoint_events: details.rpc_endpoint_events,
                 });
             }
 
@@ -317,6 +319,7 @@ pub async fn setup_no_code(
                 watch: details.watch,
                 manage_process_signals: true,
                 disable_health_server: false,
+                rpc_endpoint_events: details.rpc_endpoint_events,
             })
         }
         None => Err(SetupNoCodeError::NoProjectPathFoundUsingParentOfManifestPath),
