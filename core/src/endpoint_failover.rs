@@ -146,6 +146,10 @@ const CHAIN_MISMATCH: u8 = 2;
 #[derive(Debug)]
 pub struct EndpointHealth {
     redacted_url: String,
+    /// Needle → replacement pairs scrubbing this endpoint's url (and its
+    /// secret-bearing parts) out of error strings before they are stored or
+    /// published. Longest needles first.
+    redaction_rules: Vec<(String, String)>,
     healthy: AtomicBool,
     chain_status: AtomicU8,
     consecutive_errors: AtomicU64,
@@ -156,8 +160,10 @@ pub struct EndpointHealth {
 
 impl EndpointHealth {
     pub(crate) fn new(url: &str) -> Self {
+        let redacted_url = redact_rpc_url(url);
         Self {
-            redacted_url: redact_rpc_url(url),
+            redaction_rules: build_redaction_rules(url, &redacted_url),
+            redacted_url,
             healthy: AtomicBool::new(true),
             chain_status: AtomicU8::new(CHAIN_UNVERIFIED),
             consecutive_errors: AtomicU64::new(0),
@@ -172,15 +178,33 @@ impl EndpointHealth {
         &self.redacted_url
     }
 
+    /// Scrub this endpoint's url - and its secret-bearing parts (userinfo,
+    /// path, query), raw or percent-encoded - out of an error string.
+    /// Transport errors (reqwest/alloy) routinely embed the full request url
+    /// including API keys, so every error string must pass through here
+    /// before it is stored, logged or published.
+    pub(crate) fn redact_error(&self, error: &str) -> String {
+        let mut sanitized = error.to_string();
+        for (needle, replacement) in &self.redaction_rules {
+            if sanitized.contains(needle.as_str()) {
+                sanitized = sanitized.replace(needle.as_str(), replacement);
+            }
+        }
+        sanitized
+    }
+
     /// Record a successful request against this endpoint.
     pub fn record_success(&self) {
         self.consecutive_errors.store(0, Ordering::Release);
     }
 
-    /// Record a failed request against this endpoint.
+    /// Record a failed request against this endpoint. The error string is
+    /// credential-redacted before it is stored (redaction must happen before
+    /// truncation - a truncated key would no longer match its needle).
     pub fn record_failure(&self, error: &str) {
         self.consecutive_errors.fetch_add(1, Ordering::AcqRel);
-        let truncated: String = error.chars().take(MAX_STORED_ERROR_LEN).collect();
+        let truncated: String =
+            self.redact_error(error).chars().take(MAX_STORED_ERROR_LEN).collect();
         if let Ok(mut last_error) = self.last_error.write() {
             *last_error = Some(truncated);
         }
@@ -668,7 +692,7 @@ where
                             switch_reason = Some(format!(
                                 "{} failed chain-id verification: {}",
                                 health.redacted_url,
-                                truncate_error(&err)
+                                summarize_transport_error(health, &err)
                             ));
                         }
                         state.maybe_gate_after_failure(index);
@@ -692,7 +716,7 @@ where
                         switch_reason = Some(format!(
                             "{} failed: {}",
                             health.redacted_url,
-                            truncate_error(&err)
+                            summarize_transport_error(health, &err)
                         ));
                     }
                     // The RpcLoggingLayer beneath already recorded the failure;
@@ -735,8 +759,74 @@ where
     }
 }
 
-fn truncate_error(error: &TransportError) -> String {
-    error.to_string().chars().take(MAX_STORED_ERROR_LEN).collect()
+/// Credential-redacted, length-capped rendering of a transport error for use
+/// in switch reasons and degrade events. Transport errors routinely embed
+/// the full request url (API keys included), so the endpoint's redaction
+/// rules are applied before truncation.
+fn summarize_transport_error(health: &EndpointHealth, error: &TransportError) -> String {
+    health.redact_error(&error.to_string()).chars().take(MAX_STORED_ERROR_LEN).collect()
+}
+
+/// Minimum length for a redaction needle - shorter fragments (e.g. a path of
+/// "/1") would mangle unrelated text without hiding anything meaningful.
+const MIN_REDACTION_NEEDLE_LEN: usize = 4;
+
+/// Build the needle → replacement pairs that scrub an endpoint url out of
+/// arbitrary error text: the full url (as configured and as normalized by the
+/// url parser) maps to its redacted form, and the secret-bearing parts
+/// (username, password, path, query) map to a placeholder. Every needle is
+/// also added in percent-encoded form - transport errors sometimes embed the
+/// request url form-encoded. Longest needles are applied first.
+fn build_redaction_rules(url: &str, redacted_url: &str) -> Vec<(String, String)> {
+    let mut rules: Vec<(String, String)> = Vec::new();
+    let push = |needle: String, replacement: &str, rules: &mut Vec<(String, String)>| {
+        if needle.len() < MIN_REDACTION_NEEDLE_LEN
+            || rules.iter().any(|(existing, _)| existing == &needle)
+        {
+            return;
+        }
+        let encoded = percent_encode_component(&needle);
+        if encoded != needle {
+            rules.push((encoded, replacement.to_string()));
+        }
+        rules.push((needle, replacement.to_string()));
+    };
+
+    push(url.to_string(), redacted_url, &mut rules);
+    if let Ok(parsed) = Url::parse(url) {
+        push(parsed.to_string(), redacted_url, &mut rules);
+        if let Some(password) = parsed.password() {
+            push(password.to_string(), "***", &mut rules);
+        }
+        if !parsed.username().is_empty() {
+            push(parsed.username().to_string(), "***", &mut rules);
+        }
+        let path = parsed.path();
+        if !path.is_empty() && path != "/" {
+            push(path.to_string(), "/***", &mut rules);
+        }
+        if let Some(query) = parsed.query() {
+            push(query.to_string(), "***", &mut rules);
+        }
+    }
+
+    rules.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    rules
+}
+
+/// Percent-encode every byte outside the RFC 3986 unreserved set (the way a
+/// url gets embedded into another url's query string or a form body).
+fn percent_encode_component(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char)
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
 }
 
 /// Redact credentials from an rpc url so it is safe to log, put in events and
@@ -782,6 +872,7 @@ pub(crate) mod test_support {
         pub chain_id: Arc<AtomicU64>,
         pub block_number: Arc<AtomicU64>,
         pub fail: Arc<AtomicBool>,
+        pub fail_error: Arc<std::sync::Mutex<String>>,
         pub calls: Arc<AtomicUsize>,
     }
 
@@ -791,8 +882,13 @@ pub(crate) mod test_support {
                 chain_id: Arc::new(AtomicU64::new(chain_id)),
                 block_number: Arc::new(AtomicU64::new(0)),
                 fail: Arc::new(AtomicBool::new(false)),
+                fail_error: Arc::new(std::sync::Mutex::new("mock endpoint down".to_string())),
                 calls: Arc::new(AtomicUsize::new(0)),
             }
+        }
+
+        pub(crate) fn set_fail_error(&self, message: &str) {
+            *self.fail_error.lock().expect("fail_error mutex poisoned") = message.to_string();
         }
 
         pub(crate) fn call_count(&self) -> usize {
@@ -827,7 +923,9 @@ pub(crate) mod test_support {
             let this = self.clone();
             Box::pin(async move {
                 if this.fail.load(Ordering::SeqCst) {
-                    return Err(TransportErrorKind::custom_str("mock endpoint down"));
+                    let message =
+                        this.fail_error.lock().expect("fail_error mutex poisoned").clone();
+                    return Err(TransportErrorKind::custom_str(&message));
                 }
                 match req {
                     RequestPacket::Single(single) => Ok(ResponsePacket::Single(Response {
@@ -1230,6 +1328,84 @@ mod tests {
         assert_eq!(snapshots[1].observed_tip, None, "no prober ran yet");
         assert_eq!(snapshots[1].consecutive_errors, 1);
         assert_eq!(snapshots[1].last_error.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn error_strings_are_scrubbed_of_raw_and_percent_encoded_urls() {
+        // Transport errors routinely embed the full request url - keys in
+        // the path AND the query, plus userinfo - both raw and
+        // percent-encoded (e.g. when the url ends up inside another url's
+        // query string). None of it may survive into stored errors.
+        let url = "https://user:hunter2@rpc.example.com:8545/v2/SECRETPATHKEY?apikey=QUERYSECRET";
+        let health = EndpointHealth::new(url);
+
+        let raw_error = format!("error sending request for url ({url}): connection refused");
+        let encoded_error =
+            format!("upstream proxy rejected target={}", percent_encode_component(url));
+        let fragment_error =
+            "HTTP 401 for /v2/SECRETPATHKEY with apikey=QUERYSECRET (user user)".to_string();
+
+        for error in [raw_error, encoded_error, fragment_error] {
+            let sanitized = health.redact_error(&error);
+            assert!(!sanitized.contains("SECRETPATHKEY"), "path key leaked: {sanitized}");
+            assert!(!sanitized.contains("QUERYSECRET"), "query key leaked: {sanitized}");
+            assert!(!sanitized.contains("hunter2"), "password leaked: {sanitized}");
+
+            health.record_failure(&error);
+            let stored = health.last_error().expect("error stored");
+            assert!(!stored.contains("SECRETPATHKEY"), "stored path key leaked: {stored}");
+            assert!(!stored.contains("QUERYSECRET"), "stored query key leaked: {stored}");
+            assert!(!stored.contains("hunter2"), "stored password leaked: {stored}");
+        }
+
+        // The raw-url error must carry the redacted url instead.
+        let sanitized =
+            health.redact_error(&format!("error sending request for url ({url}): timed out"));
+        assert!(
+            sanitized.contains("https://rpc.example.com:8545/***?***"),
+            "expected the redacted url in: {sanitized}"
+        );
+    }
+
+    #[tokio::test]
+    async fn failing_endpoint_errors_surface_redacted_in_events_and_snapshots() {
+        // End-to-end over the failover service: the failing endpoint's error
+        // text embeds its own url (key in the path, as reqwest errors do).
+        // The Switched reason and the health snapshot must only ever show
+        // the redacted form.
+        let mocks = [MockEndpoint::new(1), MockEndpoint::new(1)];
+        mocks[0].fail.store(true, Ordering::SeqCst);
+        mocks[0].set_fail_error(
+            "error sending request for url (https://endpoint-0.example.com/key-0): timed out",
+        );
+        let (service, state, mut events) = failover_over_mocks("ethereum", 1, &mocks);
+
+        send_request(&service).await.expect("fallback should serve the request");
+
+        let events = drain_events(&mut events);
+        let switch_reason = events
+            .iter()
+            .find_map(|event| match event {
+                RpcEndpointEvent::Switched { reason, .. } => Some(reason.clone()),
+                _ => None,
+            })
+            .expect("a Switched event must be emitted");
+        assert!(
+            !switch_reason.contains("key-0"),
+            "switch reason leaked the api key: {switch_reason}"
+        );
+        assert!(
+            switch_reason.contains("https://endpoint-0.example.com/***"),
+            "switch reason should carry the redacted url: {switch_reason}"
+        );
+
+        let snapshot = &state.snapshot()[0];
+        let last_error = snapshot.last_error.as_deref().expect("failure recorded");
+        assert!(!last_error.contains("key-0"), "snapshot leaked the api key: {last_error}");
+        assert!(
+            last_error.contains("https://endpoint-0.example.com/***"),
+            "snapshot should carry the redacted url: {last_error}"
+        );
     }
 
     #[test]
