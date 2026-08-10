@@ -1,5 +1,6 @@
 // public
 pub mod adaptive_concurrency;
+pub mod endpoint_failover;
 pub mod generator;
 pub mod hot_reload;
 pub use hot_reload::RELOAD_EXIT_CODE;

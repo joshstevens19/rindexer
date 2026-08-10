@@ -19,7 +19,8 @@ use tokio::sync::broadcast::Sender;
 
 #[allow(dead_code)]
 async fn create_shadow_client(
-    rpc_url: &str,
+    network: &str,
+    rpc_urls: &[String],
     chain_id: u64,
     compute_units_per_second: Option<u64>,
     block_poll_frequency: Option<BlockPollFrequency>,
@@ -33,7 +34,8 @@ async fn create_shadow_client(
         public_read_env_value("RINDEXER_PHANTOM_API_KEY").unwrap().parse().unwrap(),
     );
     create_client(
-        rpc_url,
+        network,
+        rpc_urls,
         chain_id,
         compute_units_per_second,
         max_block_range,
@@ -53,8 +55,9 @@ pub async fn get_ethereum_provider_cache() -> Arc<JsonRpcCachedProvider> {
             let chain_state_notification = None;
 
             create_client(
-                &public_read_env_value("https://mainnet.gateway.tenderly.co")
-                    .unwrap_or("https://mainnet.gateway.tenderly.co".to_string()),
+                "ethereum",
+                &[public_read_env_value("https://mainnet.gateway.tenderly.co")
+                    .unwrap_or("https://mainnet.gateway.tenderly.co".to_string())],
                 1,
                 None,
                 None,

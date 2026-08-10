@@ -1,4 +1,7 @@
-use crate::{adaptive_concurrency::ADAPTIVE_CONCURRENCY, rindexer_error, rindexer_info};
+use crate::{
+    adaptive_concurrency::ADAPTIVE_CONCURRENCY, endpoint_failover::EndpointHealth, rindexer_error,
+    rindexer_info,
+};
 use alloy::{
     rpc::json_rpc::{RequestPacket, ResponsePacket},
     transports::TransportError,
@@ -6,6 +9,7 @@ use alloy::{
 use std::{
     future::Future,
     pin::Pin,
+    sync::Arc,
     task::{Context, Poll},
     time::Instant,
 };
@@ -16,11 +20,21 @@ use tower::{Layer, Service};
 pub struct RpcLoggingLayer {
     chain_id: u64,
     rpc_url: String,
+    /// Optional per-endpoint health fed with every request outcome. Wired
+    /// when the transport participates in a failover pool.
+    health: Option<Arc<EndpointHealth>>,
 }
 
 impl RpcLoggingLayer {
     pub fn new(chain_id: u64, rpc_url: String) -> Self {
-        Self { chain_id, rpc_url }
+        Self { chain_id, rpc_url, health: None }
+    }
+
+    /// Feed request outcomes (success/failure classification) into the given
+    /// endpoint health tracker.
+    pub fn with_health(mut self, health: Arc<EndpointHealth>) -> Self {
+        self.health = Some(health);
+        self
     }
 }
 
@@ -28,7 +42,12 @@ impl<S> Layer<S> for RpcLoggingLayer {
     type Service = RpcLoggingService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        RpcLoggingService { inner, chain_id: self.chain_id, rpc_url: self.rpc_url.clone() }
+        RpcLoggingService {
+            inner,
+            chain_id: self.chain_id,
+            rpc_url: self.rpc_url.clone(),
+            health: self.health.clone(),
+        }
     }
 }
 
@@ -37,6 +56,7 @@ pub struct RpcLoggingService<S> {
     inner: S,
     chain_id: u64,
     rpc_url: String,
+    health: Option<Arc<EndpointHealth>>,
 }
 
 impl<S> Service<RequestPacket> for RpcLoggingService<S>
@@ -56,6 +76,7 @@ where
         let start_time = Instant::now();
         let chain_id = self.chain_id;
         let rpc_url = self.rpc_url.clone();
+        let health = self.health.clone();
 
         let method_name = match &req {
             RequestPacket::Single(r) => r.method().to_string(),
@@ -86,6 +107,10 @@ where
                 Ok(response) => {
                     let duration = start_time.elapsed();
 
+                    if let Some(health) = &health {
+                        health.record_success();
+                    }
+
                     if duration.as_secs() >= 10 {
                         rindexer_info!(
                             "SLOW RPC call - chain_id: {}, method: {}, duration: {:?}, url: {}",
@@ -101,6 +126,10 @@ where
                 Err(err) => {
                     let duration = start_time.elapsed();
                     let error_str = err.to_string();
+
+                    if let Some(health) = &health {
+                        health.record_failure(&error_str);
+                    }
 
                     let is_known_error = is_known_retryable_error(&error_str);
 
