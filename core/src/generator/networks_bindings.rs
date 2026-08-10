@@ -51,10 +51,10 @@ fn get_network_url(network: &Network) -> String {
     if network.is_reth_enabled() {
         network.get_reth_ipc_path().unwrap()
     } else {
-        network.rpc.clone()
+        network.rpc.primary().to_string()
     }
     #[cfg(not(feature = "reth"))]
-    network.rpc.clone()
+    network.rpc.primary().to_string()
 }
 
 fn generate_network_lazy_provider_code(network: &Network) -> Code {
@@ -94,10 +94,13 @@ fn generate_network_lazy_provider_code(network: &Network) -> Code {
         } else {
             "None".to_string()
         },
-        client_fn =
-            if network.rpc.contains("shadow") { "create_shadow_client" } else { "create_client" },
+        client_fn = if network.rpc.primary().contains("shadow") {
+            "create_shadow_client"
+        } else {
+            "create_client"
+        },
         placeholder_headers =
-            if network.rpc.contains("shadow") { "" } else { ", HeaderMap::new()" },
+            if network.rpc.primary().contains("shadow") { "" } else { ", HeaderMap::new()" },
         chain_state_notification = "chain_state_notification",
         reth_init_fn = generate_reth_init_fn(network),
     ))
@@ -210,7 +213,7 @@ mod tests {
         Network {
             name: name.to_string(),
             chain_id,
-            rpc: format!("https://{name}.example.com"),
+            rpc: format!("https://{name}.example.com").into(),
             block_poll_frequency: None,
             compute_units_per_second: None,
             max_block_range: None,

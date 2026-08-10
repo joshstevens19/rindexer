@@ -2,8 +2,8 @@ use std::fmt;
 use std::time::Duration;
 
 use alloy::primitives::U64;
-use serde::de::Visitor;
-use serde::{de, Deserialize, Deserializer, Serialize};
+use serde::de::{SeqAccess, Visitor};
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 #[cfg(feature = "reth")]
 use tokio::sync::broadcast::Sender;
@@ -38,13 +38,142 @@ fn default_reorg_enabled() -> bool {
     true
 }
 
+/// The RPC endpoints configured for a network.
+///
+/// Accepts either a single url string (the historic form) or a list of urls
+/// where the first entry is the primary endpoint and the rest are ordered
+/// fallbacks:
+///
+/// ```yaml
+/// rpc: https://mainnet.gateway.tenderly.co
+/// ```
+///
+/// ```yaml
+/// rpc:
+///   - ${ETH_RPC_PRIMARY}
+///   - ${ETH_RPC_FALLBACK}
+/// ```
+///
+/// A single url serializes back to the plain string form so existing
+/// manifests round-trip unchanged.
+///
+/// Individual urls are NOT checked for emptiness at parse time - Foundry
+/// imports leave non-local `CHAIN_<id>_RPC_URL` values empty, and those
+/// manifests must still parse so `validate_manifest_network_rpc_urls` can
+/// produce its actionable error. Only a structurally empty list is rejected.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RpcUrls(Vec<String>);
+
+impl RpcUrls {
+    /// Create from a list of urls. Returns `None` when the list is empty.
+    pub fn try_new(urls: Vec<String>) -> Option<Self> {
+        if urls.is_empty() {
+            return None;
+        }
+        Some(Self(urls))
+    }
+
+    /// The primary (first) endpoint url.
+    pub fn primary(&self) -> &str {
+        &self.0[0]
+    }
+
+    /// All endpoint urls in failover order (primary first).
+    pub fn all(&self) -> &[String] {
+        &self.0
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, String> {
+        self.0.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl From<String> for RpcUrls {
+    fn from(url: String) -> Self {
+        Self(vec![url])
+    }
+}
+
+impl From<&str> for RpcUrls {
+    fn from(url: &str) -> Self {
+        Self(vec![url.to_string()])
+    }
+}
+
+impl fmt::Display for RpcUrls {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0.join(", "))
+    }
+}
+
+impl Serialize for RpcUrls {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // Keep the historic single-string form for single-endpoint networks
+        // so serialized manifests stay backwards compatible.
+        if self.0.len() == 1 {
+            serializer.serialize_str(&self.0[0])
+        } else {
+            self.0.serialize(serializer)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RpcUrls {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct RpcUrlsVisitor;
+
+        impl<'de> Visitor<'de> for RpcUrlsVisitor {
+            type Value = RpcUrls;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("an rpc url string or a non-empty list of rpc url strings")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<RpcUrls, E>
+            where
+                E: de::Error,
+            {
+                Ok(RpcUrls(vec![value.to_string()]))
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<RpcUrls, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut urls = Vec::new();
+                while let Some(url) = seq.next_element::<String>()? {
+                    urls.push(url);
+                }
+                RpcUrls::try_new(urls)
+                    .ok_or_else(|| de::Error::custom("rpc must contain at least one url"))
+            }
+        }
+
+        deserializer.deserialize_any(RpcUrlsVisitor)
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Network {
     pub name: String,
 
     pub chain_id: u64,
 
-    pub rpc: String,
+    pub rpc: RpcUrls,
 
     /// Poll the latest block at a defined frequency. It is recommended that this frequency be a
     /// multiple faster than the networks block time to ensure fast indexing.
@@ -299,7 +428,8 @@ mod tests {
 
         assert_eq!(network.name, "ethereum");
         assert_eq!(network.chain_id, 1);
-        assert_eq!(network.rpc, "https://mainnet.gateway.tenderly.co");
+        assert_eq!(network.rpc.primary(), "https://mainnet.gateway.tenderly.co");
+        assert_eq!(network.rpc.len(), 1);
         assert_eq!(network.max_block_range, None);
         assert_eq!(network.compute_units_per_second, None);
         assert_eq!(network.block_poll_frequency, None);
@@ -319,6 +449,114 @@ mod tests {
         let yaml = serde_yaml::to_string(&network).unwrap();
 
         assert!(!yaml.contains("reth:"));
+    }
+
+    #[test]
+    fn test_network_rpc_accepts_list_of_urls() {
+        let network: Network = serde_yaml::from_str(
+            r#"
+            name: ethereum
+            chain_id: 1
+            rpc:
+              - https://primary.example.com
+              - https://fallback-one.example.com
+              - https://fallback-two.example.com
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(network.rpc.primary(), "https://primary.example.com");
+        assert_eq!(
+            network.rpc.all(),
+            &[
+                "https://primary.example.com".to_string(),
+                "https://fallback-one.example.com".to_string(),
+                "https://fallback-two.example.com".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_network_rpc_rejects_empty_list() {
+        let result: Result<Network, _> = serde_yaml::from_str(
+            r#"
+            name: ethereum
+            chain_id: 1
+            rpc: []
+            "#,
+        );
+
+        assert!(result.is_err(), "an empty rpc list must be rejected");
+    }
+
+    #[test]
+    fn test_network_rpc_accepts_empty_url_strings_for_later_validation() {
+        // Foundry imports leave non-local `CHAIN_<id>_RPC_URL` values empty;
+        // those manifests must still parse so
+        // `validate_manifest_network_rpc_urls` can produce its actionable
+        // error instead of a serde failure.
+        let network: Network = serde_yaml::from_str(
+            r#"
+            name: ethereum
+            chain_id: 1
+            rpc: ""
+            "#,
+        )
+        .unwrap();
+        assert_eq!(network.rpc.primary(), "");
+
+        let network: Network = serde_yaml::from_str(
+            r#"
+            name: ethereum
+            chain_id: 1
+            rpc:
+              - https://primary.example.com
+              - ""
+            "#,
+        )
+        .unwrap();
+        assert_eq!(network.rpc.len(), 2);
+    }
+
+    #[test]
+    fn test_network_rpc_single_url_serializes_to_plain_string() {
+        let network: Network = serde_yaml::from_str(
+            r#"
+            name: ethereum
+            chain_id: 1
+            rpc: https://mainnet.gateway.tenderly.co
+            "#,
+        )
+        .unwrap();
+
+        let serialized = serde_yaml::to_string(&network).unwrap();
+        assert!(
+            serialized.contains("rpc: https://mainnet.gateway.tenderly.co"),
+            "single url must serialize back to the plain string form, got:\n{serialized}"
+        );
+
+        // And it must round-trip.
+        let reparsed: Network = serde_yaml::from_str(&serialized).unwrap();
+        assert_eq!(reparsed.rpc, network.rpc);
+    }
+
+    #[test]
+    fn test_network_rpc_multi_url_round_trips() {
+        let network: Network = serde_yaml::from_str(
+            r#"
+            name: ethereum
+            chain_id: 1
+            rpc:
+              - https://primary.example.com
+              - https://fallback.example.com
+            "#,
+        )
+        .unwrap();
+
+        let serialized = serde_yaml::to_string(&network).unwrap();
+        let reparsed: Network = serde_yaml::from_str(&serialized).unwrap();
+        assert_eq!(reparsed.rpc, network.rpc);
+        assert_eq!(reparsed.rpc.len(), 2);
     }
 
     #[test]

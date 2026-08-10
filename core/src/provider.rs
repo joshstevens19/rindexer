@@ -1138,10 +1138,12 @@ fn ensure_rpc_url_not_empty(
 
 pub fn validate_manifest_network_rpc_urls(manifest: &Manifest) -> Result<(), RetryClientError> {
     for network in &manifest.networks {
-        ensure_rpc_url_not_empty(
-            format!("`{}` (chain_id {})", network.name, network.chain_id),
-            &network.rpc,
-        )?;
+        for rpc_url in network.rpc.iter() {
+            ensure_rpc_url_not_empty(
+                format!("`{}` (chain_id {})", network.name, network.chain_id),
+                rpc_url,
+            )?;
+        }
     }
 
     Ok(())
@@ -1262,7 +1264,7 @@ impl CreateNetworkProvider {
     ) -> Result<Vec<CreateNetworkProvider>, RetryClientError> {
         let provider_futures = manifest.networks.iter().map(|network| async move {
             #[cfg(not(feature = "reth"))]
-            let provider_url = network.rpc.clone();
+            let provider_url = network.rpc.primary().to_string();
 
             #[cfg(not(feature = "reth"))]
             let reth_tx: Option<Sender<ChainStateNotification>> = None;
@@ -1280,7 +1282,7 @@ impl CreateNetworkProvider {
             let provider_url = if reth_tx.is_some() {
                 network.get_reth_ipc_path().unwrap()
             } else {
-                network.rpc.clone()
+                network.rpc.primary().to_string()
             };
 
             ensure_rpc_url_not_empty(

@@ -17,7 +17,7 @@ use crate::{
     helpers::{load_env_from_full_path, replace_env_variable_to_raw_name},
     manifest::{
         core::{Manifest, ProjectType},
-        network::Network,
+        network::{Network, RpcUrls},
     },
     StringOrArray,
 };
@@ -921,14 +921,16 @@ pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError>
             serde_yaml::from_str(&contents_before_transform)?;
 
         for network in &mut manifest_after_transform.networks {
-            network.rpc = manifest_networks_only
+            let raw_rpc = manifest_networks_only
                 .networks
                 .iter()
                 .find(|n| n.name == network.name)
-                .map_or_else(
-                    || replace_env_variable_to_raw_name(&network.rpc),
-                    |n| replace_env_variable_to_raw_name(&n.rpc),
-                );
+                .map_or(&network.rpc, |n| &n.rpc);
+
+            network.rpc = RpcUrls::try_new(
+                raw_rpc.iter().map(|url| replace_env_variable_to_raw_name(url)).collect(),
+            )
+            .expect("rpc urls already validated as non-empty at deserialization");
         }
     }
 

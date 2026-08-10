@@ -643,7 +643,7 @@ mod tests {
         let network = Network {
             name: "ethereum".to_string(),
             chain_id: 1,
-            rpc: "https://eth.example.com".to_string(),
+            rpc: "https://eth.example.com".into(),
             block_poll_frequency: None,
             compute_units_per_second: None,
             max_block_range: None,

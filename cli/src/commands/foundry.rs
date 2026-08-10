@@ -1535,7 +1535,7 @@ fn default_network(chain_id: u64, name: String) -> Network {
     Network {
         name,
         chain_id,
-        rpc: format!("${{{}}}", rpc_env_key(chain_id)),
+        rpc: format!("${{{}}}", rpc_env_key(chain_id)).into(),
         block_poll_frequency: None,
         compute_units_per_second: None,
         max_block_range: None,
@@ -2621,17 +2621,17 @@ mod tests {
         assert!(networks.iter().any(|network| {
             network.chain_id == 31337
                 && network.name == "anvil"
-                && network.rpc == "${ANVIL_RPC_URL}"
+                && network.rpc.primary() == "${ANVIL_RPC_URL}"
         }));
         assert!(networks.iter().any(|network| {
             network.chain_id == 1
                 && network.name == "ethereum"
-                && network.rpc == "${CHAIN_1_RPC_URL}"
+                && network.rpc.primary() == "${CHAIN_1_RPC_URL}"
         }));
         assert!(networks.iter().any(|network| {
             network.chain_id == 1301
                 && network.name == "unichain_sepolia"
-                && network.rpc == "${CHAIN_1301_RPC_URL}"
+                && network.rpc.primary() == "${CHAIN_1301_RPC_URL}"
         }));
 
         let env = new_env_contents(&networks);
