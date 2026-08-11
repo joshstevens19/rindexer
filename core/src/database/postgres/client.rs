@@ -29,6 +29,13 @@ pub fn connection_string() -> Result<String, env::VarError> {
     Ok(connection)
 }
 
+/// DATABASE_URL is process-global while tests run in parallel, so tests that
+/// point it at a per-test container must hold this lock from `set_var` until
+/// the client has connected.
+#[cfg(test)]
+pub(crate) static TEST_DATABASE_URL_LOCK: tokio::sync::Mutex<()> =
+    tokio::sync::Mutex::const_new(());
+
 #[derive(thiserror::Error, Debug)]
 pub enum PostgresConnectionError {
     #[error("The database connection string is wrong please check your environment: {0}")]
@@ -95,6 +102,14 @@ pub enum BulkInsertPostgresError {
 
     #[error("{0}")]
     CouldNotWriteDataToPostgres(#[from] tokio_postgres::Error),
+}
+
+/// Cursor advance committed atomically with a bulk event insert — the
+/// `rindexer_internal.{internal_table_name}` last-synced tracker for one network.
+pub struct BulkCursorUpdate {
+    pub internal_table_name: String,
+    pub network: String,
+    pub to_block: u64,
 }
 
 pub struct PostgresClient {
@@ -357,7 +372,7 @@ impl PostgresClient {
             if let Err(e) = writer.as_mut().write(row).await {
                 error!("Error writing binary data, aborting early: {}", e);
                 writer.as_mut().finish().await?;
-                Err(e)?;
+                return Err(e.into());
             };
         }
 
@@ -454,6 +469,168 @@ impl PostgresClient {
                 .map(|_| ())
                 .map_err(|e| e.to_string())
         }
+    }
+
+    /// Same as `insert_bulk`, but commits the batch AND the
+    /// `rindexer_internal.{table}` last-synced cursor in ONE transaction.
+    ///
+    /// This closes the double-index race (`process.rs` `trigger_event` TODO):
+    /// with the cursor committed atomically with the rows, a crash/restart
+    /// either sees neither (clean re-fetch) or both (resume past the batch).
+    ///
+    /// PRECONDITIONS (enforced by the caller, `no_code_callback`): Postgres is
+    /// the SOLE raw-event sink; a single writer process; effective callback
+    /// concurrency 1 (batches commit in rid order). Known residual race: a
+    /// reorg rollback rewinds this cursor unguarded while an in-flight commit
+    /// may re-advance it past the rewind (pre-existing, unchanged — the
+    /// corrected refetch re-inserts and stale rows carry dead block hashes).
+    pub async fn insert_bulk_with_cursor(
+        &self,
+        table_name: &str,
+        columns: &[String],
+        postgres_bulk_data: &[Vec<EthereumSqlTypeWrapper>],
+        cursor: &BulkCursorUpdate,
+    ) -> Result<(), String> {
+        if postgres_bulk_data.is_empty() {
+            return Ok(());
+        }
+
+        let total_params = postgres_bulk_data.len() * columns.len();
+
+        let mut conn = self.pool.get().await.map_err(|e| e.to_string())?;
+        let transaction = conn.transaction().await.map_err(|e| e.to_string())?;
+
+        if postgres_bulk_data.len() > 100 || total_params > 65535 {
+            let column_types: Vec<PgType> =
+                postgres_bulk_data[0].iter().map(|param| param.to_type()).collect();
+            let stmt = format!(
+                "COPY {} ({}) FROM STDIN WITH (FORMAT binary)",
+                table_name,
+                generate_event_table_columns_names_sql(columns),
+            );
+            let sink = transaction.copy_in(&stmt).await.map_err(|e| e.to_string())?;
+            let writer = BinaryCopyInWriter::new(sink, &column_types);
+            pin_mut!(writer);
+            for row in postgres_bulk_data.iter() {
+                let row_refs: Vec<&(dyn ToSql + Sync)> =
+                    row.iter().map(|param| param as &(dyn ToSql + Sync)).collect();
+                if let Err(e) = writer.as_mut().write(&row_refs).await {
+                    error!("Error writing binary data in atomic bulk insert, aborting: {}", e);
+                    // Same discipline as bulk_insert_via_copy: finish() must run
+                    // (hanging-COPY protection) and its error must propagate, not
+                    // be swallowed; otherwise return the original write error.
+                    writer.as_mut().finish().await.map_err(|fe| fe.to_string())?;
+                    return Err(e.to_string());
+                }
+            }
+            writer.finish().await.map_err(|e| e.to_string())?;
+        } else {
+            let total_columns = columns.len();
+            let mut query = format!(
+                "INSERT INTO {} ({}) VALUES ",
+                table_name,
+                generate_event_table_columns_names_sql(columns),
+            );
+            let mut params: Vec<&(dyn ToSql + Sync)> = Vec::new();
+            for (i, row) in postgres_bulk_data.iter().enumerate() {
+                if i > 0 {
+                    query.push(',');
+                }
+                let mut placeholders = vec![];
+                for j in 0..total_columns {
+                    placeholders.push(format!("${}", i * total_columns + j + 1));
+                }
+                query.push_str(&format!("({})", placeholders.join(",")));
+                for param in row {
+                    params.push(param as &(dyn ToSql + Sync));
+                }
+            }
+            // Metrics parity with the non-atomic path (bulk_insert_via_query goes
+            // through self.execute, which records; the COPY path records nothing
+            // there either, so only this branch records).
+            let start = std::time::Instant::now();
+            let result = transaction.execute(&query, &params).await;
+            db_metrics::record_db_operation(
+                ops::QUERY,
+                result.is_ok(),
+                start.elapsed().as_secs_f64(),
+            );
+            result.map_err(|e| e.to_string())?;
+        }
+
+        // Same statement + binding shape as update_progress_and_last_synced_task,
+        // monotonic guard included — but inside the batch's transaction.
+        let cursor_query = format!(
+            "UPDATE rindexer_internal.{} SET last_synced_block = $1 WHERE network = $2 AND $1 > last_synced_block",
+            cursor.internal_table_name
+        );
+        let cursor_rows = transaction
+            .execute(
+                &cursor_query,
+                &[&EthereumSqlTypeWrapper::U64(cursor.to_block), &cursor.network],
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if cursor_rows == 0 {
+            // Zero updated rows is one of two very different situations — probe
+            // the row (same transaction) to tell them apart:
+            //  - row present, already at/past to_block: benign. The historic and
+            //    live loops of the SAME event share this cursor, and the live
+            //    loop commits at head while historic backfill is still behind —
+            //    the monotonic guard correctly refuses to rewind. The rows must
+            //    still commit (they were never inserted), so this cannot error:
+            //    the batch would retry forever against a cursor that stays ahead.
+            //  - row missing: the seeded (network, 0) row is gone / setup never
+            //    ran. Committing rows while no cursor can ever advance would
+            //    restart indexing from the manifest start forever (duplicate
+            //    storm) — roll back and fail loudly instead.
+            let probe = format!(
+                "SELECT last_synced_block::TEXT FROM rindexer_internal.{} WHERE network = $1",
+                cursor.internal_table_name
+            );
+            let row = transaction
+                .query_opt(&probe, &[&cursor.network])
+                .await
+                .map_err(|e| e.to_string())?;
+            match row {
+                Some(row) => {
+                    let current: String = row.get(0);
+                    transaction.commit().await.map_err(|e| e.to_string())?;
+                    tracing::debug!(
+                        "ATOMIC-CURSOR commit: {} rows={} cursor[{}] to_block={} not advanced (already at {} — concurrent live/historic loop ahead)",
+                        table_name,
+                        postgres_bulk_data.len(),
+                        cursor.internal_table_name,
+                        cursor.to_block,
+                        current
+                    );
+                }
+                None => {
+                    // dropping the transaction without commit rolls it back
+                    return Err(format!(
+                        "ATOMIC-CURSOR: no cursor row for network={} in rindexer_internal.{} — \
+                         seeded row missing, rolling back {} rows for {} (cursor could never \
+                         advance; committing would re-index from the manifest start forever)",
+                        cursor.network,
+                        cursor.internal_table_name,
+                        postgres_bulk_data.len(),
+                        table_name
+                    ));
+                }
+            }
+        } else {
+            transaction.commit().await.map_err(|e| e.to_string())?;
+            tracing::debug!(
+                "ATOMIC-CURSOR commit: {} rows={} cursor[{}]={} (updated={})",
+                table_name,
+                postgres_bulk_data.len(),
+                cursor.internal_table_name,
+                cursor.to_block,
+                cursor_rows
+            );
+        }
+        Ok(())
     }
 
     pub async fn raw_connection(

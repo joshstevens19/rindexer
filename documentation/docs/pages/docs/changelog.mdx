@@ -5,21 +5,58 @@
 
 ### Bug fixes
 -------------------------------------------------
-- fix: empty network RPC values now fail startup with a clear network/env-var message instead of the low-level "relative URL without a base" provider error, and generated YAML omits unset `reth` config, unset `timestamps`, and empty `config` objects.
-- fix: no-code stream-only projects now create `.rindexer/<stream>/.../last-synced-blocks` checkpoint directories on write, preventing RabbitMQ/SNS/webhook/etc. runs without storage from panicking with `Failed to canonicalize path` ([#449](https://github.com/joshstevens19/rindexer/issues/449)).
-- fix: live indexing now respects the network `max_block_range` setting after historical sync, preventing oversized `eth_getLogs` requests when catching up to the chain tip.
-- fix: graceful shutdown no longer loops forever ("N active indexing tasks pending" with a huge N) when live indexing skipped empty blocks via the logs-bloom check — the skip path underflowed the active task counter ([#432](https://github.com/joshstevens19/rindexer/pull/432))
 
 ### Features
 -------------------------------------------------
-- feat: **Foundry project import and sync** — new `rindexer foundry new [SOURCE]` and `rindexer foundry sync` commands generate a runnable no-code project from local or Git Foundry deployments, initialize Git submodules, resolve nested sources such as GitHub `tree/main/broadcast` links to the nearest `foundry.toml`, match Foundry profile artifacts such as `Contract.default.json`, skip test deployments with actionable reasons, derive networks from Foundry broadcast chain IDs, leave non-local RPC URLs empty so users provide reliable archive endpoints, default chain `31337` to `ANVIL_RPC_URL=http://127.0.0.1:8545`, preserve existing `.env` values during sync while appending missing RPC keys, copy event ABI files into `abis/`, add `cli/Makefile` helpers for a runnable Uniswap v4 periphery import example, and track sync ownership in `rindexer-foundry.json`.
 
 ## Releases
 -------------------------------------------------
 
 all release branches are deployed through `release/VERSION_NUMBER` branches
 
+# 0.42.1-beta - 7th August 2026
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.42.1
+
+- linux binary - https://github.com/joshstevens19/rindexer/releases/download/v0.42.1/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://github.com/joshstevens19/rindexer/releases/download/v0.42.1/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://github.com/joshstevens19/rindexer/releases/download/v0.42.1/rindexer_darwin-amd64.tar.gz
+- windows binary - https://github.com/joshstevens19/rindexer/releases/download/v0.42.1/rindexer_win32-amd64.zip
+
+### Bug fixes
+-------------------------------------------------
+- fix: arithmetic upserts in no-code tables losing debits on row creation
+
+# 0.42.0-beta - 6th August 2026
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.42.0
+
+- linux binary - https://github.com/joshstevens19/rindexer/releases/download/v0.42.0/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://github.com/joshstevens19/rindexer/releases/download/v0.42.0/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://github.com/joshstevens19/rindexer/releases/download/v0.42.0/rindexer_darwin-amd64.tar.gz
+- windows binary - https://github.com/joshstevens19/rindexer/releases/download/v0.42.0/rindexer_win32-amd64.zip
+
+### Bug fixes
+-------------------------------------------------
+- fix: empty network RPC values now fail startup with a clear network/env-var message instead of the low-level "relative URL without a base" provider error, and generated YAML omits unset `reth` config, unset `timestamps`, and empty `config` objects.
+- fix: no-code stream-only projects now create `.rindexer/<stream>/.../last-synced-blocks` checkpoint directories on write, preventing RabbitMQ/SNS/webhook/etc. runs without storage from panicking with `Failed to canonicalize path` ([#449](https://github.com/joshstevens19/rindexer/issues/449)).
+- fix: live indexing now respects the network `max_block_range` setting after historical sync, preventing oversized `eth_getLogs` requests when catching up to the chain tip.
+- fix: graceful shutdown no longer loops forever ("N active indexing tasks pending" with a huge N) when live indexing skipped empty blocks via the logs-bloom check — the skip path underflowed the active task counter ([#432](https://github.com/joshstevens19/rindexer/pull/432))
+- fix: **Atomic [batch + cursor] commit for no-code Postgres event storage — closes the double-index race** — event batches (COPY / multi-row INSERT) and the `rindexer_internal.last_synced_block` cursor were previously committed in separate transactions (the cursor asynchronously, with errors swallowed), so a crash or restart between the two re-fetched and re-inserted already-committed ranges, producing byte-identical duplicate rows (reproducible: rewind a cursor and restart). When **Postgres is the sole raw-event sink and no streams/chat are configured**, the no-code batch and its cursor now commit in ONE transaction: a restart either sees neither (clean re-fetch) or both (resume past the batch). Exclusions keep at-least-once semantics wherever exactness would be unsafe — each keeps the legacy path: **CSV or ClickHouse alongside Postgres** (the cursor must not commit before every sink has succeeded), **streams/chat configs** (messages dispatch after the storage write; a committed cursor plus a crash in that window would drop them instead of re-delivering), **factory discovery events** (child-address bookkeeping persists only after the callback — an atomically committed cursor plus a crash there would permanently skip re-discovery of child contracts), and **`callback_concurrency > 1`** (a later batch's cursor commit can leapfrog an uncommitted earlier batch; the exactly-once contract assumes a single indexer process and serialized commits). The custom-tables shutdown checkpoint no longer advances the event cursor when the atomic path owns it (a SIGTERM mid-table-ops could otherwise skip un-inserted raw rows on restart). A cursor update matching zero rows now distinguishes its two causes: a **missing seeded cursor row rolls the batch back and errors** (committing rows whose cursor can never advance would re-index from the manifest start forever), while a cursor already ahead of the batch (the live loop of the same event committing at head during historical catch-up) commits the rows and correctly leaves the cursor untouched. **Rust-mode generated handlers are unchanged** — they keep the legacy insert because users add their own logic inside those handlers, and a baked-in cursor commit would silently skip that logic on a crash before the handler returns; storage-only handlers can opt in explicitly via the public `insert_bulk_with_cursor` API (newly generated handlers include a hint comment when their config qualifies).
+
+### Features
+-------------------------------------------------
+- feat: **`PostgresClient::insert_bulk_with_cursor` + `rindexer::BulkCursorUpdate` public API** — the atomic [batch + last-synced cursor] primitive used by the fix above is exported for custom Rust handlers that write their own event-derived rows and want crash-exact resume semantics: pass the internal checkpoint table name, network, and the batch's highest block.
+- feat: **Foundry project import and sync** — new `rindexer foundry new [SOURCE]` and `rindexer foundry sync` commands generate a runnable no-code project from local or Git Foundry deployments, initialize Git submodules, resolve nested sources such as GitHub `tree/main/broadcast` links to the nearest `foundry.toml`, match Foundry profile artifacts such as `Contract.default.json`, skip test deployments with actionable reasons, derive networks from Foundry broadcast chain IDs, leave non-local RPC URLs empty so users provide reliable archive endpoints, default chain `31337` to `ANVIL_RPC_URL=http://127.0.0.1:8545`, preserve existing `.env` values during sync while appending missing RPC keys, copy event ABI files into `abis/`, add `cli/Makefile` helpers for a runnable Uniswap v4 periphery import example, and track sync ownership in `rindexer-foundry.json`.
+
 # 0.41.0-beta - 23rd June 2026
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.41.0
+
+- linux binary - https://github.com/joshstevens19/rindexer/releases/download/v0.41.0/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://github.com/joshstevens19/rindexer/releases/download/v0.41.0/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://github.com/joshstevens19/rindexer/releases/download/v0.41.0/rindexer_darwin-amd64.tar.gz
+- windows binary - https://github.com/joshstevens19/rindexer/releases/download/v0.41.0/rindexer_win32-amd64.zip
 
 ### Breaking changes
 -------------------------------------------------
