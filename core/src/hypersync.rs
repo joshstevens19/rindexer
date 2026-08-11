@@ -362,7 +362,21 @@ impl ChainProvider for HypersyncProvider {
             start.elapsed().as_secs_f64(),
         );
 
-        result
+        match result {
+            Ok(logs) => Ok(logs),
+            Err(e) => {
+                // A HyperSync failure degrades to RPC rather than failing the fetch.
+                // This also covers a load-balanced instance lagging the height we
+                // checked: the client errors loudly on zero progress instead of
+                // stalling, and the range is served by RPC. If the range is too wide
+                // for the RPC node, its error feeds the fetch loop's usual adaptive
+                // range-halving.
+                warn!(
+                    "HyperSync get_logs failed for blocks [{from_block}..{to_block}], falling back to RPC: {e:#}",
+                );
+                self.rpc.get_logs(event_filter).await
+            }
+        }
     }
 
     // Blocks, receipts and traces could also be served from HyperSync, but faithfully
@@ -422,5 +436,69 @@ impl ChainProvider for HypersyncProvider {
 
     async fn eth_call_latest(&self, to: Address, data: Bytes) -> Result<String, ProviderError> {
         self.rpc.eth_call_latest(to, data).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy::transports::mock::Asserter;
+
+    use super::*;
+
+    /// A provider whose HyperSync endpoint refuses connections (nothing listens on the
+    /// target port) and whose RPC side is a mock that serves pushed responses.
+    fn provider_with_unreachable_hypersync() -> (HypersyncProvider, Asserter) {
+        let (rpc, asserter) = JsonRpcCachedProvider::mock_with_asserter(1);
+        let client = Client::builder()
+            .url("http://127.0.0.1:9")
+            .api_token("00000000-0000-0000-0000-000000000000")
+            .max_num_retries(0)
+            .build()
+            .expect("building a client makes no network calls");
+
+        let provider = HypersyncProvider {
+            client,
+            rpc,
+            max_block_range: None,
+            stream_config: StreamConfig::default(),
+            height_cache: Mutex::new(None),
+        };
+
+        (provider, asserter)
+    }
+
+    #[tokio::test]
+    async fn get_logs_falls_back_to_rpc_when_height_check_fails() {
+        let (provider, asserter) = provider_with_unreachable_hypersync();
+        asserter.push_success(&Vec::<Log>::new());
+
+        let logs = provider.get_logs(&RindexerEventFilter::empty_for_test()).await.unwrap();
+
+        assert!(logs.is_empty(), "expected the mocked RPC response, got {logs:?}");
+    }
+
+    #[tokio::test]
+    async fn get_logs_falls_back_to_rpc_when_hypersync_query_errors() {
+        let (provider, asserter) = provider_with_unreachable_hypersync();
+        // Seed the height cache so `covers_block` passes and the HyperSync query path
+        // runs — and errors against the unreachable endpoint — instead of the request
+        // being routed to RPC by the height gate.
+        *provider.height_cache.lock().await = Some((Instant::now(), u64::MAX));
+        asserter.push_success(&Vec::<Log>::new());
+
+        let logs = provider.get_logs(&RindexerEventFilter::empty_for_test()).await.unwrap();
+
+        assert!(logs.is_empty(), "expected the mocked RPC response, got {logs:?}");
+    }
+
+    #[tokio::test]
+    async fn covers_block_trusts_cached_height_at_or_past_target() {
+        let (provider, _asserter) = provider_with_unreachable_hypersync();
+        *provider.height_cache.lock().await = Some((Instant::now(), 100));
+
+        // At or below the cached height: trusted without a network call.
+        assert!(provider.covers_block(100).await);
+        // Past the cached height within the TTL: not covered, no refresh attempted.
+        assert!(!provider.covers_block(101).await);
     }
 }
