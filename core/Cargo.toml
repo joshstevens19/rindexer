@@ -39,6 +39,7 @@ clickhouse = { version = "0.15.0", features = ["rustls-tls"] }
 dotenvy = "0.15"
 futures = "0.3"
 hex = { workspace = true }
+hypersync-client = "1.4.0"
 lapin = "4"
 lazy_static = "1.5.0"
 lru = "0.18"

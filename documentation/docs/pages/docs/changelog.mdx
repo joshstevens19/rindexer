@@ -8,6 +8,7 @@
 
 ### Features
 -------------------------------------------------
+- feat: `networks[].hypersync` — serve historical `get_logs` from [Envio HyperSync](https://docs.envio.dev/docs/HyperSync/overview) instead of RPC. Enable with `hypersync: true` (or a config map with `url`, `api_token`, `max_block_range` and stream tuning options); requires an API token via config or the `HYPERSYNC_API_TOKEN`/`ENVIO_API_TOKEN` env vars. Live indexing, calls, receipts and traces stay on the network RPC, and HyperSync errors degrade to the RPC automatically. Logs come stamped with block timestamps so timestamp indexing skips `eth_getBlockByNumber` batches.
 
 ## Releases
 -------------------------------------------------

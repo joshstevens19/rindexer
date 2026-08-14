@@ -119,17 +119,114 @@ fn generate_network_provider_code(network: &Network) -> Code {
     ))
 }
 
+/// Emits an optional-string expression which resolves an environment variable name at
+/// runtime, falling back to the literal value — the same pattern used for rpc urls so
+/// secrets are never embedded into generated code.
+fn env_or_literal_expr(value: &Option<String>) -> String {
+    match value {
+        Some(value) => {
+            format!(r#"Some(public_read_env_value("{value}").unwrap_or("{value}".to_string()))"#)
+        }
+        None => "None".to_string(),
+    }
+}
+
+/// Generates the hypersync-wrapped indexing provider for a network with `hypersync`
+/// enabled. The plain rpc provider functions remain untouched so handler code can still
+/// make direct rpc calls through them.
+fn generate_network_hypersync_provider_code(network: &Network) -> Code {
+    let Some(hypersync) = &network.hypersync else {
+        return Code::blank();
+    };
+
+    Code::new(format!(
+        r#"
+            static {provider_name}_HYPERSYNC: OnceCell<Arc<dyn ChainProvider>> = OnceCell::const_new();
+
+            pub async fn {fn_name}_hypersync() -> Arc<dyn ChainProvider> {{
+                {provider_name}_HYPERSYNC
+                    .get_or_init(|| async {{
+                        let hypersync_config = HypersyncConfig {{
+                            url: {url},
+                            api_token: {api_token},
+                            max_block_range: {hypersync_max_block_range},
+                            stream_concurrency: {stream_concurrency},
+                            batch_size: {batch_size},
+                            max_batch_size: {max_batch_size},
+                            response_bytes_target: {response_bytes_target},
+                        }};
+                        let rpc_provider = {fn_name}_cache().await;
+                        create_hypersync_provider(&hypersync_config, "{network_name}", {chain_id}, {network_max_block_range}, rpc_provider)
+                            .await
+                            .map(|provider| provider as Arc<dyn ChainProvider>)
+                            .expect("Error creating hypersync provider")
+                    }})
+                    .await
+                    .clone()
+            }}
+        "#,
+        provider_name = network_provider_name(network),
+        fn_name = network_provider_fn_name(network),
+        network_name = network.name,
+        chain_id = network.chain_id,
+        url = env_or_literal_expr(&hypersync.url),
+        api_token = env_or_literal_expr(&hypersync.api_token),
+        hypersync_max_block_range = if let Some(max_block_range) = hypersync.max_block_range {
+            format!("Some(U64::from({max_block_range}))")
+        } else {
+            "None".to_string()
+        },
+        stream_concurrency = if let Some(stream_concurrency) = hypersync.stream_concurrency {
+            format!("Some({stream_concurrency})")
+        } else {
+            "None".to_string()
+        },
+        batch_size = if let Some(batch_size) = hypersync.batch_size {
+            format!("Some({batch_size})")
+        } else {
+            "None".to_string()
+        },
+        max_batch_size = if let Some(max_batch_size) = hypersync.max_batch_size {
+            format!("Some({max_batch_size})")
+        } else {
+            "None".to_string()
+        },
+        response_bytes_target = if let Some(response_bytes_target) = hypersync.response_bytes_target
+        {
+            format!("Some({response_bytes_target})")
+        } else {
+            "None".to_string()
+        },
+        network_max_block_range = if let Some(max_block_range) = network.max_block_range {
+            format!("Some(U64::from({max_block_range}))")
+        } else {
+            "None".to_string()
+        },
+    ))
+}
+
 fn generate_provider_cache_for_network_fn(networks: &[Network]) -> Code {
     let mut if_code = Code::blank();
     for network in networks {
-        let network_if = format!(
-            r#"
+        let network_if = if network.hypersync.is_some() {
+            format!(
+                r#"
+            if network == "{network_name}" {{
+                return get_{network_name}_provider_hypersync().await;
+            }}
+        "#,
+                network_name = network.name
+            )
+        } else {
+            format!(
+                r#"
             if network == "{network_name}" {{
                 return get_{network_name}_provider_cache().await;
             }}
         "#,
-            network_name = network.name
-        );
+                network_name = network.name
+            )
+        };
 
         if_code.push_str(&Code::new(network_if));
     }
@@ -193,8 +290,18 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
         )));
     }
 
+    if networks.iter().any(|network| network.hypersync.is_some()) {
+        output.push_str(&Code::new(
+            r#"
+    use rindexer::{hypersync::create_hypersync_provider, manifest::network::HypersyncConfig};
+        "#
+            .to_string(),
+        ));
+    }
+
     for network in networks {
         output.push_str(&generate_network_provider_code(network));
+        output.push_str(&generate_network_hypersync_provider_code(network));
     }
 
     output.push_str(&generate_provider_cache_for_network_fn(networks));
@@ -219,6 +326,7 @@ mod tests {
             multicall3_address: None,
             reth: None,
             reorg_handling: None,
+            hypersync: None,
         }
     }
 
@@ -253,6 +361,96 @@ mod tests {
         assert!(code.contains(r#"if network == "base""#));
         assert!(code.contains("get_ethereum_provider_cache()"));
         assert!(code.contains("get_base_provider_cache()"));
+    }
+
+    #[test]
+    fn generated_networks_without_hypersync_have_no_hypersync_code() {
+        let networks = vec![test_network("ethereum", 1)];
+        let code = generate_networks_code(&networks).to_string();
+        assert!(!code.contains("hypersync"), "expected no hypersync code, got:\n{code}");
+    }
+
+    #[test]
+    fn generated_hypersync_network_dispatches_to_hypersync_provider() {
+        use crate::manifest::network::HypersyncConfig;
+
+        let mut hypersync_network = test_network("ethereum", 1);
+        hypersync_network.hypersync = Some(HypersyncConfig {
+            api_token: Some("HYPERSYNC_API_TOKEN".to_string()),
+            ..Default::default()
+        });
+        let networks = vec![hypersync_network, test_network("base", 8453)];
+        let code = generate_networks_code(&networks).to_string();
+
+        // hypersync network indexes through the wrapped provider, the plain rpc provider
+        // functions remain for direct rpc access from handlers
+        assert!(code.contains("get_ethereum_provider_hypersync()"));
+        assert!(code.contains("pub async fn get_ethereum_provider_cache()"));
+        assert!(code.contains("create_hypersync_provider(&hypersync_config, \"ethereum\", 1,"));
+        assert!(code
+            .contains(r#"Some(public_read_env_value("HYPERSYNC_API_TOKEN").unwrap_or("HYPERSYNC_API_TOKEN".to_string()))"#));
+
+        // non-hypersync networks are unaffected
+        assert!(code.contains("get_base_provider_cache()"));
+        assert!(!code.contains("get_base_provider_hypersync"));
+    }
+
+    /// Compares code ignoring indentation and blank lines, so the expected block below
+    /// stays readable without mirroring the emitter's exact whitespace.
+    fn normalized(code: &str) -> String {
+        code.lines().map(str::trim).filter(|line| !line.is_empty()).collect::<Vec<_>>().join("\n")
+    }
+
+    /// Human-readable snapshot of the full provider fn the codegen emits for a
+    /// fully-populated `hypersync` config, so reviewers can see the exact output
+    /// without running codegen. Update deliberately when changing the emitter.
+    #[test]
+    fn generated_hypersync_provider_full_output() {
+        use alloy::primitives::U64;
+
+        use crate::manifest::network::HypersyncConfig;
+
+        let mut network = test_network("ethereum", 1);
+        network.max_block_range = Some(U64::from(5000));
+        network.hypersync = Some(HypersyncConfig {
+            url: Some("HYPERSYNC_URL".to_string()),
+            api_token: Some("HYPERSYNC_API_TOKEN".to_string()),
+            max_block_range: Some(U64::from(2000000)),
+            stream_concurrency: Some(20),
+            batch_size: Some(1000),
+            max_batch_size: Some(100000),
+            response_bytes_target: Some(400000),
+        });
+
+        let code = generate_network_hypersync_provider_code(&network).to_string();
+
+        let expected = r#"
+            static ETHEREUM_PROVIDER_HYPERSYNC: OnceCell<Arc<dyn ChainProvider>> = OnceCell::const_new();
+
+            pub async fn get_ethereum_provider_hypersync() -> Arc<dyn ChainProvider> {
+                ETHEREUM_PROVIDER_HYPERSYNC
+                    .get_or_init(|| async {
+                        let hypersync_config = HypersyncConfig {
+                            url: Some(public_read_env_value("HYPERSYNC_URL").unwrap_or("HYPERSYNC_URL".to_string())),
+                            api_token: Some(public_read_env_value("HYPERSYNC_API_TOKEN").unwrap_or("HYPERSYNC_API_TOKEN".to_string())),
+                            max_block_range: Some(U64::from(2000000)),
+                            stream_concurrency: Some(20),
+                            batch_size: Some(1000),
+                            max_batch_size: Some(100000),
+                            response_bytes_target: Some(400000),
+                        };
+                        let rpc_provider = get_ethereum_provider_cache().await;
+                        create_hypersync_provider(&hypersync_config, "ethereum", 1, Some(U64::from(5000)), rpc_provider)
+                            .await
+                            .map(|provider| provider as Arc<dyn ChainProvider>)
+                            .expect("Error creating hypersync provider")
+                    })
+                    .await
+                    .clone()
+            }
+        "#;
+
+        assert_eq!(normalized(&code), normalized(expected));
     }
 
     #[test]

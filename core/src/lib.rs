@@ -58,6 +58,7 @@ pub mod notifications;
 pub use indexer::reorg::ReorgEvent;
 pub use notifications::ChainStateNotification;
 pub mod blockclock;
+pub mod hypersync;
 pub mod phantom;
 pub mod provider;
 mod start;

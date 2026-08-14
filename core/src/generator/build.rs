@@ -650,6 +650,7 @@ mod tests {
             multicall3_address: None,
             reth: None,
             reorg_handling: None,
+            hypersync: None,
         };
 
         write_networks(dir.path(), &[network]).expect("write_networks failed");
