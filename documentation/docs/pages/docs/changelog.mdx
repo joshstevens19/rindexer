@@ -8,12 +8,24 @@
 
 ### Features
 -------------------------------------------------
-- feat: `networks[].hypersync` — serve historical `get_logs` from [Envio HyperSync](https://docs.envio.dev/docs/HyperSync/overview) instead of RPC. Enable with `hypersync: true` (or a config map with `url`, `api_token`, `max_block_range` and stream tuning options); requires an API token via config or the `HYPERSYNC_API_TOKEN`/`ENVIO_API_TOKEN` env vars. Live indexing, calls, receipts and traces stay on the network RPC, and HyperSync errors degrade to the RPC automatically. Logs come stamped with block timestamps so timestamp indexing skips `eth_getBlockByNumber` batches.
 
 ## Releases
 -------------------------------------------------
 
 all release branches are deployed through `release/VERSION_NUMBER` branches
+
+# 0.43.0-beta - 17th August 2026
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.43.0
+
+- linux binary - https://github.com/joshstevens19/rindexer/releases/download/v0.43.0/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://github.com/joshstevens19/rindexer/releases/download/v0.43.0/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://github.com/joshstevens19/rindexer/releases/download/v0.43.0/rindexer_darwin-amd64.tar.gz
+- windows binary - https://github.com/joshstevens19/rindexer/releases/download/v0.43.0/rindexer_win32-amd64.zip
+
+### Features
+-------------------------------------------------
+- feat: `networks[].hypersync` — serve historical `get_logs` from [Envio HyperSync](https://docs.envio.dev/docs/HyperSync/overview) instead of RPC. Enable with `hypersync: true` (or a config map with `url`, `api_token`, `max_block_range` and stream tuning options); requires an API token via config or the `HYPERSYNC_API_TOKEN`/`ENVIO_API_TOKEN` env vars. Live indexing, calls, receipts and traces stay on the network RPC, and HyperSync errors degrade to the RPC automatically. Logs come stamped with block timestamps so timestamp indexing skips `eth_getBlockByNumber` batches.
 
 # 0.42.1-beta - 7th August 2026
 
