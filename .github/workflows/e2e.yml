@@ -23,7 +23,12 @@ jobs:
   e2e:
     name: E2E Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # A fresh pull request branch restores no build cache (PR caches are not
+    # shared across PRs, and master never runs this workflow), and the cold
+    # release build of the reth-featured binary alone takes ~25 minutes — a
+    # 30-minute cap killed healthy test runs two minutes in. Warm runs finish
+    # in ~11 minutes; this bound is for the cold first run of a new PR.
+    timeout-minutes: 45
 
     services:
       postgres:

@@ -22,7 +22,7 @@ use hypersync_client::arrow_reader::{BlockReader, LogReader, ReadError};
 use hypersync_client::net_types::block::BlockField;
 use hypersync_client::net_types::log::{LogField, LogFilter};
 use hypersync_client::net_types::Query;
-use hypersync_client::{Client, StreamConfig};
+use hypersync_client::{Client, ClientConfig, StreamConfig};
 use tokio::sync::broadcast::Sender;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -101,7 +101,15 @@ pub async fn create_hypersync_provider(
         )
     })?;
 
-    let client = Client::builder().url(&url).api_token(api_token).build().map_err(|e| {
+    // Identify rindexer in the standard User-Agent header, the same way HyperSync's
+    // Python and Node bindings identify themselves — otherwise requests carry the
+    // generic rust-client agent. No extra requests or data; it only names the client
+    // already making them, which helps server-side operators support and debug.
+    let client = Client::new_with_agent(
+        ClientConfig { url: url.clone(), api_token, ..ClientConfig::default() },
+        format!("rindexer/{}", env!("CARGO_PKG_VERSION")),
+    )
+    .map_err(|e| {
         RetryClientError::HypersyncClientCantBeCreated(network_name.to_string(), format!("{e:#}"))
     })?;
 
@@ -465,6 +473,53 @@ mod tests {
         };
 
         (provider, asserter)
+    }
+
+    /// Captures the first HTTP request `create_hypersync_provider` sends (the chain-id
+    /// check) and asserts it identifies rindexer in the User-Agent header. The provider
+    /// creation itself is aborted once the request is observed — the client retries the
+    /// deliberately-broken response with backoff, and none of that is under test.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn hypersync_requests_identify_rindexer_in_user_agent() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind capture listener");
+        let addr = listener.local_addr().expect("listener addr");
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let read = stream.read(&mut buf).unwrap_or(0);
+                let _ = stream
+                    .write_all(b"HTTP/1.1 500 Internal Server Error\r\ncontent-length: 0\r\n\r\n");
+                let _ = tx.send(String::from_utf8_lossy(&buf[..read]).to_string());
+            }
+        });
+
+        let (rpc, _asserter) = JsonRpcCachedProvider::mock_with_asserter(1);
+        let config = HypersyncConfig {
+            url: Some(format!("http://{addr}")),
+            api_token: Some("00000000-0000-0000-0000-000000000000".to_string()),
+            ..Default::default()
+        };
+        let create = tokio::spawn(async move {
+            let _ = create_hypersync_provider(&config, "test", 1, None, rpc).await;
+        });
+
+        let request = tokio::task::spawn_blocking(move || {
+            rx.recv_timeout(Duration::from_secs(10)).expect("no request captured")
+        })
+        .await
+        .expect("capture task");
+        create.abort();
+
+        let expected = format!("user-agent: rindexer/{}", env!("CARGO_PKG_VERSION"));
+        assert!(
+            request.to_lowercase().contains(&expected),
+            "expected `{expected}` in request:\n{request}"
+        );
     }
 
     #[tokio::test]
