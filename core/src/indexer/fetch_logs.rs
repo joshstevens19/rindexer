@@ -1288,7 +1288,12 @@ async fn live_indexing_stream(
                     let latest_block_number = log_response_to_large_to_block
                         .unwrap_or(U64::from(latest_block.header.number));
 
-                    if last_seen_block_number == latest_block_number {
+                    // A reduced retry ceiling can equal `last_seen_block_number` while the
+                    // filter cursor is still behind it. Only declare the stream caught up when
+                    // the next block to fetch is also beyond the effective ceiling.
+                    if last_seen_block_number == latest_block_number
+                        && current_filter.from_block() > latest_block_number
+                    {
                         debug!(
                             "{} - {} - No new blocks to process...",
                             info_log_name,
@@ -2018,6 +2023,9 @@ mod tests {
         // directly.
         queried_ranges: Arc<StdMutex<Vec<(u64, u64)>>>,
         cancel_token: CancellationToken,
+        fail_first_logs_request: bool,
+        cancel_after_requests: usize,
+        request_count: AtomicUsize,
     }
 
     impl RecordingLiveProvider {
@@ -2026,7 +2034,20 @@ mod tests {
             queried_ranges: Arc<StdMutex<Vec<(u64, u64)>>>,
             cancel_token: CancellationToken,
         ) -> Self {
-            Self { inner, queried_ranges, cancel_token }
+            Self {
+                inner,
+                queried_ranges,
+                cancel_token,
+                fail_first_logs_request: false,
+                cancel_after_requests: 1,
+                request_count: AtomicUsize::new(0),
+            }
+        }
+
+        fn with_transient_first_logs_error(mut self) -> Self {
+            self.fail_first_logs_request = true;
+            self.cancel_after_requests = 2;
+            self
         }
     }
 
@@ -2063,10 +2084,19 @@ mod tests {
                 .lock()
                 .expect("recorded ranges mutex poisoned")
                 .push((event_filter.from_block().to::<u64>(), event_filter.to_block().to::<u64>()));
-            // Stop the live loop after the first recorded request. This keeps
-            // the test narrowly focused on the initial live window calculation
-            // instead of letting the polling loop continue indefinitely.
-            self.cancel_token.cancel();
+
+            let request_count = self.request_count.fetch_add(1, Ordering::SeqCst) + 1;
+            if request_count >= self.cancel_after_requests {
+                self.cancel_token.cancel();
+            }
+
+            if self.fail_first_logs_request && request_count == 1 {
+                return Err(ProviderError::CustomError(
+                    "block not found for eth_getLogs, requested toBlock 603 is not yet available"
+                        .to_string(),
+                ));
+            }
+
             self.inner.get_logs(event_filter).await
         }
 
@@ -2431,6 +2461,59 @@ mod tests {
             queried_ranges[0],
             (live_start_block.to::<u64>(), expected_live_to_block.to::<u64>()),
             "live indexing should cap the first get_logs request to from_block + max_block_range",
+        );
+    }
+
+    #[tokio::test]
+    async fn live_indexing_retries_when_retry_cap_equals_last_seen_block() {
+        let cancel_token = CancellationToken::new();
+        let queried_ranges = Arc::new(StdMutex::new(Vec::new()));
+        let provider = Arc::new(
+            RecordingLiveProvider::new(
+                MockChainProvider::new(1)
+                    .with_blocks(vec![make_block(603)])
+                    .with_max_block_range(500),
+                queried_ranges.clone(),
+                cancel_token.clone(),
+            )
+            .with_transient_first_logs_error(),
+        );
+        let block_clock = BlockClock::new(None, None, provider.clone());
+        let (tx, _rx) = mpsc::channel(4);
+
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            live_indexing_stream(
+                false,
+                block_clock,
+                provider,
+                &tx,
+                U64::from(601),
+                &B256::ZERO,
+                &U64::ZERO,
+                RindexerEventFilter::empty_for_test()
+                    .set_from_block(U64::from(600))
+                    .set_to_block(U64::from(601)),
+                "test",
+                "test",
+                true,
+                Some(U64::from(500)),
+                cancel_token,
+                None,
+                None,
+                None,
+                &EventCallbackRegistry::default(),
+                None,
+            ),
+        )
+        .await
+        .expect("live indexing stalled instead of retrying the reduced range");
+
+        let queried_ranges = queried_ranges.lock().expect("should lock");
+        assert_eq!(
+            queried_ranges.as_slice(),
+            &[(600, 603), (600, 601)],
+            "the transient head error should retry the reduced range even when its cap equals last_seen_block_number",
         );
     }
 
