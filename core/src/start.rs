@@ -117,6 +117,7 @@ async fn handle_shutdown(signal: &str) {
     std::process::exit(0);
 }
 
+#[allow(clippy::result_large_err, reason = "preserve existing error API")]
 pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindexerError> {
     info!(
         "🚀 start_rindexer called with indexing_details.is_some() = {}",
@@ -466,6 +467,7 @@ pub enum StartRindexerNoCode {
     SetupNoCodeError(#[from] SetupNoCodeError),
 }
 
+#[allow(clippy::result_large_err, reason = "preserve existing error API")]
 pub async fn start_rindexer_no_code(
     details: StartNoCodeDetails<'_>,
 ) -> Result<(), StartRindexerNoCode> {
