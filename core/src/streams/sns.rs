@@ -57,6 +57,7 @@ impl SNS {
         Self { client }
     }
 
+    #[allow(clippy::result_large_err, reason = "preserve existing error API")]
     pub async fn publish(
         &self,
         id: &str,
@@ -66,6 +67,7 @@ impl SNS {
         publish_with_retry("sns", topic_arn, || self.publish_once(id, topic_arn, message)).await
     }
 
+    #[allow(clippy::result_large_err, reason = "preserve existing error API")]
     async fn publish_once(
         &self,
         id: &str,

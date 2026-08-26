@@ -174,6 +174,7 @@ fn resolve_tables_against_abi(
     Ok(())
 }
 
+#[allow(clippy::result_large_err, reason = "preserve existing error API")]
 pub async fn setup_no_code(
     details: StartNoCodeDetails<'_>,
 ) -> Result<StartDetails<'_>, SetupNoCodeError> {

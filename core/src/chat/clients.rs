@@ -421,6 +421,7 @@ impl ChatClients {
         tasks
     }
 
+    #[allow(clippy::result_large_err, reason = "preserve existing error API")]
     pub async fn send_message(
         &self,
         event_message: &EventMessage,

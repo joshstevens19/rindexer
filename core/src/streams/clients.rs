@@ -847,6 +847,7 @@ impl StreamsClients {
         tasks
     }
 
+    #[allow(clippy::result_large_err, reason = "preserve existing error API")]
     pub async fn stream(
         &self,
         id: String,
@@ -857,6 +858,7 @@ impl StreamsClients {
         self.stream_with_mode(id, event_message, index_event_in_order, is_trace_event, false).await
     }
 
+    #[allow(clippy::result_large_err, reason = "preserve existing error API")]
     async fn stream_with_mode(
         &self,
         id: String,
@@ -1115,6 +1117,7 @@ impl StreamsClients {
     /// All types reach publish through the shared `force_send_network_wide`
     /// path — no destination is silently dropped because its `events` list
     /// omits `__rindexer_reorg`.
+    #[allow(clippy::result_large_err, reason = "preserve existing error API")]
     pub async fn stream_reorg(
         &self,
         network: &str,
@@ -1170,6 +1173,7 @@ impl StreamsClients {
     /// relative to `head_block` (i.e., buried by at least the network's
     /// registered `reorg_safe_distance`). Called by `ReorgCoordinator` on every
     /// validated `on_new_block`. Returns the total number of events dispatched.
+    #[allow(clippy::result_large_err, reason = "preserve existing error API")]
     pub async fn flush_finalized(
         &self,
         network: &str,
@@ -1263,6 +1267,7 @@ impl StreamsClients {
     /// allocate; they don't await network I/O), and every resulting JoinHandle
     /// from every block is then awaited through a single `join_all`, so a
     /// flush of N buffered blocks runs at ~1 RTT instead of N.
+    #[allow(clippy::result_large_err, reason = "preserve existing error API")]
     async fn dispatch_flushed(
         &self,
         key: &BufferKey,
