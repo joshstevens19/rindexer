@@ -899,24 +899,51 @@ use super::super::super::typings::{indexer_name_formatted}::events::{handler_reg
 
                     let rows = [{columns_names}];
 
-                    let result = context
-                        .database
-                        .insert_bulk(
-                            "{table_name}",
-                            &rows,
-                            &postgres_bulk_data,
-                        )
-                        .await;
-
-                    if let Err(e) = result {{
-                        rindexer_error!("{event_type_name}::{handler_name} inserting bulk data: {{:?}}", e);
-                        return Err(e.to_string());
-                    }}
+                    {insert_call}
                 "#,
-                table_name =
-                    generate_event_table_full_name(indexer_name, &contract.name, &event.name),
-                handler_name = event.name,
-                event_type_name = event_type_name,
+                insert_call = {
+                    // Generated handlers always emit the legacy at-least-once
+                    // insert, even for Postgres-only projects: users own these
+                    // files and add custom logic inside the handler, and an
+                    // atomic cursor commit baked in here would silently skip
+                    // that logic on a crash between the commit and the handler
+                    // returning (a later yaml `callback_concurrency` bump would
+                    // also invalidate any codegen-time safety check). Exactly-once
+                    // storage is an explicit opt-in via the public
+                    // `insert_bulk_with_cursor` API — the emitted hint points
+                    // storage-only handlers at it when their config qualifies
+                    // (Postgres sole sink, not a factory discovery event).
+                    let atomic_optin_hint = if storage.postgres_enabled()
+                        && !storage.csv_enabled()
+                        && !contract.is_factory_only_event(&event.name)
+                    {
+                        "// Storage-only handler? `context.database.insert_bulk_with_cursor(...)`\n                    // commits this batch and the last-synced cursor in ONE transaction\n                    // (exactly-once raw events; see the rindexer changelog). Requires\n                    // `callback_concurrency` <= 1 and NO side effects after the call —\n                    // the cursor commits with the rows, so a crash after it will not\n                    // re-run this handler for the batch.\n                    "
+                    } else {
+                        ""
+                    };
+                    format!(
+                        r#"{atomic_optin_hint}let result = context
+                            .database
+                            .insert_bulk(
+                                "{table_name}",
+                                &rows,
+                                &postgres_bulk_data,
+                            )
+                            .await;
+
+                        if let Err(e) = result {{
+                            rindexer_error!("{event_type_name}::{handler_name} inserting bulk data: {{:?}}", e);
+                            return Err(e.to_string());
+                        }}"#,
+                        table_name = generate_event_table_full_name(
+                            indexer_name,
+                            &contract.name,
+                            &event.name
+                        ),
+                        event_type_name = event_type_name,
+                        handler_name = event.name,
+                    )
+                },
                 columns_names = generate_column_names_only_with_base_properties(&event.inputs)
                     .iter()
                     .map(|item| format!("\"{item}\".to_string()"))
@@ -1004,8 +1031,108 @@ use super::super::super::typings::{indexer_name_formatted}::events::{handler_reg
 
 #[cfg(test)]
 mod tests {
-    use super::generate_event_input_path;
-    use crate::abi::{AbiNamePropertiesPath, AbiProperty};
+    use super::{generate_event_handlers, generate_event_input_path};
+    use crate::{
+        abi::{AbiNamePropertiesPath, AbiProperty},
+        manifest::{contract::Contract, storage::Storage},
+    };
+
+    const TRANSFER_ABI: &str = r#"[{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"from","type":"address"},{"indexed":true,"internalType":"address","name":"to","type":"address"},{"indexed":false,"internalType":"uint256","name":"value","type":"uint256"}],"name":"Transfer","type":"event"}]"#;
+
+    const PLAIN_CONTRACT: &str = r#"
+        name: Token
+        abi: ./abi.json
+        details:
+          - network: ethereum
+            address: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
+            start_block: 1
+    "#;
+
+    /// Generate handlers for `contract_yaml` against a tempdir project holding
+    /// the Transfer ABI, returning the emitted source.
+    fn generated_handlers(contract_yaml: &str, storage_yaml: &str) -> String {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("abi.json"), TRANSFER_ABI).expect("write abi");
+        let contract: Contract = serde_yaml::from_str(contract_yaml).expect("contract yaml");
+        let storage: Storage = serde_yaml::from_str(storage_yaml).expect("storage yaml");
+        generate_event_handlers(dir.path(), "TestIndexer", false, &contract, &storage)
+            .expect("generate handlers")
+            .as_string()
+    }
+
+    const OPTIN_HINT: &str = "insert_bulk_with_cursor";
+
+    /// Generated handlers are always the legacy at-least-once insert — users own
+    /// these files and add logic inside them, so exactly-once storage is an
+    /// explicit per-handler opt-in, not a codegen default.
+    fn assert_legacy(code: &str) {
+        assert!(code.contains(".insert_bulk("), "expected legacy insert:\n{code}");
+        // the opt-in hint COMMENT may name the API — only a real call is a failure
+        let atomic_call = code
+            .lines()
+            .any(|l| l.contains("insert_bulk_with_cursor") && !l.trim_start().starts_with("//"));
+        assert!(!atomic_call, "atomic call must never be emitted:\n{code}");
+    }
+
+    #[test]
+    fn postgres_only_emits_legacy_insert_with_atomic_optin_hint() {
+        let code = generated_handlers(PLAIN_CONTRACT, "postgres:\n  enabled: true");
+        assert_legacy(&code);
+        assert!(code.contains(OPTIN_HINT), "expected the opt-in hint comment:\n{code}");
+    }
+
+    #[test]
+    fn csv_alongside_postgres_emits_legacy_insert_without_hint() {
+        // csv alongside postgres: the cursor must not commit before the csv
+        // append, so the opt-in does not apply — no hint.
+        let storage = "postgres:\n  enabled: true\ncsv:\n  enabled: true\n  path: ./generated_csv";
+        let code = generated_handlers(PLAIN_CONTRACT, storage);
+        assert_legacy(&code);
+        assert!(!code.contains(OPTIN_HINT), "csv configs must not get the hint:\n{code}");
+    }
+
+    #[test]
+    fn factory_discovery_event_emits_legacy_insert_without_hint() {
+        // The synthesized discovery contract: every detail is a factory binding
+        // for this contract name + event — child-address bookkeeping happens
+        // after the callback, so the opt-in is unsafe and must not be suggested.
+        let contract = r#"
+            name: PoolFactory
+            abi: ./abi.json
+            details:
+              - network: ethereum
+                factory:
+                  name: PoolFactory
+                  address: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
+                  event_name: Transfer
+                  input_name: pool
+                  abi: ./abi.json
+        "#;
+        let code = generated_handlers(contract, "postgres:\n  enabled: true");
+        assert_legacy(&code);
+        assert!(!code.contains(OPTIN_HINT), "discovery events must not get the hint:\n{code}");
+    }
+
+    #[test]
+    fn factory_child_contract_gets_the_optin_hint() {
+        // A child contract discovered via a factory: the factory binding points
+        // at a DIFFERENT contract name/event, so its own events qualify.
+        let contract = r#"
+            name: Pool
+            abi: ./abi.json
+            details:
+              - network: ethereum
+                factory:
+                  name: PoolFactory
+                  address: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
+                  event_name: PoolCreated
+                  input_name: pool
+                  abi: ./abi.json
+        "#;
+        let code = generated_handlers(contract, "postgres:\n  enabled: true");
+        assert_legacy(&code);
+        assert!(code.contains(OPTIN_HINT), "child contracts should get the hint:\n{code}");
+    }
 
     #[test]
     fn test_top_level_property() {

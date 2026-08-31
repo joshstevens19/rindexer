@@ -921,14 +921,29 @@ pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError>
             serde_yaml::from_str(&contents_before_transform)?;
 
         for network in &mut manifest_after_transform.networks {
-            network.rpc = manifest_networks_only
-                .networks
-                .iter()
-                .find(|n| n.name == network.name)
-                .map_or_else(
-                    || replace_env_variable_to_raw_name(&network.rpc),
-                    |n| replace_env_variable_to_raw_name(&n.rpc),
-                );
+            let raw_network =
+                manifest_networks_only.networks.iter().find(|n| n.name == network.name);
+
+            network.rpc = raw_network.map_or_else(
+                || replace_env_variable_to_raw_name(&network.rpc),
+                |n| replace_env_variable_to_raw_name(&n.rpc),
+            );
+
+            // the hypersync url and api token follow the same rules as the rpc url so
+            // secrets are never embedded into generated code
+            if let Some(hypersync) = &mut network.hypersync {
+                let raw_hypersync = raw_network.and_then(|n| n.hypersync.as_ref());
+
+                hypersync.url = raw_hypersync
+                    .and_then(|h| h.url.as_ref())
+                    .or(hypersync.url.as_ref())
+                    .map(|url| replace_env_variable_to_raw_name(url));
+
+                hypersync.api_token = raw_hypersync
+                    .and_then(|h| h.api_token.as_ref())
+                    .or(hypersync.api_token.as_ref())
+                    .map(|token| replace_env_variable_to_raw_name(token));
+            }
         }
     }
 

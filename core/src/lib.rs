@@ -31,7 +31,7 @@ pub use database::{
     },
     generate::drop_tables_for_indexer_sql,
     postgres::{
-        client::{PostgresClient, ToSql},
+        client::{BulkCursorUpdate, PostgresClient, ToSql},
         schema_sync::{apply_schema_change, detect_schema_changes, SchemaChange},
         setup::setup_postgres,
     },
@@ -58,6 +58,7 @@ pub mod notifications;
 pub use indexer::reorg::ReorgEvent;
 pub use notifications::ChainStateNotification;
 pub mod blockclock;
+pub mod hypersync;
 pub mod phantom;
 pub mod provider;
 mod start;

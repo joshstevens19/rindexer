@@ -178,7 +178,8 @@ fn diff_networks(
                     != format!("{:?}", new_net.block_poll_frequency)
                 || old_net.compute_units_per_second != new_net.compute_units_per_second
                 || format!("{:?}", old_net.max_block_range)
-                    != format!("{:?}", new_net.max_block_range);
+                    != format!("{:?}", new_net.max_block_range)
+                || format!("{:?}", old_net.hypersync) != format!("{:?}", new_net.hypersync);
 
             if other_changed {
                 changes.push(ManifestChange::NetworkConfigChanged(name.to_string()));
@@ -442,6 +443,29 @@ storage:
         if let ReloadAction::SelectiveRestart(plan) = &diff.action {
             assert!(plan.networks_to_reconnect.contains(&"ethereum".to_string()));
         }
+    }
+
+    #[test]
+    fn test_network_hypersync_changed() {
+        let old = manifest_from_yaml(BASE_MANIFEST);
+        let new_yaml = BASE_MANIFEST.replace(
+            "rpc: https://eth.rpc.example.com",
+            "rpc: https://eth.rpc.example.com\n    hypersync: true",
+        );
+        let new = manifest_from_yaml(&new_yaml);
+
+        // Enabling hypersync swaps the network's log data source, so it must not be
+        // treated as NoChange while `start --watch` is running.
+        let diff = compute_diff(&old, &new);
+        assert!(diff.changes.iter().any(
+            |c| matches!(c, ManifestChange::NetworkConfigChanged(name) if name == "ethereum")
+        ));
+
+        // And disabling it again must be detected symmetrically.
+        let diff = compute_diff(&new, &old);
+        assert!(diff.changes.iter().any(
+            |c| matches!(c, ManifestChange::NetworkConfigChanged(name) if name == "ethereum")
+        ));
     }
 
     #[test]

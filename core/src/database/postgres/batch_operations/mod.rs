@@ -7,15 +7,19 @@
 mod dynamic;
 mod macros;
 mod query_builder;
+#[cfg(test)]
+mod tests;
 
 pub use dynamic::execute_dynamic_batch_operation;
 
 // Re-exported for use by the create_batch_postgres_operation! macro
 #[allow(unused_imports)]
 pub use query_builder::{
-    build_cte_header, build_delete_body, build_insert_body, build_sequence_condition,
-    build_set_clause, build_to_process_cte, build_to_process_cte_aggregated, build_update_body,
-    build_upsert_body, build_upsert_set_clause, build_upsert_set_clause_latest_by_sequence,
+    build_arithmetic_insert_expr, build_cte_header, build_delete_body, build_insert_body,
+    build_sequence_condition, build_set_clause, build_to_process_cte,
+    build_to_process_cte_aggregated, build_update_body, build_upsert_body, build_upsert_set_clause,
+    build_upsert_set_clause_arithmetic, build_upsert_set_clause_latest_by_sequence,
     build_where_clause, build_where_condition, format_table_name, quote_identifier,
-    ColumnAggregate, ColumnInfo, SetClauseType, UpsertClauseType,
+    rewrite_custom_where_for_arithmetic, ColumnAggregate, ColumnInfo, SetClauseType,
+    UpsertClauseType,
 };
