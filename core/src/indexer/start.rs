@@ -523,13 +523,10 @@ fn event_source_column_types(
 }
 
 /// Build derived-table rollback + journal entries for an event's tables and merge
-/// them into `accumulator` keyed by `network`. Shared between contract events and
-/// native-transfer trace events so both sources contribute to reorg rollback.
-struct DerivedTableRollbackAccumulators<'a> {
-    tables: &'a mut HashMap<String, Vec<DerivedTableInfo>>,
-    plans: &'a mut HashMap<String, DerivedTableRollbackPlan>,
-}
-
+/// them into the per-network maps. Shared between contract events and native-transfer
+/// trace events so both sources contribute to reorg rollback.
+// Keep the two output maps explicit instead of wrapping them in a behaviorless type.
+#[allow(clippy::too_many_arguments)]
 fn build_derived_tables_for_event(
     event_name: &str,
     indexer_name: &str,
@@ -537,13 +534,14 @@ fn build_derived_tables_for_event(
     network: &str,
     source_column_types: &HashMap<String, ColumnType>,
     tables: &[crate::indexer::tables::TableRuntime],
-    accumulator: &mut DerivedTableRollbackAccumulators<'_>,
+    derived_tables: &mut HashMap<String, Vec<DerivedTableInfo>>,
+    rollback_plans: &mut HashMap<String, DerivedTableRollbackPlan>,
 ) -> anyhow::Result<()> {
     let schema = generate_indexer_contract_schema_name(indexer_name, contract_name);
     let event_table_full = format!("{}.{}", schema, camel_to_snake(event_name));
 
     for tr in tables.iter() {
-        let derived = accumulator.tables.entry(network.to_string()).or_default();
+        let derived = derived_tables.entry(network.to_string()).or_default();
         let derived_column_types = tr
             .table
             .columns
@@ -662,7 +660,7 @@ fn build_derived_tables_for_event(
             0
         };
 
-        let rollback_plan = accumulator.plans.entry(network.to_string()).or_default();
+        let rollback_plan = rollback_plans.entry(network.to_string()).or_default();
         for (operation_index, (iterate, source_types, derived_types)) in
             rollback_metadata.into_iter().enumerate()
         {
@@ -829,10 +827,8 @@ async fn start_indexing_contract_events(
                 &network_contract.network,
                 &source_column_types,
                 &event.tables,
-                &mut DerivedTableRollbackAccumulators {
-                    tables: &mut network_derived_tables,
-                    plans: &mut network_rollback_plans,
-                },
+                &mut network_derived_tables,
+                &mut network_rollback_plans,
             )?;
         }
     }
@@ -883,10 +879,8 @@ async fn start_indexing_contract_events(
                     &network_detail.network,
                     &source_column_types,
                     &trace_event.tables,
-                    &mut DerivedTableRollbackAccumulators {
-                        tables: &mut network_derived_tables,
-                        plans: &mut network_rollback_plans,
-                    },
+                    &mut network_derived_tables,
+                    &mut network_rollback_plans,
                 )?;
             }
         }
@@ -2131,10 +2125,8 @@ mod tests {
             "anvil",
             &source_column_types,
             &tables,
-            &mut DerivedTableRollbackAccumulators {
-                tables: &mut accumulator,
-                plans: &mut rollback_plans,
-            },
+            &mut accumulator,
+            &mut rollback_plans,
         )
         .expect("build_derived_tables_for_event should succeed");
 
@@ -2211,10 +2203,8 @@ events:
             "polygon",
             &source_column_types,
             &[runtime],
-            &mut DerivedTableRollbackAccumulators {
-                tables: &mut accumulator,
-                plans: &mut rollback_plans,
-            },
+            &mut accumulator,
+            &mut rollback_plans,
         )
         .expect("TransferBatch rollback metadata should compile");
 
@@ -2281,10 +2271,8 @@ events:
             "polygon",
             &source_column_types,
             &[runtime],
-            &mut DerivedTableRollbackAccumulators {
-                tables: &mut accumulator,
-                plans: &mut rollback_plans,
-            },
+            &mut accumulator,
+            &mut rollback_plans,
         )
         .expect("accessor rollback metadata should compile");
 
@@ -2332,10 +2320,8 @@ events:
             "polygon",
             &HashMap::new(),
             &[runtime],
-            &mut DerivedTableRollbackAccumulators {
-                tables: &mut accumulator,
-                plans: &mut rollback_plans,
-            },
+            &mut accumulator,
+            &mut rollback_plans,
         )
         .expect("global counter rollback metadata should compile");
 

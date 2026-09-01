@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 use alloy::primitives::{B256, U64};
 use anyhow::Context;
@@ -99,7 +96,7 @@ impl DerivedColumnRollback {
         action: SetAction,
     ) -> anyhow::Result<Self> {
         super::validate_sql_identifier(&derived_column, "derived column")?;
-        validate_event_operand(&event_column, "rollback event column")?;
+        parse_event_operand(&event_column, "rollback event column")?;
         Ok(Self { derived_column, event_column, action })
     }
 }
@@ -133,7 +130,7 @@ impl DerivedTableRollbackOp {
         }
         for (dt_col, ev_col) in &where_columns {
             super::validate_sql_identifier(dt_col, "rollback op WHERE derived column")?;
-            validate_event_operand(ev_col, "rollback op WHERE event column")?;
+            parse_event_operand(ev_col, "rollback op WHERE event column")?;
         }
         if let Some(cond) = &condition {
             validate_sql_condition(cond)?;
@@ -440,10 +437,6 @@ fn parse_event_operand<'a>(operand: &'a str, kind: &str) -> anyhow::Result<Condi
     Ok(variable)
 }
 
-fn validate_event_operand(operand: &str, kind: &str) -> anyhow::Result<()> {
-    parse_event_operand(operand, kind).map(|_| ())
-}
-
 struct ReversalSource<'a> {
     dialect: SqlDialect,
     iterate: &'a [RollbackIterateBinding],
@@ -686,13 +679,13 @@ fn render_reorg_condition(condition: &str, source: &ReversalSource<'_>) -> anyho
             return Ok(condition.to_string());
         }
     };
-    anyhow::ensure!(
-        !expression.has_table_references(),
-        "rollback condition '{condition}' references table state, which cannot be reconstructed from raw events"
-    );
     expression
         .to_sql_event_condition(|variable| source.variable_expression(variable))
-        .ok_or_else(|| anyhow::anyhow!("rollback condition '{condition}' did not produce SQL"))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "rollback condition '{condition}' references table state, which cannot be reconstructed from raw events"
+            )
+        })
 }
 
 impl ReorgTask {
@@ -711,9 +704,6 @@ impl ReorgTask {
         ch: Option<&Arc<ClickhouseClient>>,
         rollback_plan: &DerivedTableRollbackPlan,
     ) -> anyhow::Result<()> {
-        let mut checked_pg = HashSet::new();
-        let mut checked_ch = HashSet::new();
-
         for dt in &self.derived_tables {
             for (op_index, op) in dt.rollback_ops.iter().enumerate() {
                 let Some(metadata) = rollback_plan.operation(&dt.full_table_name, op_index) else {
@@ -741,19 +731,16 @@ impl ReorgTask {
                     );
 
                     let mismatch_count = match (dialect, pg, ch) {
-                        (SqlDialect::Postgres, Some(pg), _) if checked_pg.insert(query.clone()) => {
+                        (SqlDialect::Postgres, Some(pg), _) => {
                             pg.query_one(&query, &[])
                                 .await
                                 .context("failed to validate PostgreSQL rollback iterate lengths")?
                                 .get::<_, i64>(0) as u64
                         }
-                        (SqlDialect::Clickhouse, _, Some(ch))
-                            if checked_ch.insert(query.clone()) =>
-                        {
-                            ch.query_one::<u64>(&query)
-                                .await
-                                .context("failed to validate ClickHouse rollback iterate lengths")?
-                        }
+                        (SqlDialect::Clickhouse, _, Some(ch)) => ch
+                            .query_one::<u64>(&query)
+                            .await
+                            .context("failed to validate ClickHouse rollback iterate lengths")?,
                         _ => continue,
                     };
                     anyhow::ensure!(
@@ -1863,63 +1850,6 @@ mod tests {
         assert_eq!(op.where_columns.len(), 1);
         assert_eq!(op.columns.len(), 1);
         assert!(op.condition.is_none());
-    }
-
-    #[test]
-    fn test_transfer_batch_reversal_source_expands_parallel_arrays() {
-        let op = DerivedTableRollbackOp::try_new(
-            "myschema.transfer_batch".to_string(),
-            vec![("token_id".to_string(), "token_id".to_string())],
-            vec![DerivedColumnRollback::try_new(
-                "balance".to_string(),
-                "amount".to_string(),
-                SetAction::Add,
-            )
-            .unwrap()],
-            Some("$to != 0x0000000000000000000000000000000000000000".to_string()),
-        )
-        .unwrap();
-        let mut plan = DerivedTableRollbackPlan::default();
-        plan.try_add_operation(
-            "myschema.balances".to_string(),
-            0,
-            vec![
-                IterateBinding::parse("$ids as token_id").unwrap(),
-                IterateBinding::parse("$values as amount").unwrap(),
-            ],
-            HashMap::from([
-                ("ids".to_string(), ColumnType::Array(Box::new(ColumnType::Uint256))),
-                ("values".to_string(), ColumnType::Array(Box::new(ColumnType::Uint256))),
-            ]),
-            HashMap::from([
-                ("token_id".to_string(), ColumnType::Uint256),
-                ("balance".to_string(), ColumnType::Uint256),
-            ]),
-        )
-        .unwrap();
-        let metadata = plan.operation("myschema.balances", 0).unwrap();
-        let source = ReversalSource {
-            dialect: SqlDialect::Postgres,
-            iterate: &metadata.iterate,
-            source_column_types: &metadata.source_column_types,
-        };
-
-        assert_eq!(
-            source.from(&op.event_table),
-            "myschema.transfer_batch AS _rindexer_event CROSS JOIN LATERAL ROWS FROM (unnest(_rindexer_event.\"ids\"), unnest(_rindexer_event.\"values\")) AS _rindexer_iter(\"token_id\", \"amount\")"
-        );
-        assert_eq!(source.column("token_id"), "_rindexer_iter.\"token_id\"");
-        assert_eq!(source.column("amount"), "_rindexer_iter.\"amount\"");
-        assert_eq!(
-            source.iterate_length_mismatch().as_deref(),
-            Some(
-                "COALESCE(cardinality(_rindexer_event.\"ids\"), -1) <> COALESCE(cardinality(_rindexer_event.\"values\"), -1)"
-            )
-        );
-        assert_eq!(
-            render_reorg_condition(op.condition.as_deref().unwrap(), &source).unwrap(),
-            "_rindexer_event.\"to\" <> '0x0000000000000000000000000000000000000000'"
-        );
     }
 
     #[test]

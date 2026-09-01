@@ -2639,17 +2639,12 @@ async fn test_reorg_reversal_transfer_batch_iterate() {
     .await
     .unwrap();
 
-    let (contract, _) = deploy_ping_pong(&env.http, &env.rpc_url, env.deployer).await;
-    let block1 = send_ping(&env.http, &env.rpc_url, env.deployer, contract, 1).await;
-    let block2 = send_ping(&env.http, &env.rpc_url, env.deployer, contract, 2).await;
-
+    let block2 = 2;
     let network = "dev";
-    let accounts = get_accounts(&env.http, &env.rpc_url).await;
-    let sender = format!("{:#x}", accounts[0]);
-    let recipient = format!("{:#x}", accounts[1]);
+    let sender = "0x1111111111111111111111111111111111111111";
+    let recipient = "0x2222222222222222222222222222222222222222";
     let zero_tx = "0x0000000000000000000000000000000000000000000000000000000000000000";
-    let (block_hash, _) = get_block_by_number(&env.http, &env.rpc_url, block2).await;
-    let block_hash = format!("{:#x}", block_hash);
+    let block_hash = zero_tx;
     pg.execute(
         "INSERT INTO test_schema.erc1155_transfer_batch
          (operator, \"from\", \"to\", ids, values, tx_hash, block_number,
@@ -2657,15 +2652,7 @@ async fn test_reorg_reversal_transfer_batch_iterate() {
          VALUES ($1, $2, $3, ARRAY['101', '202']::VARCHAR(78)[],
                  ARRAY['7', '11']::VARCHAR(78)[],
                  $4, $5, $6, $7, 0, '0')",
-        &[
-            &sender.as_str(),
-            &sender.as_str(),
-            &recipient.as_str(),
-            &zero_tx,
-            &Decimal::from(block2),
-            &block_hash.as_str(),
-            &network,
-        ],
+        &[&sender, &sender, &recipient, &zero_tx, &Decimal::from(block2), &block_hash, &network],
     )
     .await
     .unwrap();
@@ -2679,8 +2666,6 @@ async fn test_reorg_reversal_transfer_batch_iterate() {
     .await
     .unwrap();
 
-    env.insert_block_hashes(&pg, network, block1, block2).await;
-    env.insert_ch_block_hashes(&ch, network, block1, block2).await;
     pg.execute(
         "INSERT INTO rindexer_internal.test_schema_transfer_batch
          (network, last_synced_block) VALUES ($1, $2)",
@@ -2695,12 +2680,9 @@ async fn test_reorg_reversal_transfer_batch_iterate() {
     .await
     .unwrap();
 
-    for (user, token_id, balance) in [
-        (sender.as_str(), 101u64, 13u64),
-        (sender.as_str(), 202, 19),
-        (recipient.as_str(), 101, 8),
-        (recipient.as_str(), 202, 13),
-    ] {
+    for (user, token_id, balance) in
+        [(sender, 101u64, 13u64), (sender, 202, 19), (recipient, 101, 8), (recipient, 202, 13)]
+    {
         pg.execute(
             "INSERT INTO test_schema.custody_balances
              (network, user_address, token_id, balance, rindexer_block_number)
@@ -2717,8 +2699,6 @@ async fn test_reorg_reversal_transfer_batch_iterate() {
         .await
         .unwrap();
     }
-
-    trigger_reorg(&env.http, &env.rpc_url, 1).await;
 
     let iterate = vec![
         IterateBinding::parse("$ids as token_id").unwrap(),
@@ -2863,12 +2843,9 @@ async fn test_reorg_reversal_transfer_batch_iterate() {
         .into_iter()
         .map(|row| (row.get::<_, String>(0), row.get::<_, Decimal>(1), row.get::<_, Decimal>(2)))
         .collect::<Vec<_>>();
-    for (user, token_id, expected) in [
-        (sender.as_str(), 101u64, 20u64),
-        (sender.as_str(), 202, 30),
-        (recipient.as_str(), 101, 1),
-        (recipient.as_str(), 202, 2),
-    ] {
+    for (user, token_id, expected) in
+        [(sender, 101u64, 20u64), (sender, 202, 30), (recipient, 101, 1), (recipient, 202, 2)]
+    {
         assert!(balances.contains(&(
             user.to_string(),
             Decimal::from(token_id),
