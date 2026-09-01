@@ -3831,7 +3831,7 @@ async fn test_reorg_clickhouse_add_reversal() {
 
     trigger_reorg(&env.http, &env.rpc_url, 2).await; // invalidates block2, block3
 
-    let task = ReorgTask {
+    let mut task = ReorgTask {
         network: network.to_string(),
         fork_point: block2,
         detection_point: block3,
@@ -3865,9 +3865,60 @@ async fn test_reorg_clickhouse_add_reversal() {
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
+    task.derived_tables[0].rollback_ops[0].columns[0].derived_column =
+        "missing_balance".to_string();
+    let error = match task.execute(&mut task_window, None, Some(&ch), None).await {
+        Ok(_) => panic!("invalid ClickHouse reversal must fail after raw deletion"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("Accumulative reversal"));
+    let retained_snapshots: u64 = ch
+        .query_one(
+            "SELECT count() FROM system.tables
+             WHERE database = 'rindexer_internal'
+               AND name LIKE '_rindexer_reorg_snap_%'",
+        )
+        .await
+        .unwrap();
+    assert_eq!(retained_snapshots, 2, "failed reversal must retain its snapshot and marker");
+
+    task.derived_tables[0].rollback_ops[0].columns[0].derived_column = "balance".to_string();
+    task.derived_tables.push(DerivedTableInfo {
+        full_table_name: "test_schema.missing_cleanup".to_string(),
+        cross_chain: false,
+        rollback_ops: vec![],
+        journal_columns: vec![],
+    });
+    let error = match task.execute(&mut task_window, None, Some(&ch), None).await {
+        Ok(_) => panic!("invalid later ClickHouse phase must fail"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("failed to delete derived table rows"));
+    let ch_balance_after_late_failure: u64 = ch
+        .query_one(&format!(
+            "SELECT toUInt64(balance) FROM test_schema.user_balances FINAL
+             WHERE network = '{network}' AND user_address = '{user}'"
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        ch_balance_after_late_failure, 100,
+        "successful reversal must be checkpointed before a later phase fails"
+    );
+    let retained_marker: u64 = ch
+        .query_one(
+            "SELECT count() FROM system.tables
+             WHERE database = 'rindexer_internal'
+               AND name LIKE '_rindexer_reorg_snap_%'",
+        )
+        .await
+        .unwrap();
+    assert_eq!(retained_marker, 1, "only the pending-attempt marker should remain");
+
+    task.derived_tables.pop();
     task.execute(&mut task_window, Some(&rindexer_pg), Some(&ch), None)
         .await
-        .expect("clickhouse add reversal reorg task failed");
+        .expect("ClickHouse reversal retry must reuse the retained snapshot");
 
     // PG: balance was 180, events at block2 (id=50) + block3 (id=30) = 80 subtracted -> 100
     let balance: rust_decimal::Decimal = pg
@@ -3882,6 +3933,26 @@ async fn test_reorg_clickhouse_add_reversal() {
 
     // PG: only the block1 event should remain
     assert_eq!(env.event_count(&pg).await, 1, "PG: only Ping(100) at block1 should remain");
+    let ch_balance: u64 = ch
+        .query_one(&format!(
+            "SELECT toUInt64(balance) FROM test_schema.user_balances FINAL
+             WHERE network = '{network}' AND user_address = '{user}'"
+        ))
+        .await
+        .expect("CH balance row should still exist after retry");
+    assert_eq!(ch_balance, 100, "CH retry must reverse the retained 80-point delta once");
+    let remaining_ch_events: u64 =
+        ch.query_one("SELECT count() FROM test_schema.ping_pong_ping FINAL").await.unwrap();
+    assert_eq!(remaining_ch_events, 1, "CH: only Ping(100) at block1 should remain");
+    let leaked_snapshots: u64 = ch
+        .query_one(
+            "SELECT count() FROM system.tables
+             WHERE database = 'rindexer_internal'
+               AND name LIKE '_rindexer_reorg_snap_%'",
+        )
+        .await
+        .unwrap();
+    assert_eq!(leaked_snapshots, 0, "successful retry must clean up snapshot state");
 }
 
 // ---------------------------------------------------------------------------

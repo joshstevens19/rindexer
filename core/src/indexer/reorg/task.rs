@@ -351,6 +351,11 @@ struct ReversalSnapshot {
     set_ops: Vec<ReversalSetOp>,
 }
 
+struct ReversalSnapshots {
+    entries: Vec<ReversalSnapshot>,
+    clickhouse_marker: Option<String>,
+}
+
 /// A single reversal SET assignment, kept structured (rather than as a
 /// pre-rendered SQL string) so each backend can quote the derived column with
 /// its own convention. `derived_column` is reversed by `op_symbol` against the
@@ -765,18 +770,92 @@ impl ReorgTask {
         pg: Option<&PgTransaction<'_>>,
         ch: Option<&Arc<ClickhouseClient>>,
         rollback_plan: &DerivedTableRollbackPlan,
-        attempt_id: &str,
-    ) -> anyhow::Result<Vec<ReversalSnapshot>> {
+    ) -> anyhow::Result<ReversalSnapshots> {
         self.validate_iterate_lengths(pg, ch, rollback_plan).await?;
 
+        let (attempt_id, clickhouse_marker, resumed) = match ch {
+            Some(ch) => {
+                let (attempt_id, marker, resumed) = self.clickhouse_reversal_attempt(ch).await?;
+                (attempt_id, Some(marker), resumed)
+            }
+            None => (
+                format!("_rindexer_reorg_snap_{}", generate_random_id(24).to_ascii_lowercase()),
+                None,
+                false,
+            ),
+        };
         let mut snapshots = Vec::new();
-        let create_result =
-            self.create_reversal_snapshots(pg, ch, rollback_plan, attempt_id, &mut snapshots).await;
+        let create_result = self
+            .create_reversal_snapshots(pg, ch, rollback_plan, &attempt_id, &mut snapshots)
+            .await;
         if let Err(error) = create_result {
-            Self::cleanup_reversal_snapshots(&snapshots, pg, ch).await;
+            if !resumed {
+                Self::cleanup_reversal_snapshots(&snapshots, None, pg, ch).await;
+            }
             return Err(error);
         }
-        Ok(snapshots)
+
+        let has_clickhouse_snapshots =
+            snapshots.iter().any(|snap| snap.backend == SnapshotBackend::Clickhouse);
+        if has_clickhouse_snapshots && !resumed {
+            if let (Some(ch), Some(marker)) = (ch, clickhouse_marker.as_deref()) {
+                if let Err(error) = ch
+                    .execute(&format!("CREATE TABLE {} (ready UInt8) ENGINE = Memory", marker))
+                    .await
+                {
+                    Self::cleanup_reversal_snapshots(&snapshots, None, pg, Some(ch)).await;
+                    return Err(error)
+                        .context("Failed to mark ClickHouse reversal snapshots ready");
+                }
+            }
+        }
+
+        Ok(ReversalSnapshots {
+            entries: snapshots,
+            clickhouse_marker: clickhouse_marker.filter(|_| has_clickhouse_snapshots),
+        })
+    }
+
+    async fn clickhouse_reversal_attempt(
+        &self,
+        ch: &Arc<ClickhouseClient>,
+    ) -> anyhow::Result<(String, String, bool)> {
+        let safe_network = self.network.replace('-', "_");
+        let prefix = format!(
+            "_rindexer_reorg_snap_{}_{}_{}_",
+            safe_network, self.fork_point, self.detection_point
+        );
+        let markers = ch
+            .query_all::<String>(&format!(
+                "SELECT name FROM system.tables \
+                 WHERE database = 'rindexer_internal' \
+                   AND startsWith(name, '{}') AND endsWith(name, '_ready') \
+                 ORDER BY name LIMIT 2",
+                prefix
+            ))
+            .await
+            .context("Failed to find pending ClickHouse reversal snapshots")?;
+        anyhow::ensure!(
+            markers.len() <= 1,
+            "multiple pending ClickHouse reversal attempts found for {} blocks {}-{}",
+            self.network,
+            self.fork_point,
+            self.detection_point
+        );
+
+        if let Some(marker) = markers.into_iter().next() {
+            let attempt_id = marker
+                .strip_suffix("_ready")
+                .filter(|name| name.starts_with(&prefix))
+                .ok_or_else(|| anyhow::anyhow!("invalid ClickHouse reversal marker '{}'", marker))?
+                .to_string();
+            super::validate_sql_identifier(&attempt_id, "ClickHouse reversal attempt")?;
+            return Ok((attempt_id, format!("rindexer_internal.{}", marker), true));
+        }
+
+        let attempt_id = format!("{}{}", prefix, generate_random_id(24).to_ascii_lowercase());
+        let marker = format!("rindexer_internal.{}_ready", attempt_id);
+        Ok((attempt_id, marker, false))
     }
 
     async fn create_reversal_snapshots(
@@ -859,7 +938,7 @@ impl ReorgTask {
                     })
                     .collect::<Vec<_>>();
 
-                let temp_base = format!("_rindexer_reorg_snap_{}_{}", attempt_id, snap_idx);
+                let temp_base = format!("{}_{}", attempt_id, snap_idx);
                 snap_idx += 1;
 
                 // Build the SELECT per-backend. Group/where and aggregate-source
@@ -986,7 +1065,7 @@ impl ReorgTask {
                     // support correlated subqueries the way Postgres does, so
                     // we cannot use `(SELECT ... WHERE snap.k = dt.k LIMIT 1)`.
                     let ch_create = format!(
-                        "CREATE TABLE {} ENGINE = Join(ANY, LEFT, _rindexer_key) AS {}",
+                        "CREATE TABLE IF NOT EXISTS {} ENGINE = Join(ANY, LEFT, _rindexer_key) AS {}",
                         ch_temp,
                         build_select(SqlDialect::Clickhouse)?,
                     );
@@ -1131,6 +1210,15 @@ impl ReorgTask {
                         table = %snap.derived_table,
                         "ClickHouse: reversed accumulative ops"
                     );
+                    if let Err(error) =
+                        ch.execute(&format!("DROP TABLE IF EXISTS {}", snap.temp_table)).await
+                    {
+                        tracing::warn!(
+                            temp_table = %snap.temp_table,
+                            %error,
+                            "Failed to checkpoint completed ClickHouse reversal snapshot"
+                        );
+                    }
                 }
             }
         }
@@ -1139,6 +1227,7 @@ impl ReorgTask {
 
     async fn cleanup_reversal_snapshots(
         snapshots: &[ReversalSnapshot],
+        clickhouse_marker: Option<&str>,
         pg: Option<&PgTransaction<'_>>,
         ch: Option<&Arc<ClickhouseClient>>,
     ) {
@@ -1164,6 +1253,15 @@ impl ReorgTask {
                     temp_table = %snap.temp_table,
                     %error,
                     "Failed to clean up reorg reversal snapshot"
+                );
+            }
+        }
+        if let (Some(marker), Some(ch)) = (clickhouse_marker, ch) {
+            if let Err(error) = ch.execute(&format!("DROP TABLE IF EXISTS {}", marker)).await {
+                tracing::warn!(
+                    temp_table = %marker,
+                    %error,
+                    "Failed to clean up ClickHouse reversal marker"
                 );
             }
         }
@@ -1462,12 +1560,7 @@ impl ReorgTask {
         };
         let pg = pg_transaction.as_ref();
 
-        // One nonce scopes every snapshot created by this execution. PostgreSQL
-        // still relies on its session-local temp namespace; ClickHouse needs the
-        // nonce because its snapshot tables are database-global.
-        let attempt_id = generate_random_id(24).to_ascii_lowercase();
-        let reversal_snapshots =
-            self.snapshot_for_reversal(pg, clickhouse, rollback_plan, &attempt_id).await?;
+        let reversal_snapshots = self.snapshot_for_reversal(pg, clickhouse, rollback_plan).await?;
 
         let rollback_result: anyhow::Result<(u64, Vec<String>)> = async {
             let mut affected_tx_hashes = Vec::new();
@@ -1532,7 +1625,7 @@ impl ReorgTask {
                 }
             }
 
-            Self::apply_reversal_from_snapshots(&reversal_snapshots, pg, clickhouse)
+            Self::apply_reversal_from_snapshots(&reversal_snapshots.entries, pg, clickhouse)
                 .await
                 .context("Accumulative reversal from snapshots failed")?;
             self.recalculate_from_journal(pg, clickhouse)
@@ -1585,7 +1678,15 @@ impl ReorgTask {
         }
         .await;
 
-        Self::cleanup_reversal_snapshots(&reversal_snapshots, pg, clickhouse).await;
+        if rollback_result.is_ok() {
+            Self::cleanup_reversal_snapshots(
+                &reversal_snapshots.entries,
+                reversal_snapshots.clickhouse_marker.as_deref(),
+                pg,
+                clickhouse,
+            )
+            .await;
+        }
         let (total_deleted, affected_tx_hashes) = rollback_result?;
         if let Some(transaction) = pg_transaction {
             transaction.commit().await.context("PostgreSQL reorg commit failed")?;
