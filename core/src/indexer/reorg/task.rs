@@ -5,6 +5,7 @@ use std::{
 
 use alloy::primitives::{B256, U64};
 use anyhow::Context;
+use tokio_postgres::Transaction as PgTransaction;
 
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::postgres::client::PostgresClient;
@@ -12,7 +13,7 @@ use crate::event::{
     parse_arithmetic_expression, parse_filter_expression, Accessor, ArithmeticExpr, ConditionLeft,
     VariableSource,
 };
-use crate::helpers::camel_to_snake;
+use crate::helpers::{camel_to_snake, generate_random_id};
 use crate::manifest::contract::{ColumnType, IterateBinding, SetAction};
 use crate::metrics::indexing as metrics;
 use crate::provider::ChainProvider;
@@ -153,13 +154,28 @@ pub struct DerivedTableRollbackPlan {
 
 #[derive(Clone, Debug)]
 pub(crate) struct DerivedTableRollbackMetadata {
-    pub(crate) iterate: Vec<IterateBinding>,
+    pub(crate) iterate: Vec<RollbackIterateBinding>,
     pub(crate) source_column_types: HashMap<String, ColumnType>,
     pub(crate) derived_column_types: HashMap<String, ColumnType>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IterateStorage {
+    NativeArray,
+    PostgresJsonb,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RollbackIterateBinding {
+    pub(crate) array_field: String,
+    pub(crate) alias: String,
+    storage: IterateStorage,
+}
+
 impl DerivedTableRollbackPlan {
     /// Add metadata for one rollback operation.
+    /// Tuple-array element types use dotted keys such as `accounts.owner`;
+    /// their raw PostgreSQL column is represented as JSONB.
     ///
     /// # Errors
     ///
@@ -180,7 +196,7 @@ impl DerivedTableRollbackPlan {
             super::validate_sql_identifier(&derived_table, "rollback plan derived table name")?;
         }
 
-        let mut iterate = Vec::with_capacity(bindings.len());
+        let mut iterate: Vec<RollbackIterateBinding> = Vec::with_capacity(bindings.len());
         for binding in bindings {
             let binding = IterateBinding {
                 array_field: event_field_to_db_column(&binding.array_field),
@@ -189,16 +205,37 @@ impl DerivedTableRollbackPlan {
             super::validate_sql_identifier(&binding.array_field, "rollback iterate array column")?;
             super::validate_sql_identifier(&binding.alias, "rollback iterate alias")?;
             anyhow::ensure!(
-                !iterate.iter().any(|existing: &IterateBinding| existing.alias == binding.alias),
+                !iterate.iter().any(|existing| existing.alias == binding.alias),
                 "duplicate rollback iterate alias '{}'",
                 binding.alias
             );
-            if let Some(ColumnType::Array(inner)) =
-                source_column_types.get(&binding.array_field).cloned()
-            {
-                source_column_types.insert(binding.alias.clone(), *inner);
-            }
-            iterate.push(binding);
+            let jsonb_prefix = format!("{}.", binding.array_field);
+            let jsonb_element_types = source_column_types
+                .iter()
+                .filter_map(|(field, column_type)| {
+                    field
+                        .strip_prefix(&jsonb_prefix)
+                        .map(|path| (path.to_string(), column_type.clone()))
+                })
+                .collect::<Vec<_>>();
+            let storage = if jsonb_element_types.is_empty() {
+                if let Some(ColumnType::Array(inner)) =
+                    source_column_types.get(&binding.array_field).cloned()
+                {
+                    source_column_types.insert(binding.alias.clone(), *inner);
+                }
+                IterateStorage::NativeArray
+            } else {
+                for (path, column_type) in jsonb_element_types {
+                    source_column_types.insert(format!("{}.{}", binding.alias, path), column_type);
+                }
+                IterateStorage::PostgresJsonb
+            };
+            iterate.push(RollbackIterateBinding {
+                array_field: binding.array_field,
+                alias: binding.alias,
+                storage,
+            });
         }
 
         let table_operations = self.operations.entry(derived_table.clone()).or_default();
@@ -409,7 +446,7 @@ fn validate_event_operand(operand: &str, kind: &str) -> anyhow::Result<()> {
 
 struct ReversalSource<'a> {
     dialect: SqlDialect,
-    iterate: &'a [IterateBinding],
+    iterate: &'a [RollbackIterateBinding],
     source_column_types: &'a HashMap<String, ColumnType>,
 }
 
@@ -431,6 +468,11 @@ impl ReversalSource<'_> {
     }
 
     fn variable_expression(&self, variable: &ConditionLeft<'_>) -> String {
+        let base = event_field_to_db_column(variable.base_name());
+        if let Some(binding) = self.iterate.iter().find(|binding| binding.alias == base) {
+            return self.iterate_variable_expression(variable, binding);
+        }
+
         let mut field_parts = vec![variable.base_name()];
         let mut accessors = variable.accessors().iter().peekable();
 
@@ -493,6 +535,64 @@ impl ReversalSource<'_> {
         }
     }
 
+    fn iterate_variable_expression(
+        &self,
+        variable: &ConditionLeft<'_>,
+        binding: &RollbackIterateBinding,
+    ) -> String {
+        let mut expression = self.column(&binding.alias);
+        let mut column_type = self.source_column_types.get(&binding.alias).cloned();
+
+        if binding.storage == IterateStorage::PostgresJsonb {
+            let mut field = binding.alias.clone();
+            let path = variable
+                .accessors()
+                .iter()
+                .map(|accessor| match accessor {
+                    Accessor::Key(key) => {
+                        field.push('.');
+                        field.push_str(key);
+                        column_type = self.source_column_types.get(&field).cloned();
+                        key.to_string()
+                    }
+                    Accessor::Index(index) => {
+                        if let Some(ColumnType::Array(inner)) = column_type.take() {
+                            column_type = Some(*inner);
+                        }
+                        index.to_string()
+                    }
+                })
+                .collect::<Vec<_>>();
+            if !path.is_empty() {
+                let path = path
+                    .iter()
+                    .map(|part| format!("'{}'", part.replace('\'', "''")))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                expression = match self.dialect {
+                    SqlDialect::Postgres => {
+                        format!("jsonb_extract_path_text({}, {})", expression, path)
+                    }
+                    SqlDialect::Clickhouse => expression,
+                };
+            }
+        } else {
+            for accessor in variable.accessors() {
+                if let Accessor::Index(index) = accessor {
+                    if let Some(ColumnType::Array(inner)) = column_type.take() {
+                        expression = self.dialect.array_element(expression, *index);
+                        column_type = Some(*inner);
+                    }
+                }
+            }
+        }
+
+        match column_type {
+            Some(column_type) => self.dialect.cast(expression, &column_type),
+            None => expression,
+        }
+    }
+
     fn operand(&self, operand: &str) -> anyhow::Result<String> {
         let variable = parse_event_operand(operand, "rollback operand")?;
         Ok(self.variable_expression(&variable))
@@ -504,10 +604,17 @@ impl ReversalSource<'_> {
             return None;
         }
 
-        let length = |binding: &IterateBinding| {
+        let length = |binding: &RollbackIterateBinding| {
             let column = format!("_rindexer_event.{}", self.dialect.quote(&binding.array_field));
             match self.dialect {
-                SqlDialect::Postgres => format!("COALESCE(cardinality({}), -1)", column),
+                SqlDialect::Postgres => match binding.storage {
+                    IterateStorage::NativeArray => {
+                        format!("COALESCE(cardinality({}), -1)", column)
+                    }
+                    IterateStorage::PostgresJsonb => {
+                        format!("COALESCE(jsonb_array_length({}), -1)", column)
+                    }
+                },
                 SqlDialect::Clickhouse => format!("length({})", column),
             }
         };
@@ -525,15 +632,23 @@ impl ReversalSource<'_> {
             return format!("{} AS _rindexer_event", event_table);
         }
 
-        let arrays = self
-            .iterate
-            .iter()
-            .map(|binding| format!("_rindexer_event.{}", self.dialect.quote(&binding.array_field)))
-            .collect::<Vec<_>>()
-            .join(", ");
-
         match self.dialect {
             SqlDialect::Postgres => {
+                let iterators = self
+                    .iterate
+                    .iter()
+                    .map(|binding| {
+                        let column =
+                            format!("_rindexer_event.{}", self.dialect.quote(&binding.array_field));
+                        match binding.storage {
+                            IterateStorage::NativeArray => format!("unnest({})", column),
+                            IterateStorage::PostgresJsonb => {
+                                format!("jsonb_array_elements({})", column)
+                            }
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 let aliases = self
                     .iterate
                     .iter()
@@ -541,14 +656,24 @@ impl ReversalSource<'_> {
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!(
-                    "{} AS _rindexer_event CROSS JOIN LATERAL unnest({}) AS _rindexer_iter({})",
-                    event_table, arrays, aliases
+                    "{} AS _rindexer_event CROSS JOIN LATERAL ROWS FROM ({}) AS _rindexer_iter({})",
+                    event_table, iterators, aliases
                 )
             }
-            SqlDialect::Clickhouse => format!(
-                "{} AS _rindexer_event ARRAY JOIN arrayZip({}) AS _rindexer_iter",
-                event_table, arrays
-            ),
+            SqlDialect::Clickhouse => {
+                let arrays = self
+                    .iterate
+                    .iter()
+                    .map(|binding| {
+                        format!("_rindexer_event.{}", self.dialect.quote(&binding.array_field))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "{} AS _rindexer_event ARRAY JOIN arrayZip({}) AS _rindexer_iter",
+                    event_table, arrays
+                )
+            }
         }
     }
 }
@@ -582,7 +707,7 @@ impl ReorgTask {
 
     async fn validate_iterate_lengths(
         &self,
-        pg: Option<&PostgresClient>,
+        pg: Option<&PgTransaction<'_>>,
         ch: Option<&Arc<ClickhouseClient>>,
         rollback_plan: &DerivedTableRollbackPlan,
     ) -> anyhow::Result<()> {
@@ -650,13 +775,31 @@ impl ReorgTask {
     /// event deletion from proceeding without proper reversal data.
     async fn snapshot_for_reversal(
         &self,
-        pg: Option<&PostgresClient>,
+        pg: Option<&PgTransaction<'_>>,
         ch: Option<&Arc<ClickhouseClient>>,
         rollback_plan: &DerivedTableRollbackPlan,
+        attempt_id: &str,
     ) -> anyhow::Result<Vec<ReversalSnapshot>> {
         self.validate_iterate_lengths(pg, ch, rollback_plan).await?;
 
         let mut snapshots = Vec::new();
+        let create_result =
+            self.create_reversal_snapshots(pg, ch, rollback_plan, attempt_id, &mut snapshots).await;
+        if let Err(error) = create_result {
+            Self::cleanup_reversal_snapshots(&snapshots, pg, ch).await;
+            return Err(error);
+        }
+        Ok(snapshots)
+    }
+
+    async fn create_reversal_snapshots(
+        &self,
+        pg: Option<&PgTransaction<'_>>,
+        ch: Option<&Arc<ClickhouseClient>>,
+        rollback_plan: &DerivedTableRollbackPlan,
+        attempt_id: &str,
+        snapshots: &mut Vec<ReversalSnapshot>,
+    ) -> anyhow::Result<()> {
         let mut snap_idx = 0usize;
         let empty_column_types = HashMap::new();
 
@@ -729,14 +872,7 @@ impl ReorgTask {
                     })
                     .collect::<Vec<_>>();
 
-                // Include network + fork_point in temp table name to avoid collisions
-                // across concurrent reorg tasks on different networks.
-                // Replace hyphens with underscores so the name is a valid SQL identifier.
-                let safe_network = self.network.replace('-', "_");
-                let temp_base = format!(
-                    "_rindexer_reorg_snap_{}_{}_{}",
-                    safe_network, self.fork_point, snap_idx
-                );
+                let temp_base = format!("_rindexer_reorg_snap_{}_{}", attempt_id, snap_idx);
                 snap_idx += 1;
 
                 // Build the SELECT per-backend. Group/where and aggregate-source
@@ -833,10 +969,19 @@ impl ReorgTask {
                 if let Some(pg) = pg {
                     let pg_temp = format!("{}_pg", temp_base);
                     let pg_create = format!(
-                        "CREATE TEMP TABLE {} AS {}",
+                        "CREATE TEMP TABLE {} ON COMMIT DROP AS {}",
                         pg_temp,
                         build_select(SqlDialect::Postgres)?
                     );
+                    snapshots.push(ReversalSnapshot {
+                        backend: SnapshotBackend::Postgres,
+                        temp_table: pg_temp.clone(),
+                        derived_table: dt.full_table_name.clone(),
+                        cross_chain: dt.cross_chain,
+                        network: self.network.clone(),
+                        where_columns: snapshot_where_columns.clone(),
+                        set_ops: set_ops.clone(),
+                    });
                     pg.batch_execute(&pg_create).await.with_context(|| {
                         format!(
                             "Failed to create PG reorg reversal snapshot for {}",
@@ -844,15 +989,6 @@ impl ReorgTask {
                         )
                     })?;
                     tracing::debug!(temp_table = %pg_temp, "Created PG reorg reversal snapshot");
-                    snapshots.push(ReversalSnapshot {
-                        backend: SnapshotBackend::Postgres,
-                        temp_table: pg_temp,
-                        derived_table: dt.full_table_name.clone(),
-                        cross_chain: dt.cross_chain,
-                        network: self.network.clone(),
-                        where_columns: snapshot_where_columns.clone(),
-                        set_ops: set_ops.clone(),
-                    });
                 }
 
                 if let Some(ch) = ch {
@@ -863,10 +999,19 @@ impl ReorgTask {
                     // support correlated subqueries the way Postgres does, so
                     // we cannot use `(SELECT ... WHERE snap.k = dt.k LIMIT 1)`.
                     let ch_create = format!(
-                        "CREATE TABLE IF NOT EXISTS {} ENGINE = Join(ANY, LEFT, _rindexer_key) AS {}",
+                        "CREATE TABLE {} ENGINE = Join(ANY, LEFT, _rindexer_key) AS {}",
                         ch_temp,
                         build_select(SqlDialect::Clickhouse)?,
                     );
+                    snapshots.push(ReversalSnapshot {
+                        backend: SnapshotBackend::Clickhouse,
+                        temp_table: ch_temp.clone(),
+                        derived_table: dt.full_table_name.clone(),
+                        cross_chain: dt.cross_chain,
+                        network: self.network.clone(),
+                        where_columns: snapshot_where_columns.clone(),
+                        set_ops: set_ops.clone(),
+                    });
                     ch.execute(&ch_create).await.with_context(|| {
                         format!(
                             "Failed to create CH reorg reversal snapshot for {}",
@@ -874,26 +1019,16 @@ impl ReorgTask {
                         )
                     })?;
                     tracing::debug!(temp_table = %ch_temp, "Created CH reorg reversal snapshot");
-                    snapshots.push(ReversalSnapshot {
-                        backend: SnapshotBackend::Clickhouse,
-                        temp_table: ch_temp,
-                        derived_table: dt.full_table_name.clone(),
-                        cross_chain: dt.cross_chain,
-                        network: self.network.clone(),
-                        where_columns: snapshot_where_columns,
-                        set_ops,
-                    });
                 }
             }
         }
-
-        Ok(snapshots)
+        Ok(())
     }
 
-    /// Phase 2: After event deletion, apply reverse UPDATEs from snapshots and drop temp tables.
+    /// Phase 2: After event deletion, apply reverse UPDATEs from snapshots.
     async fn apply_reversal_from_snapshots(
         snapshots: &[ReversalSnapshot],
-        pg: Option<&PostgresClient>,
+        pg: Option<&PgTransaction<'_>>,
         ch: Option<&Arc<ClickhouseClient>>,
     ) -> anyhow::Result<()> {
         for snap in snapshots {
@@ -942,9 +1077,6 @@ impl ReorgTask {
                         table = %snap.derived_table,
                         "PostgreSQL: reversed accumulative ops"
                     );
-                    let _ = pg
-                        .batch_execute(&format!("DROP TABLE IF EXISTS {}", snap.temp_table))
-                        .await;
                 }
                 SnapshotBackend::Clickhouse => {
                     let Some(ch) = ch else { continue };
@@ -1012,19 +1144,49 @@ impl ReorgTask {
                         table = %snap.derived_table,
                         "ClickHouse: reversed accumulative ops"
                     );
-
-                    let _ = ch.execute(&format!("DROP TABLE IF EXISTS {}", snap.temp_table)).await;
                 }
             }
         }
         Ok(())
     }
 
+    async fn cleanup_reversal_snapshots(
+        snapshots: &[ReversalSnapshot],
+        pg: Option<&PgTransaction<'_>>,
+        ch: Option<&Arc<ClickhouseClient>>,
+    ) {
+        for snap in snapshots.iter().rev() {
+            let result = match snap.backend {
+                SnapshotBackend::Postgres => match pg {
+                    Some(pg) => pg
+                        .batch_execute(&format!("DROP TABLE IF EXISTS {}", snap.temp_table))
+                        .await
+                        .map_err(anyhow::Error::from),
+                    None => continue,
+                },
+                SnapshotBackend::Clickhouse => match ch {
+                    Some(ch) => ch
+                        .execute(&format!("DROP TABLE IF EXISTS {}", snap.temp_table))
+                        .await
+                        .map_err(anyhow::Error::from),
+                    None => continue,
+                },
+            };
+            if let Err(error) = result {
+                tracing::warn!(
+                    temp_table = %snap.temp_table,
+                    %error,
+                    "Failed to clean up reorg reversal snapshot"
+                );
+            }
+        }
+    }
+
     /// Recalculate non-reversible columns (Set/Max/Min) from the operation journal.
     /// Deletes journal entries in the reorg range, then recalculates from remaining entries.
     async fn recalculate_from_journal(
         &self,
-        pg: Option<&PostgresClient>,
+        pg: Option<&PgTransaction<'_>>,
         ch: Option<&Arc<ClickhouseClient>>,
     ) -> anyhow::Result<()> {
         for dt in &self.derived_tables {
@@ -1301,21 +1463,39 @@ impl ReorgTask {
         let corrected_blocks: Vec<(u64, &str, &str)> =
             corrected_blocks_owned.iter().map(|(n, h, p)| (*n, h.as_str(), p.as_str())).collect();
 
-        // Phase 1: snapshot event data for accumulative reversal (before deletion)
+        let mut pg_connection = match postgres {
+            Some(pg) => Some(pg.raw_connection().await.context("PostgreSQL connection failed")?),
+            None => None,
+        };
+        let pg_transaction = match pg_connection.as_mut() {
+            Some(connection) => {
+                Some(connection.transaction().await.context("PostgreSQL transaction failed")?)
+            }
+            None => None,
+        };
+        let pg = pg_transaction.as_ref();
+
+        // One nonce scopes every snapshot created by this execution. PostgreSQL
+        // still relies on its session-local temp namespace; ClickHouse needs the
+        // nonce because its snapshot tables are database-global.
+        let attempt_id = generate_random_id(24).to_ascii_lowercase();
         let reversal_snapshots =
-            self.snapshot_for_reversal(postgres, clickhouse, rollback_plan).await?;
+            self.snapshot_for_reversal(pg, clickhouse, rollback_plan, &attempt_id).await?;
 
-        let mut affected_tx_hashes: Vec<String> = Vec::new();
-        let mut total_deleted = 0u64;
+        let rollback_result: anyhow::Result<(u64, Vec<String>)> = async {
+            let mut affected_tx_hashes = Vec::new();
+            let mut total_deleted = 0u64;
 
-        if let Some(pg) = postgres {
-            let table_names: Vec<&str> =
-                self.event_tables.iter().map(|t| t.full_name.as_str()).collect();
-            let checkpoint_tables: Vec<&str> =
-                self.event_tables.iter().map(|t| t.checkpoint_table.as_str()).collect();
-
-            let (deleted, tx_hashes) = pg
-                .reorg_rollback_transaction(
+            if let Some(pg) = pg {
+                let table_names =
+                    self.event_tables.iter().map(|t| t.full_name.as_str()).collect::<Vec<_>>();
+                let checkpoint_tables = self
+                    .event_tables
+                    .iter()
+                    .map(|t| t.checkpoint_table.as_str())
+                    .collect::<Vec<_>>();
+                let (deleted, tx_hashes) = PostgresClient::reorg_rollback_in_transaction(
+                    pg,
                     &table_names,
                     &self.network,
                     self.fork_point,
@@ -1325,96 +1505,103 @@ impl ReorgTask {
                 )
                 .await
                 .context("PostgreSQL reorg rollback transaction failed")?;
-            total_deleted = deleted;
-            affected_tx_hashes = tx_hashes;
-        }
-
-        if let Some(ch) = clickhouse {
-            let tables: Vec<(String, String)> = self
-                .event_tables
-                .iter()
-                .map(|t| (t.schema.clone(), t.table_name.clone()))
-                .collect();
-            let checkpoint_tables: Vec<String> =
-                self.event_tables.iter().map(|t| t.checkpoint_table.clone()).collect();
-
-            let (ch_deleted, ch_tx_hashes) = ch
-                .reorg_rollback(
-                    &tables,
-                    &self.network,
-                    self.fork_point,
-                    self.detection_point,
-                    &checkpoint_tables,
-                    &corrected_blocks,
-                )
-                .await
-                .context("ClickHouse reorg rollback failed")?;
-
-            if postgres.is_none() {
-                total_deleted = ch_deleted;
-                affected_tx_hashes = ch_tx_hashes;
-            } else if ch_deleted != total_deleted {
-                tracing::warn!(
-                    network = %self.network,
-                    postgres_deleted = total_deleted,
-                    clickhouse_deleted = ch_deleted,
-                    "Reorg rollback: postgres and clickhouse deleted counts differ"
-                );
-            }
-        }
-
-        // Phase 2: apply accumulative reversals from snapshots (after event deletion)
-        Self::apply_reversal_from_snapshots(&reversal_snapshots, postgres, clickhouse)
-            .await
-            .context("Accumulative reversal from snapshots failed")?;
-
-        // Phase 3: recalculate non-reversible columns (Set/Max/Min) from operation journal
-        self.recalculate_from_journal(postgres, clickhouse)
-            .await
-            .context("Journal recalculation failed")?;
-
-        // Phase 4: DELETE insert-only derived tables (no rollback_ops and no journal_columns)
-        for dt in &self.derived_tables {
-            if !dt.rollback_ops.is_empty() || !dt.journal_columns.is_empty() {
-                continue; // handled by reversal and/or journal recalculation
-            }
-            let network_filter = self.network_filter(dt.cross_chain);
-
-            if let Some(pg) = postgres {
-                let query = format!(
-                    "DELETE FROM {} WHERE rindexer_block_number >= {}{}",
-                    dt.full_table_name, self.fork_point, network_filter
-                );
-                pg.batch_execute(&query).await.with_context(|| {
-                    format!(
-                        "PostgreSQL: failed to delete derived table rows in {}",
-                        dt.full_table_name
-                    )
-                })?;
-                tracing::info!(
-                    "PostgreSQL: deleted derived table rows from block >= {} in {}",
-                    self.fork_point,
-                    dt.full_table_name
-                );
+                total_deleted = deleted;
+                affected_tx_hashes = tx_hashes;
             }
 
             if let Some(ch) = clickhouse {
-                let query = format!(
-                    "ALTER TABLE {} DELETE WHERE rindexer_block_number >= {}{} SETTINGS mutations_sync = 1",
-                    dt.full_table_name, self.fork_point, network_filter
-                );
-                ch.execute(&query).await.with_context(|| {
-                    format!(
-                        "ClickHouse: failed to delete derived table rows in {}",
-                        dt.full_table_name
+                let tables = self
+                    .event_tables
+                    .iter()
+                    .map(|t| (t.schema.clone(), t.table_name.clone()))
+                    .collect::<Vec<_>>();
+                let checkpoint_tables = self
+                    .event_tables
+                    .iter()
+                    .map(|t| t.checkpoint_table.clone())
+                    .collect::<Vec<_>>();
+                let (ch_deleted, ch_tx_hashes) = ch
+                    .reorg_rollback(
+                        &tables,
+                        &self.network,
+                        self.fork_point,
+                        self.detection_point,
+                        &checkpoint_tables,
+                        &corrected_blocks,
                     )
-                })?;
-                tracing::info!(
-                    "ClickHouse: deleted derived table rows from block >= {} in {}",
-                    self.fork_point,
-                    dt.full_table_name
-                );
+                    .await
+                    .context("ClickHouse reorg rollback failed")?;
+
+                if pg.is_none() {
+                    total_deleted = ch_deleted;
+                    affected_tx_hashes = ch_tx_hashes;
+                } else if ch_deleted != total_deleted {
+                    tracing::warn!(
+                        network = %self.network,
+                        postgres_deleted = total_deleted,
+                        clickhouse_deleted = ch_deleted,
+                        "Reorg rollback: postgres and clickhouse deleted counts differ"
+                    );
+                }
             }
+
+            Self::apply_reversal_from_snapshots(&reversal_snapshots, pg, clickhouse)
+                .await
+                .context("Accumulative reversal from snapshots failed")?;
+            self.recalculate_from_journal(pg, clickhouse)
+                .await
+                .context("Journal recalculation failed")?;
+
+            for dt in &self.derived_tables {
+                if !dt.rollback_ops.is_empty() || !dt.journal_columns.is_empty() {
+                    continue;
+                }
+                let network_filter = self.network_filter(dt.cross_chain);
+
+                if let Some(pg) = pg {
+                    let query = format!(
+                        "DELETE FROM {} WHERE rindexer_block_number >= {}{}",
+                        dt.full_table_name, self.fork_point, network_filter
+                    );
+                    pg.batch_execute(&query).await.with_context(|| {
+                        format!(
+                            "PostgreSQL: failed to delete derived table rows in {}",
+                            dt.full_table_name
+                        )
+                    })?;
+                    tracing::info!(
+                        "PostgreSQL: deleted derived table rows from block >= {} in {}",
+                        self.fork_point,
+                        dt.full_table_name
+                    );
+                }
+                if let Some(ch) = clickhouse {
+                    let query = format!(
+                        "ALTER TABLE {} DELETE WHERE rindexer_block_number >= {}{} SETTINGS mutations_sync = 1",
+                        dt.full_table_name, self.fork_point, network_filter
+                    );
+                    ch.execute(&query).await.with_context(|| {
+                        format!(
+                            "ClickHouse: failed to delete derived table rows in {}",
+                            dt.full_table_name
+                        )
+                    })?;
+                    tracing::info!(
+                        "ClickHouse: deleted derived table rows from block >= {} in {}",
+                        self.fork_point,
+                        dt.full_table_name
+                    );
+                }
+            }
+
+            Ok((total_deleted, affected_tx_hashes))
+        }
+        .await;
+
+        Self::cleanup_reversal_snapshots(&reversal_snapshots, pg, clickhouse).await;
+        let (total_deleted, affected_tx_hashes) = rollback_result?;
+        if let Some(transaction) = pg_transaction {
+            transaction.commit().await.context("PostgreSQL reorg commit failed")?;
         }
 
         // Update the in-memory window after all DB changes succeed.
@@ -1719,7 +1906,7 @@ mod tests {
 
         assert_eq!(
             source.from(&op.event_table),
-            "myschema.transfer_batch AS _rindexer_event CROSS JOIN LATERAL unnest(_rindexer_event.\"ids\", _rindexer_event.\"values\") AS _rindexer_iter(\"token_id\", \"amount\")"
+            "myschema.transfer_batch AS _rindexer_event CROSS JOIN LATERAL ROWS FROM (unnest(_rindexer_event.\"ids\"), unnest(_rindexer_event.\"values\")) AS _rindexer_iter(\"token_id\", \"amount\")"
         );
         assert_eq!(source.column("token_id"), "_rindexer_iter.\"token_id\"");
         assert_eq!(source.column("amount"), "_rindexer_iter.\"amount\"");

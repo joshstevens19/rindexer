@@ -683,6 +683,30 @@ impl PostgresClient {
         let mut conn = self.pool.get().await?;
         let transaction = conn.transaction().await?;
 
+        let result = Self::reorg_rollback_in_transaction(
+            &transaction,
+            event_table_names,
+            network,
+            fork_point,
+            detection_point,
+            corrected_blocks,
+            checkpoint_tables,
+        )
+        .await?;
+
+        transaction.commit().await?;
+        Ok(result)
+    }
+
+    pub(crate) async fn reorg_rollback_in_transaction(
+        transaction: &PgTransaction<'_>,
+        event_table_names: &[&str],
+        network: &str,
+        fork_point: u64,
+        detection_point: u64,
+        corrected_blocks: &[(u64, &str, &str)],
+        checkpoint_tables: &[&str],
+    ) -> Result<(u64, Vec<String>), PostgresError> {
         let fork_point_i64 = i64::try_from(fork_point)
             .map_err(|_| PostgresError::Custom("fork_point exceeds i64 range".to_string()))?;
         let detection_point_i64 = i64::try_from(detection_point)
@@ -738,8 +762,6 @@ impl PostgresClient {
             );
             transaction.execute(&query, &[&rewind_block, &network]).await?;
         }
-
-        transaction.commit().await?;
 
         Ok((total_deleted, all_affected_tx_hashes))
     }

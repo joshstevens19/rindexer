@@ -2795,6 +2795,11 @@ async fn test_reorg_reversal_transfer_batch_iterate() {
         canonical_blocks: vec![],
     };
 
+    let legacy_snapshot = format!("rindexer_internal._rindexer_reorg_snap_{network}_{block2}_0_ch");
+    ch.execute(&format!("CREATE TABLE {legacy_snapshot} (value UInt8) ENGINE = Memory"))
+        .await
+        .unwrap();
+
     let rindexer_pg = env.rindexer_pg().await;
     pg.batch_execute(
         "UPDATE test_schema.erc1155_transfer_batch
@@ -2899,6 +2904,202 @@ async fn test_reorg_reversal_transfer_batch_iterate() {
         .unwrap()
         .get(0);
     assert_eq!(checkpoint, Decimal::from(block2 - 1));
+    let legacy_snapshot_exists: u64 = ch
+        .query_one(&format!(
+            "SELECT count() FROM system.tables WHERE database = 'rindexer_internal'
+             AND name = '_rindexer_reorg_snap_{network}_{block2}_0_ch'"
+        ))
+        .await
+        .unwrap();
+    assert_eq!(legacy_snapshot_exists, 1, "a stale legacy snapshot must not be reused");
+    ch.execute(&format!("DROP TABLE {legacy_snapshot}")).await.unwrap();
+    let leaked_snapshots: u64 = ch
+        .query_one(
+            "SELECT count() FROM system.tables
+             WHERE database = 'rindexer_internal'
+               AND name LIKE '_rindexer_reorg_snap_%'",
+        )
+        .await
+        .unwrap();
+    assert_eq!(leaked_snapshots, 0, "ClickHouse reversal snapshots must be cleaned up");
+}
+
+#[tokio::test]
+async fn test_reorg_reversal_expands_postgres_jsonb_tuple_arrays() {
+    let env = TestEnv::new().await;
+    let pg = env.pg_client().await;
+    env.setup_base_tables(&pg).await;
+
+    pg.batch_execute(
+        "CREATE TABLE rindexer_internal.test_schema_account_batch (
+             network VARCHAR(50) NOT NULL PRIMARY KEY,
+             last_synced_block NUMERIC NOT NULL
+         );
+         CREATE TABLE test_schema.account_batch (
+             rindexer_id SERIAL PRIMARY KEY,
+             accounts JSONB NOT NULL,
+             values VARCHAR(78)[] NOT NULL,
+             tx_hash CHAR(66) NOT NULL,
+             block_number NUMERIC NOT NULL,
+             block_hash CHAR(66) NOT NULL,
+             network VARCHAR(50) NOT NULL
+         );
+         CREATE TABLE test_schema.account_balances (
+             network VARCHAR(50) NOT NULL,
+             owner CHAR(42) NOT NULL,
+             balance NUMERIC NOT NULL,
+             rindexer_block_number BIGINT NOT NULL,
+             PRIMARY KEY (network, owner)
+         );",
+    )
+    .await
+    .unwrap();
+
+    let network = "dev";
+    let block = 10u64;
+    let owner_a = "0x0000000000000000000000000000000000000001";
+    let owner_b = "0x0000000000000000000000000000000000000002";
+    let accounts = json!([
+        {"owner": owner_a, "tokenAmount": "7"},
+        {"owner": owner_b, "tokenAmount": "11"}
+    ]);
+    let zero_hash = "0x0000000000000000000000000000000000000000000000000000000000000000";
+    pg.execute(
+        "INSERT INTO test_schema.account_batch
+         (accounts, values, tx_hash, block_number, block_hash, network)
+         VALUES ($1, ARRAY['1']::VARCHAR(78)[], $2, $3, $2, $4)",
+        &[&accounts, &zero_hash, &Decimal::from(block), &network],
+    )
+    .await
+    .unwrap();
+    pg.execute(
+        "INSERT INTO rindexer_internal.test_schema_account_batch
+         (network, last_synced_block) VALUES ($1, $2)",
+        &[&network, &Decimal::from(block)],
+    )
+    .await
+    .unwrap();
+    for (owner, balance) in [(owner_a, 17u64), (owner_b, 31)] {
+        pg.execute(
+            "INSERT INTO test_schema.account_balances
+             (network, owner, balance, rindexer_block_number) VALUES ($1, $2, $3, $4)",
+            &[&network, &owner, &Decimal::from(balance), &(block as i64)],
+        )
+        .await
+        .unwrap();
+    }
+
+    let derived_table = "test_schema.account_balances".to_string();
+    let mut rollback_plan = DerivedTableRollbackPlan::default();
+    rollback_plan
+        .try_add_operation(
+            derived_table.clone(),
+            0,
+            vec![
+                IterateBinding::parse("$accounts as account").unwrap(),
+                IterateBinding::parse("$values as value").unwrap(),
+            ],
+            HashMap::from([
+                ("accounts.owner".to_string(), ColumnType::Address),
+                ("accounts.tokenAmount".to_string(), ColumnType::Uint256),
+                ("values".to_string(), ColumnType::Array(Box::new(ColumnType::Uint256))),
+            ]),
+            HashMap::from([
+                ("owner".to_string(), ColumnType::Address),
+                ("balance".to_string(), ColumnType::Uint256),
+            ]),
+        )
+        .unwrap();
+    let mut task = ReorgTask {
+        network: network.to_string(),
+        fork_point: block,
+        detection_point: block,
+        event_tables: vec![EventTableInfo::try_new(
+            "test_schema".to_string(),
+            "account_batch".to_string(),
+            "test_schema_account_batch".to_string(),
+            "test_indexer".to_string(),
+            "Accounts".to_string(),
+            "AccountBatch".to_string(),
+        )
+        .unwrap()],
+        derived_tables: vec![DerivedTableInfo {
+            full_table_name: derived_table,
+            cross_chain: false,
+            rollback_ops: vec![DerivedTableRollbackOp::try_new(
+                "test_schema.account_batch".to_string(),
+                vec![("owner".to_string(), "account.owner".to_string())],
+                vec![DerivedColumnRollback::try_new(
+                    "balance".to_string(),
+                    "account.tokenAmount".to_string(),
+                    SetAction::Add,
+                )
+                .unwrap()],
+                Some("$account.tokenAmount > 0".to_string()),
+            )
+            .unwrap()],
+            journal_columns: vec![],
+        }],
+        canonical_blocks: vec![],
+    };
+    let rindexer_pg = env.rindexer_pg().await;
+
+    let mut window = BlockChainWindow::try_new(16).unwrap();
+    let error = match task
+        .execute_with_rollback_plan(&mut window, Some(&rindexer_pg), None, None, &rollback_plan)
+        .await
+    {
+        Ok(_) => panic!("mixed iterate lengths must fail before deletion"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("unequal lengths"));
+    pg.batch_execute(
+        "UPDATE test_schema.account_batch
+         SET values = ARRAY['1', '2']::VARCHAR(78)[]",
+    )
+    .await
+    .unwrap();
+
+    task.derived_tables[0].rollback_ops[0].columns[0].derived_column =
+        "missing_balance".to_string();
+    let error = match task
+        .execute_with_rollback_plan(&mut window, Some(&rindexer_pg), None, None, &rollback_plan)
+        .await
+    {
+        Ok(_) => panic!("invalid reversal SQL must fail"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("Accumulative reversal"));
+    let raw_rows: i64 =
+        pg.query_one("SELECT count(*) FROM test_schema.account_batch", &[]).await.unwrap().get(0);
+    assert_eq!(raw_rows, 1, "failed reversal must roll back raw deletion");
+    let checkpoint: Decimal = pg
+        .query_one(
+            "SELECT last_synced_block
+             FROM rindexer_internal.test_schema_account_batch WHERE network = $1",
+            &[&network],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(checkpoint, Decimal::from(block));
+    task.derived_tables[0].rollback_ops[0].columns[0].derived_column = "balance".to_string();
+
+    task.execute_with_rollback_plan(&mut window, Some(&rindexer_pg), None, None, &rollback_plan)
+        .await
+        .expect("JSONB tuple-array rollback failed");
+
+    let balances = pg
+        .query("SELECT trim(owner), balance FROM test_schema.account_balances ORDER BY owner", &[])
+        .await
+        .unwrap();
+    assert_eq!(balances[0].get::<_, String>(0), owner_a);
+    assert_eq!(balances[0].get::<_, Decimal>(1), Decimal::from(10u64));
+    assert_eq!(balances[1].get::<_, String>(0), owner_b);
+    assert_eq!(balances[1].get::<_, Decimal>(1), Decimal::from(20u64));
+    let raw_rows: i64 =
+        pg.query_one("SELECT count(*) FROM test_schema.account_batch", &[]).await.unwrap().get(0);
+    assert_eq!(raw_rows, 0);
 }
 
 // ---------------------------------------------------------------------------

@@ -452,15 +452,33 @@ fn collect_source_column_types(
             None => name,
         };
 
-        if !input.type_.starts_with("tuple[") {
-            if let Some(components) = &input.components {
+        if let Some(components) = &input.components {
+            if input.type_.starts_with("tuple[") {
+                collect_jsonb_tuple_element_types(components, &column, source_column_types);
+            } else {
                 collect_source_column_types(components, Some(&column), source_column_types);
-                continue;
             }
+            continue;
         }
 
         if let Some(column_type) = ColumnType::from_solidity_type(&input.type_) {
             source_column_types.insert(column, column_type);
+        }
+    }
+}
+
+fn collect_jsonb_tuple_element_types(
+    components: &[ABIInput],
+    prefix: &str,
+    source_column_types: &mut HashMap<String, ColumnType>,
+) {
+    for component in components {
+        // JSONB tuple objects retain ABI component names verbatim.
+        let field = format!("{}.{}", prefix, component.name);
+        if let Some(nested) = &component.components {
+            collect_jsonb_tuple_element_types(nested, &field, source_column_types);
+        } else if let Some(column_type) = ColumnType::from_solidity_type(&component.type_) {
+            source_column_types.insert(field, column_type);
         }
     }
 }
@@ -2021,6 +2039,16 @@ mod tests {
                 "name": "data",
                 "type": "tuple",
                 "components": [{"name": "amount", "type": "uint256"}]
+            },
+            {
+                "name": "accounts",
+                "type": "tuple[]",
+                "components": [{"name": "owner", "type": "address"}]
+            },
+            {
+                "name": "fixedAccounts",
+                "type": "tuple[2]",
+                "components": [{"name": "tokenAmount", "type": "uint256"}]
             }
         ]))
         .expect("valid ABI inputs");
@@ -2029,6 +2057,10 @@ mod tests {
 
         assert_eq!(source_column_types["ids"], ColumnType::Array(Box::new(ColumnType::Uint256)));
         assert_eq!(source_column_types["data_amount"], ColumnType::Uint256);
+        assert_eq!(source_column_types["accounts.owner"], ColumnType::Address);
+        assert_eq!(source_column_types["fixed_accounts.tokenAmount"], ColumnType::Uint256);
+        assert!(!source_column_types.contains_key("accounts"));
+        assert!(!source_column_types.contains_key("fixed_accounts"));
     }
 
     #[test]

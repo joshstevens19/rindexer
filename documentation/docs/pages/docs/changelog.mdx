@@ -5,7 +5,7 @@
 
 ### Bug fixes
 -------------------------------------------------
-- fix: reorg recovery now reverses custom-table operations that use `iterate`, including paired ERC-1155 `TransferBatch` arrays, typed PostgreSQL values, and nested or indexed event-field references; unequal iterate arrays abort before stale events are deleted.
+- fix: reorg recovery now reverses custom-table operations that use `iterate`, including native and PostgreSQL JSONB tuple arrays, typed nested/indexed fields, and paired ERC-1155 `TransferBatch` values; PostgreSQL rollback is atomic, unequal arrays fail before deletion, and ClickHouse snapshots are attempt-scoped and cleaned up.
 
 - Fix live event indexing stalling when a temporary RPC retry ceiling matches the last synced block.
 
