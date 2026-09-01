@@ -5,7 +5,10 @@
 //! `cargo test`:
 //!   cargo nextest run -q -p rindexer --test e2e_reorg
 
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use alloy::primitives::{Address, B256};
 use reqwest::Client as HttpClient;
@@ -18,7 +21,7 @@ use rindexer::indexer::reorg::{
     },
     window::{BlockChainWindow, ParentValidation},
 };
-use rindexer::manifest::contract::{IterateBinding, SetAction};
+use rindexer::manifest::contract::{ColumnType, IterateBinding, SetAction};
 use rindexer::ClickhouseClient;
 use rindexer::PostgresClient;
 use rust_decimal::Decimal;
@@ -2130,6 +2133,8 @@ async fn test_reorg_reversal_add() {
                 }],
                 condition: None,
                 iterate: vec![],
+                source_column_types: HashMap::new(),
+                derived_column_types: HashMap::new(),
             }],
             journal_columns: vec![],
         }],
@@ -2243,6 +2248,8 @@ async fn test_reorg_reversal_reserved_word_column() {
                 }],
                 condition: None,
                 iterate: vec![],
+                source_column_types: HashMap::new(),
+                derived_column_types: HashMap::new(),
             }],
             journal_columns: vec![],
         }],
@@ -2338,6 +2345,8 @@ async fn test_reorg_reversal_subtract() {
                 }],
                 condition: None,
                 iterate: vec![],
+                source_column_types: HashMap::new(),
+                derived_column_types: HashMap::new(),
             }],
             journal_columns: vec![],
         }],
@@ -2434,6 +2443,8 @@ async fn test_reorg_reversal_increment() {
                 }],
                 condition: None,
                 iterate: vec![],
+                source_column_types: HashMap::new(),
+                derived_column_types: HashMap::new(),
             }],
             journal_columns: vec![],
         }],
@@ -2529,6 +2540,8 @@ async fn test_reorg_reversal_with_condition() {
                 // Only events where id > 7 were accumulated
                 condition: Some("id::NUMERIC > 7".to_string()),
                 iterate: vec![],
+                source_column_types: HashMap::new(),
+                derived_column_types: HashMap::new(),
             }],
             journal_columns: vec![],
         }],
@@ -2582,8 +2595,8 @@ async fn test_reorg_reversal_transfer_batch_iterate() {
              operator CHAR(42) NOT NULL,
              \"from\" CHAR(42) NOT NULL,
              \"to\" CHAR(42) NOT NULL,
-             ids NUMERIC[] NOT NULL,
-             values NUMERIC[] NOT NULL,
+             ids VARCHAR(78)[] NOT NULL,
+             values VARCHAR(78)[] NOT NULL,
              tx_hash CHAR(66) NOT NULL,
              block_number NUMERIC NOT NULL,
              block_hash CHAR(66) NOT NULL,
@@ -2656,7 +2669,8 @@ async fn test_reorg_reversal_transfer_batch_iterate() {
         "INSERT INTO test_schema.erc1155_transfer_batch
          (operator, \"from\", \"to\", ids, values, tx_hash, block_number,
           block_hash, network, tx_index, log_index)
-         VALUES ($1, $2, $3, ARRAY[101, 202]::NUMERIC[], ARRAY[7, 11]::NUMERIC[],
+         VALUES ($1, $2, $3, ARRAY['101', '202']::VARCHAR(78)[],
+                 ARRAY['7', '11']::VARCHAR(78)[],
                  $4, $5, $6, $7, 0, '0')",
         &[
             &sender.as_str(),
@@ -2725,6 +2739,17 @@ async fn test_reorg_reversal_transfer_batch_iterate() {
         IterateBinding::parse("$ids as token_id").unwrap(),
         IterateBinding::parse("$values as amount").unwrap(),
     ];
+    let source_column_types = HashMap::from([
+        ("from".to_string(), ColumnType::Address),
+        ("to".to_string(), ColumnType::Address),
+        ("ids".to_string(), ColumnType::Array(Box::new(ColumnType::Uint256))),
+        ("values".to_string(), ColumnType::Array(Box::new(ColumnType::Uint256))),
+    ]);
+    let derived_column_types = HashMap::from([
+        ("user_address".to_string(), ColumnType::Address),
+        ("token_id".to_string(), ColumnType::Uint256),
+        ("balance".to_string(), ColumnType::Uint256),
+    ]);
     let rollback_op = |user_field: &str, action: SetAction, condition: &str| {
         DerivedTableRollbackOp::try_new(
             "test_schema.erc1155_transfer_batch".to_string(),
@@ -2743,6 +2768,7 @@ async fn test_reorg_reversal_transfer_batch_iterate() {
         .unwrap()
         .with_iterate(iterate.clone())
         .unwrap()
+        .with_column_types(source_column_types.clone(), derived_column_types.clone())
     };
     let task = ReorgTask {
         network: network.to_string(),
@@ -3131,6 +3157,8 @@ async fn test_reorg_reversal_decrement() {
                 }],
                 condition: None,
                 iterate: vec![],
+                source_column_types: HashMap::new(),
+                derived_column_types: HashMap::new(),
             }],
             journal_columns: vec![],
         }],
@@ -3356,6 +3384,8 @@ async fn test_reorg_mixed_reversible_and_journal() {
                 }],
                 condition: None,
                 iterate: vec![],
+                source_column_types: HashMap::new(),
+                derived_column_types: HashMap::new(),
             }],
             journal_columns: vec![DerivedColumnJournal {
                 derived_column: "max_trade".to_string(),
@@ -3474,6 +3504,8 @@ async fn test_reorg_reversal_uninvolved_row_unchanged() {
                 }],
                 condition: None,
                 iterate: vec![],
+                source_column_types: HashMap::new(),
+                derived_column_types: HashMap::new(),
             }],
             journal_columns: vec![],
         }],
@@ -3621,6 +3653,8 @@ async fn test_reorg_clickhouse_add_reversal() {
                 }],
                 condition: None,
                 iterate: vec![],
+                source_column_types: HashMap::new(),
+                derived_column_types: HashMap::new(),
             }],
             journal_columns: vec![],
         }],
@@ -3762,6 +3796,8 @@ async fn test_reorg_reversal_reserved_word_column_clickhouse() {
                 }],
                 condition: None,
                 iterate: vec![],
+                source_column_types: HashMap::new(),
+                derived_column_types: HashMap::new(),
             }],
             journal_columns: vec![],
         }],
@@ -3931,6 +3967,8 @@ async fn test_reorg_two_events_same_table_reversible() {
                     }],
                     condition: None,
                     iterate: vec![],
+                    source_column_types: HashMap::new(),
+                    derived_column_types: HashMap::new(),
                 },
                 DerivedTableRollbackOp {
                     event_table: "test_schema.ping_pong_pong".to_string(),
@@ -3942,6 +3980,8 @@ async fn test_reorg_two_events_same_table_reversible() {
                     }],
                     condition: None,
                     iterate: vec![],
+                    source_column_types: HashMap::new(),
+                    derived_column_types: HashMap::new(),
                 },
             ],
             journal_columns: vec![],

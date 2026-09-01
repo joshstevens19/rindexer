@@ -214,14 +214,14 @@ impl<'a> Expression<'a> {
         })
     }
 
-    pub(crate) fn to_sql_event_condition<F>(&self, event_column: F) -> Option<String>
+    pub(crate) fn to_sql_event_condition<F>(&self, event_variable: F) -> Option<String>
     where
-        F: Fn(&str) -> String,
+        F: Fn(&ConditionLeft<'_>) -> String,
     {
         if self.has_table_references() {
             return None;
         }
-        Some(self.to_sql_condition_with(&|variable| event_column(variable.base_name())))
+        Some(self.to_sql_condition_with(&event_variable))
     }
 
     fn to_sql_condition_with<F>(&self, variable_to_sql: &F) -> String

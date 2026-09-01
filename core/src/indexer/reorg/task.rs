@@ -1,13 +1,13 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use alloy::primitives::{B256, U64};
 use anyhow::Context;
 
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::postgres::client::PostgresClient;
-use crate::event::parse_filter_expression;
+use crate::event::{parse_filter_expression, Accessor, ConditionLeft};
 use crate::helpers::camel_to_snake;
-use crate::manifest::contract::{IterateBinding, SetAction};
+use crate::manifest::contract::{ColumnType, IterateBinding, SetAction};
 use crate::metrics::indexing as metrics;
 use crate::provider::ChainProvider;
 
@@ -110,6 +110,10 @@ pub struct DerivedTableRollbackOp {
     pub condition: Option<String>,
     /// Array bindings expanded by the forward custom-table operation.
     pub iterate: Vec<IterateBinding>,
+    /// Semantic types of source event columns and iterate aliases.
+    pub source_column_types: HashMap<String, ColumnType>,
+    /// Resolved semantic types of derived-table columns.
+    pub derived_column_types: HashMap<String, ColumnType>,
 }
 
 impl DerivedTableRollbackOp {
@@ -133,7 +137,15 @@ impl DerivedTableRollbackOp {
         if let Some(cond) = &condition {
             validate_sql_condition(cond)?;
         }
-        Ok(Self { event_table, where_columns, columns, condition, iterate: Vec::new() })
+        Ok(Self {
+            event_table,
+            where_columns,
+            columns,
+            condition,
+            iterate: Vec::new(),
+            source_column_types: HashMap::new(),
+            derived_column_types: HashMap::new(),
+        })
     }
 
     /// Attach the array bindings used by the forward custom-table operation.
@@ -155,6 +167,25 @@ impl DerivedTableRollbackOp {
         }
         self.iterate = normalized;
         Ok(self)
+    }
+
+    /// Attach the ABI-derived source types and resolved custom-table types used
+    /// to preserve forward-path coercions during rollback SQL rendering.
+    pub fn with_column_types(
+        mut self,
+        mut source_column_types: HashMap<String, ColumnType>,
+        derived_column_types: HashMap<String, ColumnType>,
+    ) -> Self {
+        for binding in &self.iterate {
+            if let Some(ColumnType::Array(inner)) =
+                source_column_types.get(&binding.array_field).cloned()
+            {
+                source_column_types.insert(binding.alias.clone(), *inner);
+            }
+        }
+        self.source_column_types = source_column_types;
+        self.derived_column_types = derived_column_types;
+        self
     }
 }
 
@@ -288,6 +319,27 @@ impl SqlDialect {
             Self::Clickhouse => quote_ch_ident(name),
         }
     }
+
+    fn cast(self, expression: String, column_type: &ColumnType) -> String {
+        match self {
+            // Raw PostgreSQL event tables store 136-256 bit integers as decimal
+            // strings, while custom tables use NUMERIC. Reapply the forward
+            // custom-table coercion before grouping, comparing, or summing.
+            Self::Postgres => {
+                format!("CAST({} AS {})", expression, column_type.to_postgres_type())
+            }
+            // Raw and custom ClickHouse tables share ColumnType's native types.
+            Self::Clickhouse => expression,
+        }
+    }
+
+    fn array_element(self, expression: String, index: usize) -> String {
+        let sql_index = index.saturating_add(1);
+        match self {
+            Self::Postgres => format!("({})[{}]", expression, sql_index),
+            Self::Clickhouse => format!("arrayElement({}, {})", expression, sql_index),
+        }
+    }
 }
 
 fn event_field_to_db_column(field: &str) -> String {
@@ -306,6 +358,7 @@ fn event_field_to_db_column(field: &str) -> String {
 struct ReversalSource<'a> {
     dialect: SqlDialect,
     iterate: &'a [IterateBinding],
+    source_column_types: &'a HashMap<String, ColumnType>,
 }
 
 impl ReversalSource<'_> {
@@ -322,6 +375,69 @@ impl ReversalSource<'_> {
             }
         } else {
             format!("_rindexer_event.{}", self.dialect.quote(&column))
+        }
+    }
+
+    fn condition_variable(&self, variable: &ConditionLeft<'_>) -> String {
+        let mut field_parts = vec![variable.base_name()];
+        let mut accessors = variable.accessors().iter().peekable();
+
+        // Non-array tuple fields are flattened in raw event tables, so
+        // `$data.amount` addresses the `data_amount` column directly.
+        while let Some(Accessor::Key(key)) = accessors.peek() {
+            field_parts.push(key);
+            accessors.next();
+        }
+
+        let field = field_parts.join(".");
+        let db_column = event_field_to_db_column(&field);
+        let mut expression = self.column(&field);
+        let mut column_type = self
+            .source_column_types
+            .get(&db_column)
+            .cloned()
+            .or_else(|| ColumnType::from_tx_metadata_field(variable.base_name()));
+
+        for accessor in accessors {
+            match accessor {
+                Accessor::Index(index) => {
+                    match column_type {
+                        Some(ColumnType::Array(inner)) => {
+                            expression = self.dialect.array_element(expression, *index);
+                            column_type = Some(*inner);
+                        }
+                        _ => {
+                            // Tuple arrays are JSONB in PostgreSQL and use
+                            // zero-based JSON indexing rather than one-based
+                            // native SQL-array indexing.
+                            expression = match self.dialect {
+                                SqlDialect::Postgres => format!("({} -> {})", expression, index),
+                                SqlDialect::Clickhouse => expression,
+                            };
+                            column_type = None;
+                        }
+                    }
+                }
+                Accessor::Key(key) => {
+                    // Tuple arrays are JSONB in PostgreSQL and unsupported in
+                    // ClickHouse raw storage. Preserve their remaining path as
+                    // a JSON lookup when encountered after an array index.
+                    expression = match self.dialect {
+                        SqlDialect::Postgres => {
+                            format!("({} ->> '{}')", expression, key.replace('\'', "''"))
+                        }
+                        SqlDialect::Clickhouse => {
+                            format!("JSONExtractRaw({}, '{}')", expression, key.replace('\'', "''"))
+                        }
+                    };
+                    column_type = None;
+                }
+            }
+        }
+
+        match column_type {
+            Some(column_type) => self.dialect.cast(expression, &column_type),
+            None => expression,
         }
     }
 
@@ -360,7 +476,7 @@ impl ReversalSource<'_> {
 
 fn render_reorg_condition(condition: &str, source: &ReversalSource<'_>) -> Option<String> {
     let expression = parse_filter_expression(condition).ok()?;
-    expression.to_sql_event_condition(|field| source.column(field))
+    expression.to_sql_event_condition(|variable| source.condition_variable(variable))
 }
 
 impl ReorgTask {
@@ -387,10 +503,11 @@ impl ReorgTask {
 
         for dt in &self.derived_tables {
             for op in &dt.rollback_ops {
-                // (is_counter, source event column, agg alias) per reversible
+                // (is_counter, source event column, derived column, agg alias) per reversible
                 // column. The SELECT aggregate is assembled per-backend so each
                 // can quote identifiers with its own convention.
-                let mut agg_specs: Vec<(bool, String, String)> = Vec::new();
+                let mut agg_specs: Vec<(bool, String, String, String)> =
+                    Vec::with_capacity(op.columns.len());
                 let mut set_ops: Vec<ReversalSetOp> = Vec::new();
 
                 for (col_idx, col) in op.columns.iter().enumerate() {
@@ -421,6 +538,7 @@ impl ReorgTask {
                     agg_specs.push((
                         col.action.is_counter_action(),
                         col.event_column.clone(),
+                        col.derived_column.clone(),
                         agg_alias.clone(),
                     ));
                     set_ops.push(ReversalSetOp {
@@ -452,10 +570,21 @@ impl ReorgTask {
                 // reserved words (e.g. `to`, `from`), so each backend quotes them with
                 // its own convention (Postgres double quotes, ClickHouse backticks).
                 let build_select = |dialect: SqlDialect| {
-                    let source = ReversalSource { dialect, iterate: &op.iterate };
-                    let group_expressions = where_ev_cols
+                    let source = ReversalSource {
+                        dialect,
+                        iterate: &op.iterate,
+                        source_column_types: &op.source_column_types,
+                    };
+                    let group_expressions = op
+                        .where_columns
                         .iter()
-                        .map(|column| source.column(column))
+                        .map(|(derived_column, event_column)| {
+                            let expression = source.column(event_column);
+                            match op.derived_column_types.get(derived_column) {
+                                Some(column_type) => dialect.cast(expression, column_type),
+                                None => expression,
+                            }
+                        })
                         .collect::<Vec<_>>();
                     let group = group_expressions.join(", ");
                     let mut group_select = where_ev_cols
@@ -475,11 +604,16 @@ impl ReorgTask {
                     let group_select = group_select.join(", ");
                     let aggs = agg_specs
                         .iter()
-                        .map(|(is_counter, ev, alias)| {
+                        .map(|(is_counter, event_column, derived_column, alias)| {
                             if *is_counter {
                                 format!("COUNT(*) AS {}", alias)
                             } else {
-                                format!("SUM({}) AS {}", source.column(ev), alias)
+                                let expression = source.column(event_column);
+                                let expression = match op.derived_column_types.get(derived_column) {
+                                    Some(column_type) => dialect.cast(expression, column_type),
+                                    None => expression,
+                                };
+                                format!("SUM({}) AS {}", expression, alias)
                             }
                         })
                         .collect::<Vec<_>>()
@@ -1358,8 +1492,22 @@ mod tests {
             IterateBinding::parse("$ids as token_id").unwrap(),
             IterateBinding::parse("$values as amount").unwrap(),
         ])
-        .unwrap();
-        let source = ReversalSource { dialect: SqlDialect::Postgres, iterate: &op.iterate };
+        .unwrap()
+        .with_column_types(
+            HashMap::from([
+                ("ids".to_string(), ColumnType::Array(Box::new(ColumnType::Uint256))),
+                ("values".to_string(), ColumnType::Array(Box::new(ColumnType::Uint256))),
+            ]),
+            HashMap::from([
+                ("token_id".to_string(), ColumnType::Uint256),
+                ("balance".to_string(), ColumnType::Uint256),
+            ]),
+        );
+        let source = ReversalSource {
+            dialect: SqlDialect::Postgres,
+            iterate: &op.iterate,
+            source_column_types: &op.source_column_types,
+        };
 
         assert_eq!(
             source.from(&op.event_table),
@@ -1370,6 +1518,41 @@ mod tests {
         assert_eq!(
             render_reorg_condition(op.condition.as_deref().unwrap(), &source).unwrap(),
             "_rindexer_event.\"to\" <> '0x0000000000000000000000000000000000000000'"
+        );
+    }
+
+    #[test]
+    fn test_reorg_condition_preserves_nested_and_index_accessors() {
+        let source_column_types = HashMap::from([
+            ("data_amount".to_string(), ColumnType::Uint256),
+            ("ids".to_string(), ColumnType::Array(Box::new(ColumnType::Uint256))),
+        ]);
+        let pg_source = ReversalSource {
+            dialect: SqlDialect::Postgres,
+            iterate: &[],
+            source_column_types: &source_column_types,
+        };
+        assert_eq!(
+            render_reorg_condition("$data.amount > 0", &pg_source).unwrap(),
+            "CAST(_rindexer_event.\"data_amount\" AS NUMERIC) > 0"
+        );
+        assert_eq!(
+            render_reorg_condition("$ids[0] > 0", &pg_source).unwrap(),
+            "CAST((_rindexer_event.\"ids\")[1] AS NUMERIC) > 0"
+        );
+
+        let ch_source = ReversalSource {
+            dialect: SqlDialect::Clickhouse,
+            iterate: &[],
+            source_column_types: &source_column_types,
+        };
+        assert_eq!(
+            render_reorg_condition("$data.amount > 0", &ch_source).unwrap(),
+            "_rindexer_event.`data_amount` > 0"
+        );
+        assert_eq!(
+            render_reorg_condition("$ids[0] > 0", &ch_source).unwrap(),
+            "arrayElement(_rindexer_event.`ids`, 1) > 0"
         );
     }
 

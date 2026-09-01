@@ -12,6 +12,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
+use crate::abi::{ABIInput, ABIItem};
 use crate::database::clickhouse::client::{ClickhouseClient, ClickhouseConnectionError};
 use crate::database::generate::generate_indexer_contract_schema_name;
 use crate::database::postgres::generate::generate_internal_event_table_name;
@@ -34,7 +35,9 @@ use crate::{
     indexer::{
         dependency::ContractEventsDependenciesConfig,
         last_synced::{get_last_synced_block_number, SyncConfig},
-        native_transfer::{native_transfer_block_fetch, NATIVE_TRANSFER_CONTRACT_NAME},
+        native_transfer::{
+            native_transfer_block_fetch, NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME,
+        },
         process::{
             process_contracts_events_with_dependencies, process_non_blocking_event,
             ProcessContractsEventsWithDependenciesError, ProcessEventError,
@@ -42,7 +45,10 @@ use crate::{
         progress::IndexingEventsProgressState,
         ContractEventDependencies,
     },
-    manifest::{contract::ReorgSafeDistance, core::Manifest},
+    manifest::{
+        contract::{ColumnType, ReorgSafeDistance},
+        core::Manifest,
+    },
     provider::{ChainProvider, ProviderError},
     PostgresClient,
 };
@@ -434,6 +440,70 @@ fn collect_streams_clients_for_network(
     out
 }
 
+fn collect_source_column_types(
+    inputs: &[ABIInput],
+    prefix: Option<&str>,
+    source_column_types: &mut HashMap<String, ColumnType>,
+) {
+    for input in inputs {
+        let name = camel_to_snake(&input.name);
+        let column = match prefix {
+            Some(prefix) => format!("{}_{}", prefix, name),
+            None => name,
+        };
+
+        if !input.type_.starts_with("tuple[") {
+            if let Some(components) = &input.components {
+                collect_source_column_types(components, Some(&column), source_column_types);
+                continue;
+            }
+        }
+
+        if let Some(column_type) = ColumnType::from_solidity_type(&input.type_) {
+            source_column_types.insert(column, column_type);
+        }
+    }
+}
+
+fn event_source_column_types(
+    manifest: &Manifest,
+    project_path: &Path,
+    contract_name: &str,
+    event_name: &str,
+) -> anyhow::Result<HashMap<String, ColumnType>> {
+    let abi_items: Vec<ABIItem> = if contract_name == NATIVE_TRANSFER_CONTRACT_NAME {
+        serde_json::from_str(NATIVE_TRANSFER_ABI)?
+    } else {
+        let contract = manifest
+            .all_contracts()
+            .into_iter()
+            .find(|contract| contract.name == contract_name)
+            .ok_or_else(|| anyhow::anyhow!("contract '{}' not found in manifest", contract_name))?;
+        ABIItem::read_abi_items(project_path, &contract)?
+    };
+    let event =
+        abi_items.iter().find(|item| item.type_ == "event" && item.name == event_name).ok_or_else(
+            || anyhow::anyhow!("event '{}::{}' not found in ABI", contract_name, event_name),
+        )?;
+
+    let mut source_column_types = HashMap::new();
+    collect_source_column_types(&event.inputs, None, &mut source_column_types);
+    for (field, column) in [
+        ("rindexer_block_number", "block_number"),
+        ("rindexer_block_timestamp", "block_timestamp"),
+        ("rindexer_tx_hash", "tx_hash"),
+        ("rindexer_block_hash", "block_hash"),
+        ("rindexer_contract_address", "contract_address"),
+        ("rindexer_log_index", "log_index"),
+        ("rindexer_tx_index", "tx_index"),
+    ] {
+        if let Some(column_type) = ColumnType::from_tx_metadata_field(field) {
+            source_column_types.insert(column.to_string(), column_type);
+        }
+    }
+    Ok(source_column_types)
+}
+
 /// Build derived-table rollback + journal entries for an event's tables and merge
 /// them into `accumulator` keyed by `network`. Shared between contract events and
 /// native-transfer trace events so both sources contribute to reorg rollback.
@@ -442,6 +512,7 @@ fn build_derived_tables_for_event(
     indexer_name: &str,
     contract_name: &str,
     network: &str,
+    source_column_types: &HashMap<String, ColumnType>,
     tables: &[crate::indexer::tables::TableRuntime],
     accumulator: &mut HashMap<String, Vec<DerivedTableInfo>>,
 ) -> anyhow::Result<()> {
@@ -450,6 +521,14 @@ fn build_derived_tables_for_event(
 
     for tr in tables.iter() {
         let derived = accumulator.entry(network.to_string()).or_default();
+        let derived_column_types = tr
+            .table
+            .columns
+            .iter()
+            .filter_map(|column| {
+                column.column_type.clone().map(|column_type| (column.name.clone(), column_type))
+            })
+            .collect::<HashMap<_, _>>();
 
         let event_table_name = event_table_full.clone();
         let mut rollback_ops: Vec<DerivedTableRollbackOp> = Vec::new();
@@ -517,7 +596,11 @@ fn build_derived_tables_for_event(
                             columns,
                             operation.condition().map(String::from),
                         )?
-                        .with_iterate(table_event.iterate.clone())?,
+                        .with_iterate(table_event.iterate.clone())?
+                        .with_column_types(
+                            source_column_types.clone(),
+                            derived_column_types.clone(),
+                        ),
                     );
                 }
             }
@@ -661,6 +744,16 @@ async fn start_indexing_contract_events(
     let mut network_event_tables: HashMap<String, Vec<EventTableInfo>> = HashMap::new();
     let mut network_derived_tables: HashMap<String, Vec<DerivedTableInfo>> = HashMap::new();
     for event in registry.events.iter() {
+        let source_column_types = if event.tables.is_empty() {
+            HashMap::new()
+        } else {
+            event_source_column_types(
+                manifest,
+                project_path,
+                &event.contract.name,
+                &event.event_name,
+            )?
+        };
         for network_contract in event.contract.details.iter() {
             let schema =
                 generate_indexer_contract_schema_name(&event.indexer_name, &event.contract.name);
@@ -682,6 +775,7 @@ async fn start_indexing_contract_events(
                 &event.indexer_name,
                 &event.contract.name,
                 &network_contract.network,
+                &source_column_types,
                 &event.tables,
                 &mut network_derived_tables,
             )?;
@@ -716,12 +810,23 @@ async fn start_indexing_contract_events(
         // Mirror the contract-events pass for native-transfer derived tables: every
         // trace event contributes rollback ops for each configured network.
         for trace_event in trace_registry.events.iter() {
+            let source_column_types = if trace_event.tables.is_empty() {
+                HashMap::new()
+            } else {
+                event_source_column_types(
+                    manifest,
+                    project_path,
+                    &trace_event.contract_name,
+                    &trace_event.event_name,
+                )?
+            };
             for network_detail in trace_event.trace_information.details.iter() {
                 build_derived_tables_for_event(
                     &trace_event.event_name,
                     &trace_event.indexer_name,
                     &trace_event.contract_name,
                     &network_detail.network,
+                    &source_column_types,
                     &trace_event.tables,
                     &mut network_derived_tables,
                 )?;
@@ -1863,6 +1968,24 @@ mod tests {
     // source table.
 
     #[test]
+    fn collect_source_column_types_flattens_tuples_and_preserves_arrays() {
+        let inputs: Vec<ABIInput> = serde_json::from_value(serde_json::json!([
+            {"name": "ids", "type": "uint256[]"},
+            {
+                "name": "data",
+                "type": "tuple",
+                "components": [{"name": "amount", "type": "uint256"}]
+            }
+        ]))
+        .expect("valid ABI inputs");
+        let mut source_column_types = HashMap::new();
+        collect_source_column_types(&inputs, None, &mut source_column_types);
+
+        assert_eq!(source_column_types["ids"], ColumnType::Array(Box::new(ColumnType::Uint256)));
+        assert_eq!(source_column_types["data_amount"], ColumnType::Uint256);
+    }
+
+    #[test]
     fn build_derived_tables_for_native_transfer_populates_accumulator() {
         use crate::indexer::tables::TableRuntime;
         use crate::manifest::contract::{
@@ -1879,13 +2002,13 @@ mod tests {
             columns: vec![
                 TableColumn {
                     name: "account".to_string(),
-                    column_type: None,
+                    column_type: Some(ColumnType::Address),
                     nullable: false,
                     default: None,
                 },
                 TableColumn {
                     name: "total_sent".to_string(),
-                    column_type: None,
+                    column_type: Some(ColumnType::Uint256),
                     nullable: false,
                     default: None,
                 },
@@ -1916,6 +2039,10 @@ mod tests {
 
         let runtime = TableRuntime::new(table, "test_indexer", NATIVE_TRANSFER_CONTRACT_NAME);
         let tables = vec![runtime];
+        let source_column_types = HashMap::from([
+            ("from".to_string(), ColumnType::Address),
+            ("value".to_string(), ColumnType::Uint256),
+        ]);
 
         let mut accumulator: HashMap<String, Vec<DerivedTableInfo>> = HashMap::new();
         build_derived_tables_for_event(
@@ -1923,6 +2050,7 @@ mod tests {
             "test_indexer",
             NATIVE_TRANSFER_CONTRACT_NAME,
             "anvil",
+            &source_column_types,
             &tables,
             &mut accumulator,
         )
@@ -1962,8 +2090,11 @@ mod tests {
 name: custody_balances
 columns:
   - name: user
+    type: address
   - name: token_id
+    type: uint256
   - name: balance
+    type: uint256
 events:
   - event: TransferBatch
     iterate:
@@ -1985,11 +2116,17 @@ events:
 
         let runtime = TableRuntime::new(table, "test_indexer", "ConditionalTokens");
         let mut accumulator = HashMap::new();
+        let source_column_types = HashMap::from([
+            ("to".to_string(), ColumnType::Address),
+            ("ids".to_string(), ColumnType::Array(Box::new(ColumnType::Uint256))),
+            ("values".to_string(), ColumnType::Array(Box::new(ColumnType::Uint256))),
+        ]);
         build_derived_tables_for_event(
             "TransferBatch",
             "test_indexer",
             "ConditionalTokens",
             "polygon",
+            &source_column_types,
             &[runtime],
             &mut accumulator,
         )
@@ -2003,5 +2140,9 @@ events:
         assert_eq!(rollback.iterate[0].alias, "token_id");
         assert_eq!(rollback.iterate[1].array_field, "values");
         assert_eq!(rollback.iterate[1].alias, "amount");
+        assert_eq!(rollback.source_column_types["token_id"], ColumnType::Uint256);
+        assert_eq!(rollback.source_column_types["amount"], ColumnType::Uint256);
+        assert_eq!(rollback.derived_column_types["token_id"], ColumnType::Uint256);
+        assert_eq!(rollback.derived_column_types["balance"], ColumnType::Uint256);
     }
 }
