@@ -1,11 +1,17 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use alloy::primitives::{B256, U64};
 use anyhow::Context;
 
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::postgres::client::PostgresClient;
-use crate::event::{parse_filter_expression, Accessor, ConditionLeft};
+use crate::event::{
+    parse_arithmetic_expression, parse_filter_expression, Accessor, ArithmeticExpr, ConditionLeft,
+    VariableSource,
+};
 use crate::helpers::camel_to_snake;
 use crate::manifest::contract::{ColumnType, IterateBinding, SetAction};
 use crate::metrics::indexing as metrics;
@@ -92,7 +98,7 @@ impl DerivedColumnRollback {
         action: SetAction,
     ) -> anyhow::Result<Self> {
         super::validate_sql_identifier(&derived_column, "derived column")?;
-        super::validate_sql_identifier(&event_column, "event column")?;
+        validate_event_operand(&event_column, "rollback event column")?;
         Ok(Self { derived_column, event_column, action })
     }
 }
@@ -108,12 +114,6 @@ pub struct DerivedTableRollbackOp {
     pub columns: Vec<DerivedColumnRollback>,
     /// Optional SQL condition re-evaluated against event data.
     pub condition: Option<String>,
-    /// Array bindings expanded by the forward custom-table operation.
-    pub iterate: Vec<IterateBinding>,
-    /// Semantic types of source event columns and iterate aliases.
-    pub source_column_types: HashMap<String, ColumnType>,
-    /// Resolved semantic types of derived-table columns.
-    pub derived_column_types: HashMap<String, ColumnType>,
 }
 
 impl DerivedTableRollbackOp {
@@ -132,25 +132,55 @@ impl DerivedTableRollbackOp {
         }
         for (dt_col, ev_col) in &where_columns {
             super::validate_sql_identifier(dt_col, "rollback op WHERE derived column")?;
-            super::validate_sql_identifier(ev_col, "rollback op WHERE event column")?;
+            validate_event_operand(ev_col, "rollback op WHERE event column")?;
         }
         if let Some(cond) = &condition {
             validate_sql_condition(cond)?;
         }
-        Ok(Self {
-            event_table,
-            where_columns,
-            columns,
-            condition,
-            iterate: Vec::new(),
-            source_column_types: HashMap::new(),
-            derived_column_types: HashMap::new(),
-        })
+        Ok(Self { event_table, where_columns, columns, condition })
     }
+}
 
-    /// Attach the array bindings used by the forward custom-table operation.
-    pub fn with_iterate(mut self, bindings: Vec<IterateBinding>) -> anyhow::Result<Self> {
-        let mut normalized = Vec::with_capacity(bindings.len());
+/// Optional execution metadata for custom-table rollback operations.
+///
+/// This sidecar keeps [`DerivedTableRollbackOp`] source-compatible for callers
+/// that construct it with struct literals. Operation indexes correspond to the
+/// order of `DerivedTableInfo::rollback_ops` for the named table.
+#[derive(Clone, Debug, Default)]
+pub struct DerivedTableRollbackPlan {
+    operations: HashMap<String, HashMap<usize, DerivedTableRollbackMetadata>>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct DerivedTableRollbackMetadata {
+    pub(crate) iterate: Vec<IterateBinding>,
+    pub(crate) source_column_types: HashMap<String, ColumnType>,
+    pub(crate) derived_column_types: HashMap<String, ColumnType>,
+}
+
+impl DerivedTableRollbackPlan {
+    /// Add metadata for one rollback operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the table name or iterate bindings are invalid,
+    /// or when metadata was already registered for the same operation index.
+    pub fn try_add_operation(
+        &mut self,
+        derived_table: String,
+        operation_index: usize,
+        bindings: Vec<IterateBinding>,
+        mut source_column_types: HashMap<String, ColumnType>,
+        derived_column_types: HashMap<String, ColumnType>,
+    ) -> anyhow::Result<()> {
+        if let Some((schema, table)) = derived_table.split_once('.') {
+            super::validate_sql_identifier(schema, "rollback plan derived table schema")?;
+            super::validate_sql_identifier(table, "rollback plan derived table name")?;
+        } else {
+            super::validate_sql_identifier(&derived_table, "rollback plan derived table name")?;
+        }
+
+        let mut iterate = Vec::with_capacity(bindings.len());
         for binding in bindings {
             let binding = IterateBinding {
                 array_field: event_field_to_db_column(&binding.array_field),
@@ -159,33 +189,38 @@ impl DerivedTableRollbackOp {
             super::validate_sql_identifier(&binding.array_field, "rollback iterate array column")?;
             super::validate_sql_identifier(&binding.alias, "rollback iterate alias")?;
             anyhow::ensure!(
-                !normalized.iter().any(|existing: &IterateBinding| existing.alias == binding.alias),
+                !iterate.iter().any(|existing: &IterateBinding| existing.alias == binding.alias),
                 "duplicate rollback iterate alias '{}'",
                 binding.alias
             );
-            normalized.push(binding);
-        }
-        self.iterate = normalized;
-        Ok(self)
-    }
-
-    /// Attach the ABI-derived source types and resolved custom-table types used
-    /// to preserve forward-path coercions during rollback SQL rendering.
-    pub fn with_column_types(
-        mut self,
-        mut source_column_types: HashMap<String, ColumnType>,
-        derived_column_types: HashMap<String, ColumnType>,
-    ) -> Self {
-        for binding in &self.iterate {
             if let Some(ColumnType::Array(inner)) =
                 source_column_types.get(&binding.array_field).cloned()
             {
                 source_column_types.insert(binding.alias.clone(), *inner);
             }
+            iterate.push(binding);
         }
-        self.source_column_types = source_column_types;
-        self.derived_column_types = derived_column_types;
-        self
+
+        let table_operations = self.operations.entry(derived_table.clone()).or_default();
+        anyhow::ensure!(
+            !table_operations.contains_key(&operation_index),
+            "duplicate rollback metadata for table '{}' operation {}",
+            derived_table,
+            operation_index
+        );
+        table_operations.insert(
+            operation_index,
+            DerivedTableRollbackMetadata { iterate, source_column_types, derived_column_types },
+        );
+        Ok(())
+    }
+
+    pub(crate) fn operation(
+        &self,
+        derived_table: &str,
+        operation_index: usize,
+    ) -> Option<&DerivedTableRollbackMetadata> {
+        self.operations.get(derived_table)?.get(&operation_index)
     }
 }
 
@@ -355,6 +390,23 @@ fn event_field_to_db_column(field: &str) -> String {
     }
 }
 
+fn parse_event_operand<'a>(operand: &'a str, kind: &str) -> anyhow::Result<ConditionLeft<'a>> {
+    let expression = parse_arithmetic_expression(operand)
+        .map_err(|error| anyhow::anyhow!("invalid {kind} '{operand}': {error}"))?;
+    let ArithmeticExpr::Variable(variable) = expression else {
+        anyhow::bail!("{kind} '{operand}' must be a single event-field reference");
+    };
+    anyhow::ensure!(
+        variable.source() == VariableSource::Event,
+        "{kind} '{operand}' must reference event data, not table state"
+    );
+    Ok(variable)
+}
+
+fn validate_event_operand(operand: &str, kind: &str) -> anyhow::Result<()> {
+    parse_event_operand(operand, kind).map(|_| ())
+}
+
 struct ReversalSource<'a> {
     dialect: SqlDialect,
     iterate: &'a [IterateBinding],
@@ -378,7 +430,7 @@ impl ReversalSource<'_> {
         }
     }
 
-    fn condition_variable(&self, variable: &ConditionLeft<'_>) -> String {
+    fn variable_expression(&self, variable: &ConditionLeft<'_>) -> String {
         let mut field_parts = vec![variable.base_name()];
         let mut accessors = variable.accessors().iter().peekable();
 
@@ -441,6 +493,33 @@ impl ReversalSource<'_> {
         }
     }
 
+    fn operand(&self, operand: &str) -> anyhow::Result<String> {
+        let variable = parse_event_operand(operand, "rollback operand")?;
+        Ok(self.variable_expression(&variable))
+    }
+
+    fn iterate_length_mismatch(&self) -> Option<String> {
+        let (first, rest) = self.iterate.split_first()?;
+        if rest.is_empty() {
+            return None;
+        }
+
+        let length = |binding: &IterateBinding| {
+            let column = format!("_rindexer_event.{}", self.dialect.quote(&binding.array_field));
+            match self.dialect {
+                SqlDialect::Postgres => format!("COALESCE(cardinality({}), -1)", column),
+                SqlDialect::Clickhouse => format!("length({})", column),
+            }
+        };
+        let first_length = length(first);
+        Some(
+            rest.iter()
+                .map(|binding| format!("{} <> {}", first_length, length(binding)))
+                .collect::<Vec<_>>()
+                .join(" OR "),
+        )
+    }
+
     fn from(&self, event_table: &str) -> String {
         if self.iterate.is_empty() {
             return format!("{} AS _rindexer_event", event_table);
@@ -474,9 +553,21 @@ impl ReversalSource<'_> {
     }
 }
 
-fn render_reorg_condition(condition: &str, source: &ReversalSource<'_>) -> Option<String> {
-    let expression = parse_filter_expression(condition).ok()?;
-    expression.to_sql_event_condition(|variable| source.condition_variable(variable))
+fn render_reorg_condition(condition: &str, source: &ReversalSource<'_>) -> anyhow::Result<String> {
+    let expression = match parse_filter_expression(condition) {
+        Ok(expression) => expression,
+        Err(_) => {
+            validate_sql_condition(condition)?;
+            return Ok(condition.to_string());
+        }
+    };
+    anyhow::ensure!(
+        !expression.has_table_references(),
+        "rollback condition '{condition}' references table state, which cannot be reconstructed from raw events"
+    );
+    expression
+        .to_sql_event_condition(|variable| source.variable_expression(variable))
+        .ok_or_else(|| anyhow::anyhow!("rollback condition '{condition}' did not produce SQL"))
 }
 
 impl ReorgTask {
@@ -489,6 +580,70 @@ impl ReorgTask {
         }
     }
 
+    async fn validate_iterate_lengths(
+        &self,
+        pg: Option<&PostgresClient>,
+        ch: Option<&Arc<ClickhouseClient>>,
+        rollback_plan: &DerivedTableRollbackPlan,
+    ) -> anyhow::Result<()> {
+        let mut checked_pg = HashSet::new();
+        let mut checked_ch = HashSet::new();
+
+        for dt in &self.derived_tables {
+            for (op_index, op) in dt.rollback_ops.iter().enumerate() {
+                let Some(metadata) = rollback_plan.operation(&dt.full_table_name, op_index) else {
+                    continue;
+                };
+                for dialect in [SqlDialect::Postgres, SqlDialect::Clickhouse] {
+                    let source = ReversalSource {
+                        dialect,
+                        iterate: &metadata.iterate,
+                        source_column_types: &metadata.source_column_types,
+                    };
+                    let Some(mismatch) = source.iterate_length_mismatch() else {
+                        continue;
+                    };
+                    let query = format!(
+                        "SELECT count(*) FROM {} AS _rindexer_event WHERE _rindexer_event.{} >= {} AND _rindexer_event.{} <= {} AND _rindexer_event.{} = '{}' AND ({})",
+                        op.event_table,
+                        dialect.quote("block_number"),
+                        self.fork_point,
+                        dialect.quote("block_number"),
+                        self.detection_point,
+                        dialect.quote("network"),
+                        self.network,
+                        mismatch,
+                    );
+
+                    let mismatch_count = match (dialect, pg, ch) {
+                        (SqlDialect::Postgres, Some(pg), _) if checked_pg.insert(query.clone()) => {
+                            pg.query_one(&query, &[])
+                                .await
+                                .context("failed to validate PostgreSQL rollback iterate lengths")?
+                                .get::<_, i64>(0) as u64
+                        }
+                        (SqlDialect::Clickhouse, _, Some(ch))
+                            if checked_ch.insert(query.clone()) =>
+                        {
+                            ch.query_one::<u64>(&query)
+                                .await
+                                .context("failed to validate ClickHouse rollback iterate lengths")?
+                        }
+                        _ => continue,
+                    };
+                    anyhow::ensure!(
+                        mismatch_count == 0,
+                        "rollback iterate arrays have unequal lengths in {} between blocks {} and {}; aborting before event deletion",
+                        op.event_table,
+                        self.fork_point,
+                        self.detection_point,
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Phase 1: Before event deletion, snapshot aggregated event data into temp tables.
     /// Returns the snapshots needed for phase 2.
     /// Fails the entire reorg task if any snapshot cannot be created — this prevents
@@ -497,12 +652,25 @@ impl ReorgTask {
         &self,
         pg: Option<&PostgresClient>,
         ch: Option<&Arc<ClickhouseClient>>,
+        rollback_plan: &DerivedTableRollbackPlan,
     ) -> anyhow::Result<Vec<ReversalSnapshot>> {
+        self.validate_iterate_lengths(pg, ch, rollback_plan).await?;
+
         let mut snapshots = Vec::new();
         let mut snap_idx = 0usize;
+        let empty_column_types = HashMap::new();
 
         for dt in &self.derived_tables {
-            for op in &dt.rollback_ops {
+            for (op_index, op) in dt.rollback_ops.iter().enumerate() {
+                let metadata = rollback_plan.operation(&dt.full_table_name, op_index);
+                let iterate = metadata.map_or(&[][..], |metadata| metadata.iterate.as_slice());
+                let source_column_types = metadata
+                    .map(|metadata| &metadata.source_column_types)
+                    .unwrap_or(&empty_column_types);
+                let derived_column_types = metadata
+                    .map(|metadata| &metadata.derived_column_types)
+                    .unwrap_or(&empty_column_types);
+
                 // (is_counter, source event column, derived column, agg alias) per reversible
                 // column. The SELECT aggregate is assembled per-backend so each
                 // can quote identifiers with its own convention.
@@ -552,8 +720,14 @@ impl ReorgTask {
                     continue;
                 }
 
-                let where_ev_cols: Vec<&str> =
-                    op.where_columns.iter().map(|(_, ev_col)| ev_col.as_str()).collect();
+                let snapshot_where_columns = op
+                    .where_columns
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (derived_column, _))| {
+                        (derived_column.clone(), format!("_rindexer_where_{}", index))
+                    })
+                    .collect::<Vec<_>>();
 
                 // Include network + fork_point in temp table name to avoid collisions
                 // across concurrent reorg tasks on different networks.
@@ -569,76 +743,82 @@ impl ReorgTask {
                 // columns are user-controlled identifiers that may collide with SQL
                 // reserved words (e.g. `to`, `from`), so each backend quotes them with
                 // its own convention (Postgres double quotes, ClickHouse backticks).
-                let build_select = |dialect: SqlDialect| {
-                    let source = ReversalSource {
-                        dialect,
-                        iterate: &op.iterate,
-                        source_column_types: &op.source_column_types,
-                    };
+                let build_select = |dialect: SqlDialect| -> anyhow::Result<String> {
+                    let source = ReversalSource { dialect, iterate, source_column_types };
                     let group_expressions = op
                         .where_columns
                         .iter()
                         .map(|(derived_column, event_column)| {
-                            let expression = source.column(event_column);
-                            match op.derived_column_types.get(derived_column) {
+                            let expression = source.operand(event_column)?;
+                            Ok(match derived_column_types.get(derived_column) {
                                 Some(column_type) => dialect.cast(expression, column_type),
                                 None => expression,
-                            }
+                            })
                         })
-                        .collect::<Vec<_>>();
+                        .collect::<anyhow::Result<Vec<_>>>()?;
                     let group = group_expressions.join(", ");
-                    let mut group_select = where_ev_cols
+                    let mut group_select = snapshot_where_columns
                         .iter()
                         .zip(&group_expressions)
-                        .map(|(column, expression)| {
-                            format!("{} AS {}", expression, dialect.quote(column))
+                        .map(|((_, snapshot_column), expression)| {
+                            format!("{} AS {}", expression, dialect.quote(snapshot_column))
                         })
                         .collect::<Vec<_>>();
                     if matches!(dialect, SqlDialect::Clickhouse) {
                         // Older ClickHouse StorageJoin implementations reject
                         // composite and UInt256 keys. A single serialized tuple
                         // supports the full range of custom-table key types.
-                        group_select
-                            .push(format!("toJSONString(tuple({})) AS _rindexer_key", group));
+                        let key = if group.is_empty() {
+                            "''".to_string()
+                        } else {
+                            format!("toJSONString(tuple({}))", group)
+                        };
+                        group_select.push(format!("{} AS _rindexer_key", key));
                     }
                     let group_select = group_select.join(", ");
                     let aggs = agg_specs
                         .iter()
                         .map(|(is_counter, event_column, derived_column, alias)| {
                             if *is_counter {
-                                format!("COUNT(*) AS {}", alias)
+                                Ok(format!("COUNT(*) AS {}", alias))
                             } else {
-                                let expression = source.column(event_column);
-                                let expression = match op.derived_column_types.get(derived_column) {
+                                let expression = source.operand(event_column)?;
+                                let expression = match derived_column_types.get(derived_column) {
                                     Some(column_type) => dialect.cast(expression, column_type),
                                     None => expression,
                                 };
-                                format!("SUM({}) AS {}", expression, alias)
+                                Ok(format!("SUM({}) AS {}", expression, alias))
                             }
                         })
-                        .collect::<Vec<_>>()
+                        .collect::<anyhow::Result<Vec<_>>>()?
                         .join(", ");
-                    let network_filter = if dt.cross_chain {
-                        String::new()
-                    } else {
-                        format!(
-                            " AND _rindexer_event.{} = '{}'",
-                            dialect.quote("network"),
-                            self.network
-                        )
-                    };
+                    // The source event table is always network-scoped, even when
+                    // the derived table combines contributions across networks.
+                    let network_filter = format!(
+                        " AND _rindexer_event.{} = '{}'",
+                        dialect.quote("network"),
+                        self.network
+                    );
                     let condition_filter = match &op.condition {
                         Some(condition) => {
-                            let condition = render_reorg_condition(condition, &source)
-                                .unwrap_or_else(|| condition.clone());
+                            let condition = render_reorg_condition(condition, &source)?;
                             format!(" AND ({})", condition)
                         }
                         None => String::new(),
                     };
-                    format!(
-                        "SELECT {}, {} FROM {} WHERE _rindexer_event.{} >= {} AND _rindexer_event.{} <= {}{}{} GROUP BY {}",
-                        group_select,
-                        aggs,
+                    let select = if group_select.is_empty() {
+                        aggs
+                    } else {
+                        format!("{}, {}", group_select, aggs)
+                    };
+                    let group_by = if group.is_empty() {
+                        " HAVING COUNT(*) > 0".to_string()
+                    } else {
+                        format!(" GROUP BY {}", group)
+                    };
+                    Ok(format!(
+                        "SELECT {} FROM {} WHERE _rindexer_event.{} >= {} AND _rindexer_event.{} <= {}{}{}{}",
+                        select,
                         source.from(&op.event_table),
                         dialect.quote("block_number"),
                         self.fork_point,
@@ -646,8 +826,8 @@ impl ReorgTask {
                         self.detection_point,
                         network_filter,
                         condition_filter,
-                        group,
-                    )
+                        group_by,
+                    ))
                 };
 
                 if let Some(pg) = pg {
@@ -655,7 +835,7 @@ impl ReorgTask {
                     let pg_create = format!(
                         "CREATE TEMP TABLE {} AS {}",
                         pg_temp,
-                        build_select(SqlDialect::Postgres)
+                        build_select(SqlDialect::Postgres)?
                     );
                     pg.batch_execute(&pg_create).await.with_context(|| {
                         format!(
@@ -670,7 +850,7 @@ impl ReorgTask {
                         derived_table: dt.full_table_name.clone(),
                         cross_chain: dt.cross_chain,
                         network: self.network.clone(),
-                        where_columns: op.where_columns.clone(),
+                        where_columns: snapshot_where_columns.clone(),
                         set_ops: set_ops.clone(),
                     });
                 }
@@ -685,7 +865,7 @@ impl ReorgTask {
                     let ch_create = format!(
                         "CREATE TABLE IF NOT EXISTS {} ENGINE = Join(ANY, LEFT, _rindexer_key) AS {}",
                         ch_temp,
-                        build_select(SqlDialect::Clickhouse),
+                        build_select(SqlDialect::Clickhouse)?,
                     );
                     ch.execute(&ch_create).await.with_context(|| {
                         format!(
@@ -700,7 +880,7 @@ impl ReorgTask {
                         derived_table: dt.full_table_name.clone(),
                         cross_chain: dt.cross_chain,
                         network: self.network.clone(),
-                        where_columns: op.where_columns.clone(),
+                        where_columns: snapshot_where_columns,
                         set_ops,
                     });
                 }
@@ -725,12 +905,6 @@ impl ReorgTask {
                 })
                 .collect();
 
-            let network_join = if snap.cross_chain {
-                String::new()
-            } else {
-                format!(" AND dt.network = '{}'", snap.network)
-            };
-
             match snap.backend {
                 SnapshotBackend::Postgres => {
                     let Some(pg) = pg else { continue };
@@ -742,13 +916,21 @@ impl ReorgTask {
                             format!("{} = dt.{} {} snap.{}", col, col, s.op_symbol, s.agg_alias)
                         })
                         .collect();
+                    let mut pg_scope = where_join.clone();
+                    if !snap.cross_chain {
+                        pg_scope.push(format!("dt.network = '{}'", snap.network));
+                    }
+                    let pg_scope = if pg_scope.is_empty() {
+                        "TRUE".to_string()
+                    } else {
+                        pg_scope.join(" AND ")
+                    };
                     let update_sql = format!(
-                        "UPDATE {} AS dt SET {} FROM {} AS snap WHERE {}{}",
+                        "UPDATE {} AS dt SET {} FROM {} AS snap WHERE {}",
                         snap.derived_table,
                         pg_set_clauses.join(", "),
                         snap.temp_table,
-                        where_join.join(" AND "),
-                        network_join,
+                        pg_scope,
                     );
                     pg.batch_execute(&update_sql).await.with_context(|| {
                         format!(
@@ -776,7 +958,11 @@ impl ReorgTask {
                         .map(|(dt_col, _)| quote_ch_ident(dt_col))
                         .collect::<Vec<_>>()
                         .join(", ");
-                    let join_get_key = format!("toJSONString(tuple({}))", dt_keys);
+                    let join_get_key = if dt_keys.is_empty() {
+                        "''".to_string()
+                    } else {
+                        format!("toJSONString(tuple({}))", dt_keys)
+                    };
 
                     // Build CH set clauses directly from the structured ops: the
                     // per-row aggregate is looked up via joinGet() against the
@@ -1052,6 +1238,24 @@ impl ReorgTask {
         clickhouse: Option<&Arc<ClickhouseClient>>,
         provider: Option<&Arc<dyn ChainProvider>>,
     ) -> anyhow::Result<ReorgTaskResult> {
+        let rollback_plan = DerivedTableRollbackPlan::default();
+        self.execute_with_rollback_plan(window, postgres, clickhouse, provider, &rollback_plan)
+            .await
+    }
+
+    /// Execute a reorg with optional iterate and type metadata for derived-table rollback.
+    ///
+    /// Existing callers can continue using [`Self::execute`]. This additive entry point
+    /// is used by the runtime-generated coordinator plan and by integrations that need
+    /// custom-table iterate rollback without changing `ReorgTask` struct literals.
+    pub async fn execute_with_rollback_plan(
+        &self,
+        window: &mut BlockChainWindow,
+        postgres: Option<&PostgresClient>,
+        clickhouse: Option<&Arc<ClickhouseClient>>,
+        provider: Option<&Arc<dyn ChainProvider>>,
+        rollback_plan: &DerivedTableRollbackPlan,
+    ) -> anyhow::Result<ReorgTaskResult> {
         // Validate network before any SQL interpolation
         super::validate_sql_value(&self.network, "reorg task network")?;
 
@@ -1098,7 +1302,8 @@ impl ReorgTask {
             corrected_blocks_owned.iter().map(|(n, h, p)| (*n, h.as_str(), p.as_str())).collect();
 
         // Phase 1: snapshot event data for accumulative reversal (before deletion)
-        let reversal_snapshots = self.snapshot_for_reversal(postgres, clickhouse).await?;
+        let reversal_snapshots =
+            self.snapshot_for_reversal(postgres, clickhouse, rollback_plan).await?;
 
         let mut affected_tx_hashes: Vec<String> = Vec::new();
         let mut total_deleted = 0u64;
@@ -1471,7 +1676,6 @@ mod tests {
         assert_eq!(op.where_columns.len(), 1);
         assert_eq!(op.columns.len(), 1);
         assert!(op.condition.is_none());
-        assert!(op.iterate.is_empty());
     }
 
     #[test]
@@ -1487,13 +1691,15 @@ mod tests {
             .unwrap()],
             Some("$to != 0x0000000000000000000000000000000000000000".to_string()),
         )
-        .unwrap()
-        .with_iterate(vec![
-            IterateBinding::parse("$ids as token_id").unwrap(),
-            IterateBinding::parse("$values as amount").unwrap(),
-        ])
-        .unwrap()
-        .with_column_types(
+        .unwrap();
+        let mut plan = DerivedTableRollbackPlan::default();
+        plan.try_add_operation(
+            "myschema.balances".to_string(),
+            0,
+            vec![
+                IterateBinding::parse("$ids as token_id").unwrap(),
+                IterateBinding::parse("$values as amount").unwrap(),
+            ],
             HashMap::from([
                 ("ids".to_string(), ColumnType::Array(Box::new(ColumnType::Uint256))),
                 ("values".to_string(), ColumnType::Array(Box::new(ColumnType::Uint256))),
@@ -1502,11 +1708,13 @@ mod tests {
                 ("token_id".to_string(), ColumnType::Uint256),
                 ("balance".to_string(), ColumnType::Uint256),
             ]),
-        );
+        )
+        .unwrap();
+        let metadata = plan.operation("myschema.balances", 0).unwrap();
         let source = ReversalSource {
             dialect: SqlDialect::Postgres,
-            iterate: &op.iterate,
-            source_column_types: &op.source_column_types,
+            iterate: &metadata.iterate,
+            source_column_types: &metadata.source_column_types,
         };
 
         assert_eq!(
@@ -1515,6 +1723,12 @@ mod tests {
         );
         assert_eq!(source.column("token_id"), "_rindexer_iter.\"token_id\"");
         assert_eq!(source.column("amount"), "_rindexer_iter.\"amount\"");
+        assert_eq!(
+            source.iterate_length_mismatch().as_deref(),
+            Some(
+                "COALESCE(cardinality(_rindexer_event.\"ids\"), -1) <> COALESCE(cardinality(_rindexer_event.\"values\"), -1)"
+            )
+        );
         assert_eq!(
             render_reorg_condition(op.condition.as_deref().unwrap(), &source).unwrap(),
             "_rindexer_event.\"to\" <> '0x0000000000000000000000000000000000000000'"
@@ -1553,6 +1767,23 @@ mod tests {
         assert_eq!(
             render_reorg_condition("$ids[0] > 0", &ch_source).unwrap(),
             "arrayElement(_rindexer_event.`ids`, 1) > 0"
+        );
+        assert_eq!(
+            pg_source.operand("data.amount").unwrap(),
+            "CAST(_rindexer_event.\"data_amount\" AS NUMERIC)"
+        );
+        assert_eq!(
+            pg_source.operand("ids[0]").unwrap(),
+            "CAST((_rindexer_event.\"ids\")[1] AS NUMERIC)"
+        );
+        assert!(
+            render_reorg_condition("$ids[0] > @balance", &pg_source).is_err(),
+            "table-state conditions must fail before raw events are deleted"
+        );
+        assert_eq!(
+            render_reorg_condition("id::NUMERIC > 7", &pg_source).unwrap(),
+            "id::NUMERIC > 7",
+            "validated legacy SQL conditions remain compatible"
         );
     }
 

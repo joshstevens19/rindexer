@@ -11,7 +11,7 @@ use crate::provider::ChainProvider;
 use crate::streams::StreamsClients;
 
 use super::persistence::ReorgBlockHashPersistence;
-use super::task::{DerivedTableInfo, EventTableInfo, ReorgTask};
+use super::task::{DerivedTableInfo, DerivedTableRollbackPlan, EventTableInfo, ReorgTask};
 use super::window::{BlockChainWindow, ParentValidation};
 use super::ReorgContext;
 
@@ -26,6 +26,7 @@ pub struct ReorgCoordinator {
     provider: Option<Arc<dyn ChainProvider>>,
     event_tables: Vec<EventTableInfo>,
     derived_tables: Vec<DerivedTableInfo>,
+    rollback_plan: DerivedTableRollbackPlan,
     /// All `StreamsClients` configured for this network across every indexing
     /// pipeline (contract events + native transfers). When a reorg is handled
     /// we fan the retraction notification across all of them so consumers
@@ -55,9 +56,15 @@ impl ReorgCoordinator {
             provider: Some(provider),
             event_tables,
             derived_tables,
+            rollback_plan: DerivedTableRollbackPlan::default(),
             streams_clients,
             blocks_since_flush: 0,
         })
+    }
+
+    pub(crate) fn with_rollback_plan(mut self, rollback_plan: DerivedTableRollbackPlan) -> Self {
+        self.rollback_plan = rollback_plan;
+        self
     }
 
     /// Called on each new block during live indexing.
@@ -407,7 +414,13 @@ impl ReorgCoordinator {
         ctx: &ReorgContext<'_>,
     ) -> anyhow::Result<()> {
         let result = reorg_task
-            .execute(&mut self.window, ctx.postgres, ctx.clickhouse, self.provider.as_ref())
+            .execute_with_rollback_plan(
+                &mut self.window,
+                ctx.postgres,
+                ctx.clickhouse,
+                self.provider.as_ref(),
+                &self.rollback_plan,
+            )
             .await?;
 
         let affected_tx_hashes: Vec<B256> =
@@ -563,6 +576,7 @@ mod tests {
             provider: None,
             event_tables: vec![],
             derived_tables: vec![],
+            rollback_plan: DerivedTableRollbackPlan::default(),
             streams_clients: vec![],
             blocks_since_flush: 0,
         }
@@ -816,6 +830,7 @@ mod tests {
                     journal_columns: vec![],
                 },
             ],
+            rollback_plan: DerivedTableRollbackPlan::default(),
             streams_clients: vec![],
             blocks_since_flush: 0,
         };
@@ -845,6 +860,7 @@ mod tests {
                 rollback_ops: vec![],
                 journal_columns: vec![],
             }],
+            rollback_plan: DerivedTableRollbackPlan::default(),
             streams_clients: vec![],
             blocks_since_flush: 0,
         };
@@ -873,6 +889,7 @@ mod tests {
             )
             .unwrap()],
             derived_tables: vec![],
+            rollback_plan: DerivedTableRollbackPlan::default(),
             streams_clients: vec![],
             blocks_since_flush: 0,
         };
@@ -905,6 +922,7 @@ mod tests {
             provider: None,
             event_tables: vec![],
             derived_tables: vec![],
+            rollback_plan: DerivedTableRollbackPlan::default(),
             streams_clients,
             blocks_since_flush: 0,
         }

@@ -5,7 +5,7 @@
 
 ### Bug fixes
 -------------------------------------------------
-- fix: reorg recovery now reverses custom-table operations that use `iterate`, including paired ERC-1155 `TransferBatch` arrays and event-field conditions.
+- fix: reorg recovery now reverses custom-table operations that use `iterate`, including paired ERC-1155 `TransferBatch` arrays, typed PostgreSQL values, and nested or indexed event-field references; unequal iterate arrays abort before stale events are deleted.
 
 - Fix live event indexing stalling when a temporary RPC retry ceiling matches the last synced block.
 

@@ -17,7 +17,7 @@ use rindexer::indexer::reorg::{
     persistence::ReorgBlockHashPersistence,
     task::{
         DerivedColumnJournal, DerivedColumnRollback, DerivedTableInfo, DerivedTableRollbackOp,
-        EventTableInfo, ReorgTask,
+        DerivedTableRollbackPlan, EventTableInfo, ReorgTask,
     },
     window::{BlockChainWindow, ParentValidation},
 };
@@ -2132,9 +2132,6 @@ async fn test_reorg_reversal_add() {
                     action: SetAction::Add,
                 }],
                 condition: None,
-                iterate: vec![],
-                source_column_types: HashMap::new(),
-                derived_column_types: HashMap::new(),
             }],
             journal_columns: vec![],
         }],
@@ -2247,9 +2244,6 @@ async fn test_reorg_reversal_reserved_word_column() {
                     action: SetAction::Add,
                 }],
                 condition: None,
-                iterate: vec![],
-                source_column_types: HashMap::new(),
-                derived_column_types: HashMap::new(),
             }],
             journal_columns: vec![],
         }],
@@ -2344,9 +2338,6 @@ async fn test_reorg_reversal_subtract() {
                     action: SetAction::Subtract,
                 }],
                 condition: None,
-                iterate: vec![],
-                source_column_types: HashMap::new(),
-                derived_column_types: HashMap::new(),
             }],
             journal_columns: vec![],
         }],
@@ -2442,9 +2433,6 @@ async fn test_reorg_reversal_increment() {
                     action: SetAction::Increment,
                 }],
                 condition: None,
-                iterate: vec![],
-                source_column_types: HashMap::new(),
-                derived_column_types: HashMap::new(),
             }],
             journal_columns: vec![],
         }],
@@ -2539,9 +2527,6 @@ async fn test_reorg_reversal_with_condition() {
                 }],
                 // Only events where id > 7 were accumulated
                 condition: Some("id::NUMERIC > 7".to_string()),
-                iterate: vec![],
-                source_column_types: HashMap::new(),
-                derived_column_types: HashMap::new(),
             }],
             journal_columns: vec![],
         }],
@@ -2766,10 +2751,28 @@ async fn test_reorg_reversal_transfer_batch_iterate() {
             Some(condition.to_string()),
         )
         .unwrap()
-        .with_iterate(iterate.clone())
-        .unwrap()
-        .with_column_types(source_column_types.clone(), derived_column_types.clone())
     };
+    let rollback_ops = vec![
+        rollback_op(
+            "from",
+            SetAction::Subtract,
+            "$from != 0x0000000000000000000000000000000000000000",
+        ),
+        rollback_op("to", SetAction::Add, "$to != 0x0000000000000000000000000000000000000000"),
+    ];
+    let derived_table = "test_schema.custody_balances".to_string();
+    let mut rollback_plan = DerivedTableRollbackPlan::default();
+    for operation_index in 0..rollback_ops.len() {
+        rollback_plan
+            .try_add_operation(
+                derived_table.clone(),
+                operation_index,
+                iterate.clone(),
+                source_column_types.clone(),
+                derived_column_types.clone(),
+            )
+            .unwrap();
+    }
     let task = ReorgTask {
         network: network.to_string(),
         fork_point: block2,
@@ -2784,29 +2787,61 @@ async fn test_reorg_reversal_transfer_batch_iterate() {
         )
         .unwrap()],
         derived_tables: vec![DerivedTableInfo {
-            full_table_name: "test_schema.custody_balances".to_string(),
+            full_table_name: derived_table,
             cross_chain: false,
-            rollback_ops: vec![
-                rollback_op(
-                    "from",
-                    SetAction::Subtract,
-                    "$from != 0x0000000000000000000000000000000000000000",
-                ),
-                rollback_op(
-                    "to",
-                    SetAction::Add,
-                    "$to != 0x0000000000000000000000000000000000000000",
-                ),
-            ],
+            rollback_ops,
             journal_columns: vec![],
         }],
         canonical_blocks: vec![],
     };
 
     let rindexer_pg = env.rindexer_pg().await;
+    pg.batch_execute(
+        "UPDATE test_schema.erc1155_transfer_batch
+         SET values = ARRAY['7']::VARCHAR(78)[]",
+    )
+    .await
+    .unwrap();
+    let mut failed_window = BlockChainWindow::try_new(256).unwrap();
+    let error = match task
+        .execute_with_rollback_plan(
+            &mut failed_window,
+            Some(&rindexer_pg),
+            Some(&ch),
+            None,
+            &rollback_plan,
+        )
+        .await
+    {
+        Ok(_) => panic!("unequal iterate arrays must abort before rollback"),
+        Err(error) => error,
+    };
+    assert!(
+        error.to_string().contains("unequal lengths"),
+        "unexpected unequal-iterate error: {error:#}"
+    );
+    let raw_rows: i64 = pg
+        .query_one("SELECT count(*) FROM test_schema.erc1155_transfer_batch", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(raw_rows, 1, "failed preflight must not delete stale event rows");
+    pg.batch_execute(
+        "UPDATE test_schema.erc1155_transfer_batch
+         SET values = ARRAY['7', '11']::VARCHAR(78)[]",
+    )
+    .await
+    .unwrap();
+
     let mut task_window = BlockChainWindow::try_new(256).unwrap();
     let result = task
-        .execute(&mut task_window, Some(&rindexer_pg), Some(&ch), None)
+        .execute_with_rollback_plan(
+            &mut task_window,
+            Some(&rindexer_pg),
+            Some(&ch),
+            None,
+            &rollback_plan,
+        )
         .await
         .expect("TransferBatch reorg rollback failed");
 
@@ -3156,9 +3191,6 @@ async fn test_reorg_reversal_decrement() {
                     action: SetAction::Decrement,
                 }],
                 condition: None,
-                iterate: vec![],
-                source_column_types: HashMap::new(),
-                derived_column_types: HashMap::new(),
             }],
             journal_columns: vec![],
         }],
@@ -3383,9 +3415,6 @@ async fn test_reorg_mixed_reversible_and_journal() {
                     action: SetAction::Add,
                 }],
                 condition: None,
-                iterate: vec![],
-                source_column_types: HashMap::new(),
-                derived_column_types: HashMap::new(),
             }],
             journal_columns: vec![DerivedColumnJournal {
                 derived_column: "max_trade".to_string(),
@@ -3503,9 +3532,6 @@ async fn test_reorg_reversal_uninvolved_row_unchanged() {
                     action: SetAction::Add,
                 }],
                 condition: None,
-                iterate: vec![],
-                source_column_types: HashMap::new(),
-                derived_column_types: HashMap::new(),
             }],
             journal_columns: vec![],
         }],
@@ -3652,9 +3678,6 @@ async fn test_reorg_clickhouse_add_reversal() {
                     action: SetAction::Add,
                 }],
                 condition: None,
-                iterate: vec![],
-                source_column_types: HashMap::new(),
-                derived_column_types: HashMap::new(),
             }],
             journal_columns: vec![],
         }],
@@ -3795,9 +3818,6 @@ async fn test_reorg_reversal_reserved_word_column_clickhouse() {
                     action: SetAction::Add,
                 }],
                 condition: None,
-                iterate: vec![],
-                source_column_types: HashMap::new(),
-                derived_column_types: HashMap::new(),
             }],
             journal_columns: vec![],
         }],
@@ -3966,9 +3986,6 @@ async fn test_reorg_two_events_same_table_reversible() {
                         action: SetAction::Add,
                     }],
                     condition: None,
-                    iterate: vec![],
-                    source_column_types: HashMap::new(),
-                    derived_column_types: HashMap::new(),
                 },
                 DerivedTableRollbackOp {
                     event_table: "test_schema.ping_pong_pong".to_string(),
@@ -3979,9 +3996,6 @@ async fn test_reorg_two_events_same_table_reversible() {
                         action: SetAction::Subtract,
                     }],
                     condition: None,
-                    iterate: vec![],
-                    source_column_types: HashMap::new(),
-                    derived_column_types: HashMap::new(),
                 },
             ],
             journal_columns: vec![],

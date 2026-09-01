@@ -20,7 +20,7 @@ pub use coordinator::ReorgCoordinator;
 pub use persistence::ReorgBlockHashPersistence;
 pub use task::{
     AffectedTable, DerivedColumnJournal, DerivedColumnRollback, DerivedTableInfo,
-    DerivedTableRollbackOp, EventTableInfo,
+    DerivedTableRollbackOp, DerivedTableRollbackPlan, EventTableInfo,
 };
 pub use window::BlockChainWindow;
 
