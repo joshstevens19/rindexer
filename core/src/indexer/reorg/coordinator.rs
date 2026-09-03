@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use alloy::primitives::{B256, U64};
 use anyhow::Context;
+use tokio::sync::OwnedRwLockWriteGuard;
 use tracing::{info, warn};
 
 use crate::event::callback_registry::ReorgNotification;
@@ -11,9 +12,9 @@ use crate::provider::ChainProvider;
 use crate::streams::StreamsClients;
 
 use super::persistence::ReorgBlockHashPersistence;
-use super::task::{DerivedTableInfo, EventTableInfo, ReorgTask};
+use super::task::{DerivedTableInfo, DerivedTableRollbackPlan, EventTableInfo, ReorgTask};
 use super::window::{BlockChainWindow, ParentValidation};
-use super::ReorgContext;
+use super::{event_writer_barrier, ReorgContext};
 
 /// Number of blocks between periodic flushes of the in-memory block window to the database.
 /// Balances write frequency against data-loss risk on crash.
@@ -26,6 +27,9 @@ pub struct ReorgCoordinator {
     provider: Option<Arc<dyn ChainProvider>>,
     event_tables: Vec<EventTableInfo>,
     derived_tables: Vec<DerivedTableInfo>,
+    rollback_plan: DerivedTableRollbackPlan,
+    /// Retained after a failed rollback so no event writer can race ahead of its retry.
+    rollback_writer_guard: Option<OwnedRwLockWriteGuard<()>>,
     /// All `StreamsClients` configured for this network across every indexing
     /// pipeline (contract events + native transfers). When a reorg is handled
     /// we fan the retraction notification across all of them so consumers
@@ -55,9 +59,16 @@ impl ReorgCoordinator {
             provider: Some(provider),
             event_tables,
             derived_tables,
+            rollback_plan: DerivedTableRollbackPlan::default(),
+            rollback_writer_guard: None,
             streams_clients,
             blocks_since_flush: 0,
         })
+    }
+
+    pub(crate) fn with_rollback_plan(mut self, rollback_plan: DerivedTableRollbackPlan) -> Self {
+        self.rollback_plan = rollback_plan;
+        self
     }
 
     /// Called on each new block during live indexing.
@@ -406,9 +417,27 @@ impl ReorgCoordinator {
         reorg_task: ReorgTask,
         ctx: &ReorgContext<'_>,
     ) -> anyhow::Result<()> {
-        let result = reorg_task
-            .execute(&mut self.window, ctx.postgres, ctx.clickhouse, self.provider.as_ref())
-            .await?;
+        let writer_guard = match self.rollback_writer_guard.take() {
+            Some(guard) => guard,
+            None => event_writer_barrier(&self.network).write_owned().await,
+        };
+        let result = match reorg_task
+            .execute_with_rollback_plan(
+                &mut self.window,
+                ctx.postgres,
+                ctx.clickhouse,
+                self.provider.as_ref(),
+                &self.rollback_plan,
+            )
+            .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                self.rollback_writer_guard = Some(writer_guard);
+                return Err(error);
+            }
+        };
+        drop(writer_guard);
 
         let affected_tx_hashes: Vec<B256> =
             result.affected_tx_hashes.iter().filter_map(|h| B256::from_str(h).ok()).collect();
@@ -563,6 +592,8 @@ mod tests {
             provider: None,
             event_tables: vec![],
             derived_tables: vec![],
+            rollback_plan: DerivedTableRollbackPlan::default(),
+            rollback_writer_guard: None,
             streams_clients: vec![],
             blocks_since_flush: 0,
         }
@@ -591,6 +622,37 @@ mod tests {
 
         assert!(result.is_none(), "Expected None for NoPreviousBlock");
         assert!(coordinator.window.get(100).is_some(), "Block should be inserted");
+    }
+
+    #[tokio::test]
+    async fn reorg_drains_writers_and_blocks_them_until_retry_succeeds() {
+        const NETWORK: &str = "writer-barrier-test";
+        let mut coordinator = make_coordinator(BlockChainWindow::try_new(100).unwrap());
+        coordinator.network = NETWORK.to_string();
+        let ctx =
+            ReorgContext { postgres: None, clickhouse: None, registry: None, trace_registry: None };
+        let task = |network: &str| ReorgTask {
+            network: network.to_string(),
+            fork_point: 10,
+            detection_point: 11,
+            event_tables: vec![],
+            derived_tables: vec![],
+            canonical_blocks: vec![],
+        };
+
+        let barrier = event_writer_barrier(NETWORK);
+        let writer = barrier.clone().read_owned().await;
+        let mut rollback = Box::pin(coordinator.handle_reorg(task("invalid network"), &ctx));
+        assert!(futures::poll!(&mut rollback).is_pending(), "rollback must drain active writers");
+        drop(writer);
+        rollback.await.expect_err("invalid network must fail rollback");
+        assert!(barrier.try_read().is_err(), "failed rollback must keep event writers blocked");
+
+        coordinator
+            .handle_reorg(task(NETWORK), &ctx)
+            .await
+            .expect("retry should release the writer barrier");
+        assert!(barrier.try_read().is_ok(), "successful retry must release event writers");
     }
 
     #[tokio::test]
@@ -816,6 +878,8 @@ mod tests {
                     journal_columns: vec![],
                 },
             ],
+            rollback_plan: DerivedTableRollbackPlan::default(),
+            rollback_writer_guard: None,
             streams_clients: vec![],
             blocks_since_flush: 0,
         };
@@ -845,6 +909,8 @@ mod tests {
                 rollback_ops: vec![],
                 journal_columns: vec![],
             }],
+            rollback_plan: DerivedTableRollbackPlan::default(),
+            rollback_writer_guard: None,
             streams_clients: vec![],
             blocks_since_flush: 0,
         };
@@ -873,6 +939,8 @@ mod tests {
             )
             .unwrap()],
             derived_tables: vec![],
+            rollback_plan: DerivedTableRollbackPlan::default(),
+            rollback_writer_guard: None,
             streams_clients: vec![],
             blocks_since_flush: 0,
         };
@@ -905,6 +973,8 @@ mod tests {
             provider: None,
             event_tables: vec![],
             derived_tables: vec![],
+            rollback_plan: DerivedTableRollbackPlan::default(),
+            rollback_writer_guard: None,
             streams_clients,
             blocks_since_flush: 0,
         }

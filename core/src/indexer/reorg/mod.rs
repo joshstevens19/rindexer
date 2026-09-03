@@ -6,7 +6,11 @@ pub mod window;
 use alloy::primitives::{B256, U64};
 use anyhow::Context;
 use serde::Serialize;
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::{Arc, LazyLock, Mutex as StdMutex},
+};
+use tokio::sync::RwLock;
 use tracing::{debug, warn};
 
 use crate::database::clickhouse::client::ClickhouseClient;
@@ -20,9 +24,19 @@ pub use coordinator::ReorgCoordinator;
 pub use persistence::ReorgBlockHashPersistence;
 pub use task::{
     AffectedTable, DerivedColumnJournal, DerivedColumnRollback, DerivedTableInfo,
-    DerivedTableRollbackOp, EventTableInfo,
+    DerivedTableRollbackOp, DerivedTableRollbackPlan, EventTableInfo,
 };
 pub use window::BlockChainWindow;
+
+static EVENT_WRITER_BARRIERS: LazyLock<StdMutex<HashMap<String, Arc<RwLock<()>>>>> =
+    LazyLock::new(|| StdMutex::new(HashMap::new()));
+
+/// One read/write barrier per network: event callbacks hold a read guard while
+/// writing, and reorg recovery holds the write guard from snapshot through rollback.
+pub(crate) fn event_writer_barrier(network: &str) -> Arc<RwLock<()>> {
+    let mut barriers = EVENT_WRITER_BARRIERS.lock().unwrap_or_else(|e| e.into_inner());
+    barriers.entry(network.to_string()).or_default().clone()
+}
 
 /// Validates that a string is safe to use as a SQL identifier (table name, column name, schema).
 /// Rejects anything that doesn't match `[a-zA-Z_][a-zA-Z0-9_]*`.

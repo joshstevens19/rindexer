@@ -205,10 +205,33 @@ impl<'a> Expression<'a> {
     /// - Event variables ($var) become EXCLUDED.var (the new values being inserted)
     /// - Table variables (@var) become {table_name}.var (current DB values)
     pub fn to_sql_condition(&self, table_name: &str) -> String {
+        self.to_sql_condition_with(&|variable| {
+            let column = variable.base_name();
+            match variable.source() {
+                VariableSource::Event => format!("EXCLUDED.\"{}\"", column),
+                VariableSource::Table => format!("{}.\"{}\"", table_name, column),
+            }
+        })
+    }
+
+    pub(crate) fn to_sql_event_condition<F>(&self, event_variable: F) -> Option<String>
+    where
+        F: Fn(&ConditionLeft<'_>) -> String,
+    {
+        if self.has_table_references() {
+            return None;
+        }
+        Some(self.to_sql_condition_with(&event_variable))
+    }
+
+    fn to_sql_condition_with<F>(&self, variable_to_sql: &F) -> String
+    where
+        F: Fn(&ConditionLeft<'_>) -> String,
+    {
         match self {
             Expression::Condition(cond) => {
-                let left_sql = cond.left.to_sql(table_name);
-                let right_sql = cond.right.to_sql(table_name);
+                let left_sql = cond.left.to_sql_with(variable_to_sql);
+                let right_sql = cond.right.to_sql_with(variable_to_sql);
                 let op_sql = match cond.operator {
                     ComparisonOperator::Eq => "=",
                     ComparisonOperator::Ne => "<>",
@@ -220,8 +243,8 @@ impl<'a> Expression<'a> {
                 format!("{} {} {}", left_sql, op_sql, right_sql)
             }
             Expression::Logical { left, operator, right } => {
-                let left_sql = left.to_sql_condition(table_name);
-                let right_sql = right.to_sql_condition(table_name);
+                let left_sql = left.to_sql_condition_with(variable_to_sql);
+                let right_sql = right.to_sql_condition_with(variable_to_sql);
                 let op_sql = match operator {
                     LogicalOperator::And => "AND",
                     LogicalOperator::Or => "OR",
@@ -229,7 +252,7 @@ impl<'a> Expression<'a> {
                 format!("({} {} {})", left_sql, op_sql, right_sql)
             }
             Expression::Not(inner) => {
-                format!("NOT ({})", inner.to_sql_condition(table_name))
+                format!("NOT ({})", inner.to_sql_condition_with(variable_to_sql))
             }
         }
     }
@@ -250,22 +273,29 @@ impl<'a> ArithmeticExpr<'a> {
     /// Converts this arithmetic expression to SQL.
     /// Column names are double-quoted to handle reserved keywords safely.
     pub fn to_sql(&self, table_name: &str) -> String {
-        match self {
-            ArithmeticExpr::Variable(cond_left) => {
-                let col_name = cond_left.base_name();
-                match cond_left.source() {
-                    VariableSource::Event => format!("EXCLUDED.\"{}\"", col_name),
-                    VariableSource::Table => format!("{}.\"{}\"", table_name, col_name),
-                }
+        self.to_sql_with(&|variable| {
+            let column = variable.base_name();
+            match variable.source() {
+                VariableSource::Event => format!("EXCLUDED.\"{}\"", column),
+                VariableSource::Table => format!("{}.\"{}\"", table_name, column),
             }
+        })
+    }
+
+    fn to_sql_with<F>(&self, variable_to_sql: &F) -> String
+    where
+        F: Fn(&ConditionLeft<'_>) -> String,
+    {
+        match self {
+            ArithmeticExpr::Variable(variable) => variable_to_sql(variable),
             ArithmeticExpr::Literal(lit) => match lit {
                 LiteralValue::Bool(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
                 LiteralValue::Str(s) => format!("'{}'", s.replace('\'', "''")),
                 LiteralValue::Number(n) => n.to_string(),
             },
             ArithmeticExpr::Binary { left, operator, right } => {
-                let left_sql = left.to_sql(table_name);
-                let right_sql = right.to_sql(table_name);
+                let left_sql = left.to_sql_with(variable_to_sql);
+                let right_sql = right.to_sql_with(variable_to_sql);
                 match operator {
                     ArithmeticOperator::Power => {
                         // Use PostgreSQL POWER() function for exponentiation

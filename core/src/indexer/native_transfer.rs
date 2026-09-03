@@ -15,7 +15,9 @@ use tracing::{debug, error, info, warn};
 use tokio_util::sync::CancellationToken;
 
 use crate::database::clickhouse::client::ClickhouseClient;
-use crate::indexer::reorg::{detect_and_handle_reorg, ReorgContext, ReorgCoordinator};
+use crate::indexer::reorg::{
+    detect_and_handle_reorg, event_writer_barrier, ReorgContext, ReorgCoordinator,
+};
 use crate::is_running;
 use crate::provider::RECOMMENDED_RPC_CHUNK_SIZE;
 use crate::PostgresClient;
@@ -517,6 +519,9 @@ pub async fn native_transfer_block_consumer(
         })
         .collect::<Vec<_>>();
 
+    let writer_barrier = event_writer_barrier(network_name);
+    let _writer_guard = writer_barrier.read().await;
+
     // Important that we call this for every event even if there are no logs.
     // This is because we need to sync the last seen block number still.
     indexing_event_processing();
@@ -622,6 +627,9 @@ pub async fn native_transfer_block_consumer_debug(
     if native_transfers.is_empty() {
         return Ok(());
     }
+
+    let writer_barrier = event_writer_barrier(network_name);
+    let _writer_guard = writer_barrier.read().await;
 
     indexing_event_processing();
     if !native_transfers.is_empty() {

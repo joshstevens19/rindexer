@@ -5,7 +5,10 @@
 //! `cargo test`:
 //!   cargo nextest run -q -p rindexer --test e2e_reorg
 
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use alloy::primitives::{Address, B256};
 use reqwest::Client as HttpClient;
@@ -14,11 +17,11 @@ use rindexer::indexer::reorg::{
     persistence::ReorgBlockHashPersistence,
     task::{
         DerivedColumnJournal, DerivedColumnRollback, DerivedTableInfo, DerivedTableRollbackOp,
-        EventTableInfo, ReorgTask,
+        DerivedTableRollbackPlan, EventTableInfo, ReorgTask,
     },
     window::{BlockChainWindow, ParentValidation},
 };
-use rindexer::manifest::contract::SetAction;
+use rindexer::manifest::contract::{ColumnType, IterateBinding, SetAction};
 use rindexer::ClickhouseClient;
 use rindexer::PostgresClient;
 use rust_decimal::Decimal;
@@ -2555,6 +2558,528 @@ async fn test_reorg_reversal_with_condition() {
 }
 
 // ---------------------------------------------------------------------------
+// Regression: ERC-1155 TransferBatch rollbacks must expand `ids` and `values`
+// pairwise and compile manifest `$from` / `$to` conditions against raw events.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_reorg_reversal_transfer_batch_iterate() {
+    let env = TestEnv::new().await;
+    let pg = env.pg_client().await;
+    env.setup_base_tables(&pg).await;
+    let ch = env.rindexer_ch().await;
+    env.setup_ch_tables(&ch).await;
+
+    pg.batch_execute(
+        "CREATE TABLE rindexer_internal.test_schema_transfer_batch (
+             network VARCHAR(50) NOT NULL PRIMARY KEY,
+             last_synced_block NUMERIC NOT NULL
+         );
+         CREATE TABLE test_schema.erc1155_transfer_batch (
+             rindexer_id SERIAL PRIMARY KEY,
+             operator CHAR(42) NOT NULL,
+             \"from\" CHAR(42) NOT NULL,
+             \"to\" CHAR(42) NOT NULL,
+             ids VARCHAR(78)[] NOT NULL,
+             values VARCHAR(78)[] NOT NULL,
+             tx_hash CHAR(66) NOT NULL,
+             block_number NUMERIC NOT NULL,
+             block_hash CHAR(66) NOT NULL,
+             network VARCHAR(50) NOT NULL,
+             tx_index NUMERIC NOT NULL,
+             log_index VARCHAR(78) NOT NULL
+         );
+         CREATE TABLE test_schema.custody_balances (
+             network VARCHAR(50) NOT NULL,
+             user_address CHAR(42) NOT NULL,
+             token_id NUMERIC NOT NULL,
+             balance NUMERIC NOT NULL,
+             rindexer_block_number BIGINT NOT NULL,
+             PRIMARY KEY (network, user_address, token_id)
+         );",
+    )
+    .await
+    .unwrap();
+    ch.execute(
+        "CREATE TABLE rindexer_internal.test_schema_transfer_batch (
+             network String,
+             last_synced_block UInt64
+         ) ENGINE = ReplacingMergeTree ORDER BY network",
+    )
+    .await
+    .unwrap();
+    ch.execute(
+        "CREATE TABLE test_schema.erc1155_transfer_batch (
+             operator FixedString(42),
+             `from` FixedString(42),
+             `to` FixedString(42),
+             ids Array(UInt256),
+             values Array(UInt256),
+             tx_hash FixedString(66),
+             block_number UInt64,
+             block_hash FixedString(66),
+             network String,
+             tx_index UInt64,
+             log_index UInt64
+         ) ENGINE = ReplacingMergeTree
+         ORDER BY (network, block_number, tx_hash, log_index)",
+    )
+    .await
+    .unwrap();
+    ch.execute(
+        "CREATE TABLE test_schema.custody_balances (
+             network String,
+             user_address FixedString(42),
+             token_id UInt256,
+             balance UInt256,
+             rindexer_block_number UInt64
+         ) ENGINE = ReplacingMergeTree
+         ORDER BY (network, user_address, token_id)",
+    )
+    .await
+    .unwrap();
+
+    let block2 = 2;
+    let network = "dev";
+    let sender = "0x1111111111111111111111111111111111111111";
+    let recipient = "0x2222222222222222222222222222222222222222";
+    let zero_tx = "0x0000000000000000000000000000000000000000000000000000000000000000";
+    let block_hash = zero_tx;
+    pg.execute(
+        "INSERT INTO test_schema.erc1155_transfer_batch
+         (operator, \"from\", \"to\", ids, values, tx_hash, block_number,
+          block_hash, network, tx_index, log_index)
+         VALUES ($1, $2, $3, ARRAY['101', '202']::VARCHAR(78)[],
+                 ARRAY['7', '11']::VARCHAR(78)[],
+                 $4, $5, $6, $7, 0, '0')",
+        &[&sender, &sender, &recipient, &zero_tx, &Decimal::from(block2), &block_hash, &network],
+    )
+    .await
+    .unwrap();
+    ch.execute(&format!(
+        "INSERT INTO test_schema.erc1155_transfer_batch
+         (operator, `from`, `to`, ids, values, tx_hash, block_number, block_hash,
+          network, tx_index, log_index)
+         VALUES ('{sender}', '{sender}', '{recipient}', [101, 202], [7, 11],
+                 '{zero_tx}', {block2}, '{block_hash}', '{network}', 0, 0)"
+    ))
+    .await
+    .unwrap();
+
+    pg.execute(
+        "INSERT INTO rindexer_internal.test_schema_transfer_batch
+         (network, last_synced_block) VALUES ($1, $2)",
+        &[&network, &Decimal::from(block2)],
+    )
+    .await
+    .unwrap();
+    ch.execute(&format!(
+        "INSERT INTO rindexer_internal.test_schema_transfer_batch
+         (network, last_synced_block) VALUES ('{network}', {block2})"
+    ))
+    .await
+    .unwrap();
+
+    for (user, token_id, balance) in
+        [(sender, 101u64, 13u64), (sender, 202, 19), (recipient, 101, 8), (recipient, 202, 13)]
+    {
+        pg.execute(
+            "INSERT INTO test_schema.custody_balances
+             (network, user_address, token_id, balance, rindexer_block_number)
+             VALUES ($1, $2, $3, $4, $5)",
+            &[&network, &user, &Decimal::from(token_id), &Decimal::from(balance), &(block2 as i64)],
+        )
+        .await
+        .unwrap();
+        ch.execute(&format!(
+            "INSERT INTO test_schema.custody_balances
+             (network, user_address, token_id, balance, rindexer_block_number)
+             VALUES ('{network}', '{user}', {token_id}, {balance}, {block2})"
+        ))
+        .await
+        .unwrap();
+    }
+
+    let iterate = vec![
+        IterateBinding::parse("$ids as token_id").unwrap(),
+        IterateBinding::parse("$values as amount").unwrap(),
+    ];
+    let source_column_types = HashMap::from([
+        ("from".to_string(), ColumnType::Address),
+        ("to".to_string(), ColumnType::Address),
+        ("ids".to_string(), ColumnType::Array(Box::new(ColumnType::Uint256))),
+        ("values".to_string(), ColumnType::Array(Box::new(ColumnType::Uint256))),
+    ]);
+    let derived_column_types = HashMap::from([
+        ("user_address".to_string(), ColumnType::Address),
+        ("token_id".to_string(), ColumnType::Uint256),
+        ("balance".to_string(), ColumnType::Uint256),
+    ]);
+    let rollback_op = |user_field: &str, action: SetAction, condition: &str| {
+        DerivedTableRollbackOp::try_new(
+            "test_schema.erc1155_transfer_batch".to_string(),
+            vec![
+                ("user_address".to_string(), user_field.to_string()),
+                ("token_id".to_string(), "token_id".to_string()),
+            ],
+            vec![DerivedColumnRollback::try_new(
+                "balance".to_string(),
+                "amount".to_string(),
+                action,
+            )
+            .unwrap()],
+            Some(condition.to_string()),
+        )
+        .unwrap()
+    };
+    let rollback_ops = vec![
+        rollback_op(
+            "from",
+            SetAction::Subtract,
+            "$from != 0x0000000000000000000000000000000000000000",
+        ),
+        rollback_op("to", SetAction::Add, "$to != 0x0000000000000000000000000000000000000000"),
+    ];
+    let derived_table = "test_schema.custody_balances".to_string();
+    let mut rollback_plan = DerivedTableRollbackPlan::default();
+    for operation_index in 0..rollback_ops.len() {
+        rollback_plan
+            .try_add_operation(
+                derived_table.clone(),
+                operation_index,
+                iterate.clone(),
+                source_column_types.clone(),
+                derived_column_types.clone(),
+            )
+            .unwrap();
+    }
+    let task = ReorgTask {
+        network: network.to_string(),
+        fork_point: block2,
+        detection_point: block2,
+        event_tables: vec![EventTableInfo::try_new(
+            "test_schema".to_string(),
+            "erc1155_transfer_batch".to_string(),
+            "test_schema_transfer_batch".to_string(),
+            "test_indexer".to_string(),
+            "Erc1155".to_string(),
+            "TransferBatch".to_string(),
+        )
+        .unwrap()],
+        derived_tables: vec![DerivedTableInfo {
+            full_table_name: derived_table,
+            cross_chain: false,
+            rollback_ops,
+            journal_columns: vec![],
+        }],
+        canonical_blocks: vec![],
+    };
+
+    let legacy_snapshot = format!("rindexer_internal._rindexer_reorg_snap_{network}_{block2}_0_ch");
+    ch.execute(&format!("CREATE TABLE {legacy_snapshot} (value UInt8) ENGINE = Memory"))
+        .await
+        .unwrap();
+
+    let rindexer_pg = env.rindexer_pg().await;
+    pg.batch_execute(
+        "UPDATE test_schema.erc1155_transfer_batch
+         SET values = ARRAY['7']::VARCHAR(78)[]",
+    )
+    .await
+    .unwrap();
+    let mut failed_window = BlockChainWindow::try_new(256).unwrap();
+    let error = match task
+        .execute_with_rollback_plan(
+            &mut failed_window,
+            Some(&rindexer_pg),
+            Some(&ch),
+            None,
+            &rollback_plan,
+        )
+        .await
+    {
+        Ok(_) => panic!("unequal iterate arrays must abort before rollback"),
+        Err(error) => error,
+    };
+    assert!(
+        error.to_string().contains("unequal lengths"),
+        "unexpected unequal-iterate error: {error:#}"
+    );
+    let raw_rows: i64 = pg
+        .query_one("SELECT count(*) FROM test_schema.erc1155_transfer_batch", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(raw_rows, 1, "failed preflight must not delete stale event rows");
+    pg.batch_execute(
+        "UPDATE test_schema.erc1155_transfer_batch
+         SET values = ARRAY['7', '11']::VARCHAR(78)[]",
+    )
+    .await
+    .unwrap();
+
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
+    let result = task
+        .execute_with_rollback_plan(
+            &mut task_window,
+            Some(&rindexer_pg),
+            Some(&ch),
+            None,
+            &rollback_plan,
+        )
+        .await
+        .expect("TransferBatch reorg rollback failed");
+
+    assert_eq!(result.events_deleted, 1);
+    let balances = pg
+        .query(
+            "SELECT trim(user_address), token_id, balance
+             FROM test_schema.custody_balances
+             ORDER BY user_address, token_id",
+            &[],
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| (row.get::<_, String>(0), row.get::<_, Decimal>(1), row.get::<_, Decimal>(2)))
+        .collect::<Vec<_>>();
+    for (user, token_id, expected) in
+        [(sender, 101u64, 20u64), (sender, 202, 30), (recipient, 101, 1), (recipient, 202, 2)]
+    {
+        assert!(balances.contains(&(
+            user.to_string(),
+            Decimal::from(token_id),
+            Decimal::from(expected),
+        )));
+        let ch_balance: u64 = ch
+            .query_one(&format!(
+                "SELECT toUInt64(balance) FROM test_schema.custody_balances FINAL
+                 WHERE network = '{network}' AND user_address = '{user}'
+                   AND token_id = {token_id}"
+            ))
+            .await
+            .unwrap();
+        assert_eq!(ch_balance, expected);
+    }
+
+    let remaining_events: i64 = pg
+        .query_one("SELECT count(*) FROM test_schema.erc1155_transfer_batch", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(remaining_events, 0, "orphaned raw events should be deleted");
+    let remaining_ch_events: u64 =
+        ch.query_one("SELECT count() FROM test_schema.erc1155_transfer_batch FINAL").await.unwrap();
+    assert_eq!(remaining_ch_events, 0, "ClickHouse orphaned raw events should be deleted");
+    let checkpoint: Decimal = pg
+        .query_one(
+            "SELECT last_synced_block
+             FROM rindexer_internal.test_schema_transfer_batch WHERE network = $1",
+            &[&network],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(checkpoint, Decimal::from(block2 - 1));
+    let legacy_snapshot_exists: u64 = ch
+        .query_one(&format!(
+            "SELECT count() FROM system.tables WHERE database = 'rindexer_internal'
+             AND name = '_rindexer_reorg_snap_{network}_{block2}_0_ch'"
+        ))
+        .await
+        .unwrap();
+    assert_eq!(legacy_snapshot_exists, 1, "a stale legacy snapshot must not be reused");
+    ch.execute(&format!("DROP TABLE {legacy_snapshot}")).await.unwrap();
+    let leaked_snapshots: u64 = ch
+        .query_one(
+            "SELECT count() FROM system.tables
+             WHERE database = 'rindexer_internal'
+               AND name LIKE '_rindexer_reorg_snap_%'",
+        )
+        .await
+        .unwrap();
+    assert_eq!(leaked_snapshots, 0, "ClickHouse reversal snapshots must be cleaned up");
+}
+
+#[tokio::test]
+async fn test_reorg_reversal_expands_postgres_jsonb_tuple_arrays() {
+    let env = TestEnv::new().await;
+    let pg = env.pg_client().await;
+    env.setup_base_tables(&pg).await;
+
+    pg.batch_execute(
+        "CREATE TABLE rindexer_internal.test_schema_account_batch (
+             network VARCHAR(50) NOT NULL PRIMARY KEY,
+             last_synced_block NUMERIC NOT NULL
+         );
+         CREATE TABLE test_schema.account_batch (
+             rindexer_id SERIAL PRIMARY KEY,
+             accounts JSONB NOT NULL,
+             values VARCHAR(78)[] NOT NULL,
+             tx_hash CHAR(66) NOT NULL,
+             block_number NUMERIC NOT NULL,
+             block_hash CHAR(66) NOT NULL,
+             network VARCHAR(50) NOT NULL
+         );
+         CREATE TABLE test_schema.account_balances (
+             network VARCHAR(50) NOT NULL,
+             owner CHAR(42) NOT NULL,
+             balance NUMERIC NOT NULL,
+             rindexer_block_number BIGINT NOT NULL,
+             PRIMARY KEY (network, owner)
+         );",
+    )
+    .await
+    .unwrap();
+
+    let network = "dev";
+    let block = 10u64;
+    let owner_a = "0x0000000000000000000000000000000000000001";
+    let owner_b = "0x0000000000000000000000000000000000000002";
+    let accounts = json!([
+        {"owner": owner_a, "tokenAmount": "7"},
+        {"owner": owner_b, "tokenAmount": "11"}
+    ]);
+    let zero_hash = "0x0000000000000000000000000000000000000000000000000000000000000000";
+    pg.execute(
+        "INSERT INTO test_schema.account_batch
+         (accounts, values, tx_hash, block_number, block_hash, network)
+         VALUES ($1, ARRAY['1']::VARCHAR(78)[], $2, $3, $2, $4)",
+        &[&accounts, &zero_hash, &Decimal::from(block), &network],
+    )
+    .await
+    .unwrap();
+    pg.execute(
+        "INSERT INTO rindexer_internal.test_schema_account_batch
+         (network, last_synced_block) VALUES ($1, $2)",
+        &[&network, &Decimal::from(block)],
+    )
+    .await
+    .unwrap();
+    for (owner, balance) in [(owner_a, 17u64), (owner_b, 31)] {
+        pg.execute(
+            "INSERT INTO test_schema.account_balances
+             (network, owner, balance, rindexer_block_number) VALUES ($1, $2, $3, $4)",
+            &[&network, &owner, &Decimal::from(balance), &(block as i64)],
+        )
+        .await
+        .unwrap();
+    }
+
+    let derived_table = "test_schema.account_balances".to_string();
+    let mut rollback_plan = DerivedTableRollbackPlan::default();
+    rollback_plan
+        .try_add_operation(
+            derived_table.clone(),
+            0,
+            vec![
+                IterateBinding::parse("$accounts as account").unwrap(),
+                IterateBinding::parse("$values as value").unwrap(),
+            ],
+            HashMap::from([
+                ("accounts.owner".to_string(), ColumnType::Address),
+                ("accounts.tokenAmount".to_string(), ColumnType::Uint256),
+                ("values".to_string(), ColumnType::Array(Box::new(ColumnType::Uint256))),
+            ]),
+            HashMap::from([
+                ("owner".to_string(), ColumnType::Address),
+                ("balance".to_string(), ColumnType::Uint256),
+            ]),
+        )
+        .unwrap();
+    let mut task = ReorgTask {
+        network: network.to_string(),
+        fork_point: block,
+        detection_point: block,
+        event_tables: vec![EventTableInfo::try_new(
+            "test_schema".to_string(),
+            "account_batch".to_string(),
+            "test_schema_account_batch".to_string(),
+            "test_indexer".to_string(),
+            "Accounts".to_string(),
+            "AccountBatch".to_string(),
+        )
+        .unwrap()],
+        derived_tables: vec![DerivedTableInfo {
+            full_table_name: derived_table,
+            cross_chain: false,
+            rollback_ops: vec![DerivedTableRollbackOp::try_new(
+                "test_schema.account_batch".to_string(),
+                vec![("owner".to_string(), "account.owner".to_string())],
+                vec![DerivedColumnRollback::try_new(
+                    "balance".to_string(),
+                    "account.tokenAmount".to_string(),
+                    SetAction::Add,
+                )
+                .unwrap()],
+                Some("$account.tokenAmount > 0".to_string()),
+            )
+            .unwrap()],
+            journal_columns: vec![],
+        }],
+        canonical_blocks: vec![],
+    };
+    let rindexer_pg = env.rindexer_pg().await;
+
+    let mut window = BlockChainWindow::try_new(16).unwrap();
+    let error = match task
+        .execute_with_rollback_plan(&mut window, Some(&rindexer_pg), None, None, &rollback_plan)
+        .await
+    {
+        Ok(_) => panic!("mixed iterate lengths must fail before deletion"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("unequal lengths"));
+    pg.batch_execute(
+        "UPDATE test_schema.account_batch
+         SET values = ARRAY['1', '2']::VARCHAR(78)[]",
+    )
+    .await
+    .unwrap();
+
+    task.derived_tables[0].rollback_ops[0].columns[0].derived_column =
+        "missing_balance".to_string();
+    let error = match task
+        .execute_with_rollback_plan(&mut window, Some(&rindexer_pg), None, None, &rollback_plan)
+        .await
+    {
+        Ok(_) => panic!("invalid reversal SQL must fail"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("Accumulative reversal"));
+    let raw_rows: i64 =
+        pg.query_one("SELECT count(*) FROM test_schema.account_batch", &[]).await.unwrap().get(0);
+    assert_eq!(raw_rows, 1, "failed reversal must roll back raw deletion");
+    let checkpoint: Decimal = pg
+        .query_one(
+            "SELECT last_synced_block
+             FROM rindexer_internal.test_schema_account_batch WHERE network = $1",
+            &[&network],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(checkpoint, Decimal::from(block));
+    task.derived_tables[0].rollback_ops[0].columns[0].derived_column = "balance".to_string();
+
+    task.execute_with_rollback_plan(&mut window, Some(&rindexer_pg), None, None, &rollback_plan)
+        .await
+        .expect("JSONB tuple-array rollback failed");
+
+    let balances = pg
+        .query("SELECT trim(owner), balance FROM test_schema.account_balances ORDER BY owner", &[])
+        .await
+        .unwrap();
+    assert_eq!(balances[0].get::<_, String>(0), owner_a);
+    assert_eq!(balances[0].get::<_, Decimal>(1), Decimal::from(10u64));
+    assert_eq!(balances[1].get::<_, String>(0), owner_b);
+    assert_eq!(balances[1].get::<_, Decimal>(1), Decimal::from(20u64));
+    let raw_rows: i64 =
+        pg.query_one("SELECT count(*) FROM test_schema.account_batch", &[]).await.unwrap().get(0);
+    assert_eq!(raw_rows, 0);
+}
+
+// ---------------------------------------------------------------------------
 // Test: Max action recalculated from journal after reorg
 // ---------------------------------------------------------------------------
 
@@ -3306,7 +3831,7 @@ async fn test_reorg_clickhouse_add_reversal() {
 
     trigger_reorg(&env.http, &env.rpc_url, 2).await; // invalidates block2, block3
 
-    let task = ReorgTask {
+    let mut task = ReorgTask {
         network: network.to_string(),
         fork_point: block2,
         detection_point: block3,
@@ -3340,9 +3865,60 @@ async fn test_reorg_clickhouse_add_reversal() {
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
+    task.derived_tables[0].rollback_ops[0].columns[0].derived_column =
+        "missing_balance".to_string();
+    let error = match task.execute(&mut task_window, None, Some(&ch), None).await {
+        Ok(_) => panic!("invalid ClickHouse reversal must fail after raw deletion"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("Accumulative reversal"));
+    let retained_snapshots: u64 = ch
+        .query_one(
+            "SELECT count() FROM system.tables
+             WHERE database = 'rindexer_internal'
+               AND name LIKE '_rindexer_reorg_snap_%'",
+        )
+        .await
+        .unwrap();
+    assert_eq!(retained_snapshots, 2, "failed reversal must retain its snapshot and marker");
+
+    task.derived_tables[0].rollback_ops[0].columns[0].derived_column = "balance".to_string();
+    task.derived_tables.push(DerivedTableInfo {
+        full_table_name: "test_schema.missing_cleanup".to_string(),
+        cross_chain: false,
+        rollback_ops: vec![],
+        journal_columns: vec![],
+    });
+    let error = match task.execute(&mut task_window, None, Some(&ch), None).await {
+        Ok(_) => panic!("invalid later ClickHouse phase must fail"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("failed to delete derived table rows"));
+    let ch_balance_after_late_failure: u64 = ch
+        .query_one(&format!(
+            "SELECT toUInt64(balance) FROM test_schema.user_balances FINAL
+             WHERE network = '{network}' AND user_address = '{user}'"
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        ch_balance_after_late_failure, 100,
+        "successful reversal must be checkpointed before a later phase fails"
+    );
+    let retained_marker: u64 = ch
+        .query_one(
+            "SELECT count() FROM system.tables
+             WHERE database = 'rindexer_internal'
+               AND name LIKE '_rindexer_reorg_snap_%'",
+        )
+        .await
+        .unwrap();
+    assert_eq!(retained_marker, 1, "only the pending-attempt marker should remain");
+
+    task.derived_tables.pop();
     task.execute(&mut task_window, Some(&rindexer_pg), Some(&ch), None)
         .await
-        .expect("clickhouse add reversal reorg task failed");
+        .expect("ClickHouse reversal retry must reuse the retained snapshot");
 
     // PG: balance was 180, events at block2 (id=50) + block3 (id=30) = 80 subtracted -> 100
     let balance: rust_decimal::Decimal = pg
@@ -3357,6 +3933,26 @@ async fn test_reorg_clickhouse_add_reversal() {
 
     // PG: only the block1 event should remain
     assert_eq!(env.event_count(&pg).await, 1, "PG: only Ping(100) at block1 should remain");
+    let ch_balance: u64 = ch
+        .query_one(&format!(
+            "SELECT toUInt64(balance) FROM test_schema.user_balances FINAL
+             WHERE network = '{network}' AND user_address = '{user}'"
+        ))
+        .await
+        .expect("CH balance row should still exist after retry");
+    assert_eq!(ch_balance, 100, "CH retry must reverse the retained 80-point delta once");
+    let remaining_ch_events: u64 =
+        ch.query_one("SELECT count() FROM test_schema.ping_pong_ping FINAL").await.unwrap();
+    assert_eq!(remaining_ch_events, 1, "CH: only Ping(100) at block1 should remain");
+    let leaked_snapshots: u64 = ch
+        .query_one(
+            "SELECT count() FROM system.tables
+             WHERE database = 'rindexer_internal'
+               AND name LIKE '_rindexer_reorg_snap_%'",
+        )
+        .await
+        .unwrap();
+    assert_eq!(leaked_snapshots, 0, "successful retry must clean up snapshot state");
 }
 
 // ---------------------------------------------------------------------------

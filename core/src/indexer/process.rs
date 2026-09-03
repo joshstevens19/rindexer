@@ -15,7 +15,8 @@ use tracing::{debug, error, info, warn};
 use crate::helpers::is_relevant_block;
 use crate::indexer::heartbeat::{HeartbeatAction, HeartbeatTracker};
 use crate::indexer::reorg::{
-    detect_and_handle_reorg, reorg_safe_distance_for_chain, ReorgContext, ReorgCoordinator,
+    detect_and_handle_reorg, event_writer_barrier, reorg_safe_distance_for_chain, ReorgContext,
+    ReorgCoordinator,
 };
 use crate::metrics::indexing as metrics;
 use crate::provider::ChainProvider;
@@ -492,6 +493,7 @@ async fn live_indexing_for_contract_event_dependencies(
     let generation_cancel = events.first().map(|(config, _)| config.cancel_token().clone());
 
     let reorg_coordinator = reorg_coordinator;
+    let writer_barrier = event_writer_barrier(&network);
 
     let (pg_client, ch_client, event_registry) = events
         .first()
@@ -710,6 +712,7 @@ async fn live_indexing_for_contract_event_dependencies(
 
                 // No event task spawns on this skip path, but the checkpoint write below
                 // must still be tracked so graceful shutdown waits for it.
+                let _writer_guard = writer_barrier.read().await;
                 indexing_event_processing();
                 update_progress_and_last_synced_task(
                     Arc::clone(config),
@@ -901,6 +904,9 @@ async fn handle_logs_result(
                 return Ok(tokio::spawn(async {}));
             }
 
+            let writer_guard =
+                event_writer_barrier(&config.network_contract().network).read_owned().await;
+
             debug!("{} - Processing {} logs", config.info_log_name(), result.logs.len());
 
             let fn_data = result
@@ -918,12 +924,14 @@ async fn handle_logs_result(
 
             if let Ok(permit) = callback_permits.clone().acquire_owned().await {
                 let task = tokio::spawn(async move {
+                    let _writer_guard = writer_guard;
                     trigger_event(config, fn_data, result.to_block).await;
                     drop(permit)
                 });
 
                 Ok(task)
             } else {
+                let _writer_guard = writer_guard;
                 trigger_event(config, fn_data, result.to_block).await;
                 Ok(tokio::spawn(async {}))
             }
