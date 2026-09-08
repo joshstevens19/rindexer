@@ -166,6 +166,7 @@ use crate::database::postgres::batch_operations::execute_dynamic_batch_operation
 use crate::database::postgres::client::PostgresClient;
 use crate::database::postgres::generate::generate_internal_event_table_name;
 use crate::database::sql_type_wrapper::EthereumSqlTypeWrapper;
+use crate::event::callback_registry::terminal_event_callback_error;
 use crate::event::{
     evaluate_arithmetic, filter_by_expression, parse_filter_expression, ComputedValue,
 };
@@ -3562,7 +3563,7 @@ pub async fn prepare_table_event_timestamps(
         return Err("Shutdown requested".to_string());
     }
 
-    hydrate_block_timestamps(events_data).await.map(Some)
+    hydrate_block_timestamps(events_data).await.map(Some).map_err(terminal_event_callback_error)
 }
 
 /// Processes table operations for a batch of events.

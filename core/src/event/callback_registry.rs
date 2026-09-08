@@ -151,6 +151,16 @@ impl EventResult {
 
 pub type EventCallbackResult<T> = Result<T, String>;
 
+const TERMINAL_EVENT_CALLBACK_ERROR_PREFIX: &str = "[rindexer:terminal-callback] ";
+
+/// Marks an error as terminal for the current callback invocation.
+///
+/// The indexing loop may fetch the uncommitted range again later, but the callback registry must
+/// not spin forever on configuration or data failures that its local retry cannot repair.
+pub fn terminal_event_callback_error(message: impl AsRef<str>) -> String {
+    format!("{}{}", TERMINAL_EVENT_CALLBACK_ERROR_PREFIX, message.as_ref())
+}
+
 pub type EventCallbackType =
     Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync>;
 pub type TraceCallbackType =
@@ -555,6 +565,13 @@ where
                     info!("Detected shutdown, stopping event trigger");
                     return Err(e);
                 }
+                if let Some(message) = e.strip_prefix(TERMINAL_EVENT_CALLBACK_ERROR_PREFIX) {
+                    error!(
+                        "{} Event processing failed with a terminal callback error - id: {} - topic_id: {}. Not retrying this callback invocation. Error: {}",
+                        info_log_name(), id, event_identifier, message
+                    );
+                    return Err(message.to_string());
+                }
                 attempts += 1;
                 error!(
                     "{} Event processing failed - id: {} - topic_id: {}. Retrying... (attempt {}). Error: {}",
@@ -573,7 +590,9 @@ where
 mod tests {
     use super::*;
     use alloy::network::AnyRpcBlock;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex as StdMutex;
+    use tokio::time::timeout;
 
     fn sample_notification() -> ReorgNotification {
         ReorgNotification {
@@ -582,6 +601,66 @@ mod tests {
             detection_block: 105,
             invalidated_tx_hashes: vec![TxHash::from([0xab; 32])],
         }
+    }
+
+    #[tokio::test]
+    async fn terminal_callback_errors_are_not_retried() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let callback_calls = Arc::clone(&calls);
+        let id = "terminal-test".to_string();
+
+        let result = timeout(
+            Duration::from_secs(1),
+            trigger_event(
+                &id,
+                vec![()],
+                move |_| {
+                    callback_calls.fetch_add(1, Ordering::SeqCst);
+                    Box::pin(async {
+                        Err(terminal_event_callback_error("timestamp resolution exhausted"))
+                    })
+                },
+                || "terminal-test".to_string(),
+                "terminal-topic",
+            ),
+        )
+        .await
+        .expect("terminal callback error should return without entering the retry loop");
+
+        assert_eq!(result.unwrap_err(), "timestamp resolution exhausted");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn ordinary_callback_errors_still_retry() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let callback_calls = Arc::clone(&calls);
+        let id = "retry-test".to_string();
+
+        let result = timeout(
+            Duration::from_secs(1),
+            trigger_event(
+                &id,
+                vec![()],
+                move |_| {
+                    let attempt = callback_calls.fetch_add(1, Ordering::SeqCst);
+                    Box::pin(async move {
+                        if attempt == 0 {
+                            Err("transient failure".to_string())
+                        } else {
+                            Ok(())
+                        }
+                    })
+                },
+                || "retry-test".to_string(),
+                "retry-topic",
+            ),
+        )
+        .await
+        .expect("ordinary callback errors should continue to use the retry loop");
+
+        assert!(result.is_ok());
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
     // ======================================================================

@@ -719,7 +719,9 @@ value: $rindexer_tx_index          # Transaction index in block
 Setting `timestamp: true` adds the built-in `rindexer_block_timestamp` column. You can also map
 `$rindexer_block_timestamp` to a differently named custom column without enabling the built-in
 column. When log metadata does not include the timestamp, rindexer fetches it before evaluating
-the table operation; if resolution fails, the batch is retried instead of writing a missing value.
+the table operation or writing to any configured sink. If resolution still fails after the
+provider's retry budget, rindexer leaves progress unadvanced so the range can be retried safely
+instead of writing a missing value.
 See [timestamp](#timestamp) for details.
 :::
 
