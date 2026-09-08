@@ -5,6 +5,8 @@
 
 ### Bug fixes
 -------------------------------------------------
+- fix: custom-table operations that reference `$rindexer_block_timestamp` now hydrate missing log timestamps from the block cache before evaluating aliases, arithmetic, or conditions, and retry the batch instead of serializing a missing value as `NULL` or zero.
+
 - fix: reorg recovery now reverses custom-table operations that use `iterate`, including native and PostgreSQL JSONB tuple arrays, typed nested/indexed fields, and paired ERC-1155 `TransferBatch` values; rollback quiesces event writers, PostgreSQL changes are atomic, unequal arrays fail before deletion, and interrupted ClickHouse reversals resume from retained attempt-scoped snapshots.
 
 - Fix live event indexing stalling when a temporary RPC retry ceiling matches the last synced block.

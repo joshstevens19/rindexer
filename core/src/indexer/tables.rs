@@ -1401,6 +1401,36 @@ async fn get_cached_block_timestamp(network: &str, block_number: u64) -> Option<
     cache.get(&(network.to_string(), block_number)).copied()
 }
 
+/// Returns a copy of the event batch with every missing block timestamp resolved from the
+/// prefetch cache. Timestamp-dependent table operations must use this hydrated batch so all
+/// expression forms see the same metadata and a cache miss cannot silently become NULL or zero.
+async fn hydrate_block_timestamps(
+    events_data: &[(Vec<LogParam>, String, TxMetadata)],
+) -> Result<Vec<(Vec<LogParam>, String, TxMetadata)>, String> {
+    let cache = BLOCK_TIMESTAMP_CACHE.read().await;
+    let mut hydrated_events = Vec::with_capacity(events_data.len());
+
+    for (log_params, network, tx_metadata) in events_data {
+        let mut hydrated_metadata = tx_metadata.clone();
+        if hydrated_metadata.block_timestamp.is_none() {
+            let timestamp = cache
+                .get(&(network.clone(), tx_metadata.block_number))
+                .copied()
+                .ok_or_else(|| {
+                    format!(
+                        "block_timestamp unavailable for block {} on {} after RPC prefetch",
+                        tx_metadata.block_number, network
+                    )
+                })?;
+            hydrated_metadata.block_timestamp = Some(U256::from(timestamp));
+        }
+
+        hydrated_events.push((log_params.clone(), network.clone(), hydrated_metadata));
+    }
+
+    Ok(hydrated_events)
+}
+
 /// Transaction metadata available for table value references.
 #[derive(Clone, Debug)]
 pub struct TxMetadata {
@@ -3488,6 +3518,17 @@ fn expand_iterate_bindings(
     Some(result)
 }
 
+fn operation_needs_block_timestamp(operation: &TableOperation) -> bool {
+    const BLOCK_TIMESTAMP_REF: &str = "rindexer_block_timestamp";
+
+    operation.where_clause.values().any(|value| value.contains(BLOCK_TIMESTAMP_REF))
+        || operation
+            .set
+            .iter()
+            .any(|set_column| set_column.effective_value().contains(BLOCK_TIMESTAMP_REF))
+        || operation.condition().is_some_and(|condition| condition.contains(BLOCK_TIMESTAMP_REF))
+}
+
 /// Processes table operations for a batch of events.
 ///
 /// # Arguments
@@ -3532,20 +3573,21 @@ pub async fn process_table_operations(
         // built-in metadata). Without prefetch, this resolves to NULL when the RPC doesn't
         // include blockTimestamp in eth_getLogs responses.
         t.table.events.iter().any(|e| {
-            e.event == event_name
-                && e.operations.iter().any(|op| {
-                    op.where_clause.values().any(|v| v.contains("rindexer_block_timestamp"))
-                        || op
-                            .set
-                            .iter()
-                            .any(|s| s.effective_value().contains("rindexer_block_timestamp"))
-                })
+            e.event == event_name && e.operations.iter().any(operation_needs_block_timestamp)
         })
     });
 
-    if any_table_needs_timestamp {
+    let hydrated_events_data = if any_table_needs_timestamp {
         prefetch_block_timestamps(events_data, &providers, true).await;
-    }
+        if !is_running() {
+            info!("Shutdown during block timestamp resolution - no table data written");
+            return Err("Shutdown requested".to_string());
+        }
+        Some(hydrate_block_timestamps(events_data).await?)
+    } else {
+        None
+    };
+    let events_data = hydrated_events_data.as_deref().unwrap_or(events_data);
 
     // Check if any table has $call or $call_static patterns and prefetch using Multicall3
     let any_table_has_calls = tables.iter().any(|t| {
@@ -5347,6 +5389,79 @@ mod tests {
         .await;
 
         assert!(result.is_none(), "Should return None when both metadata and cache miss");
+    }
+
+    #[tokio::test]
+    async fn test_hydrate_block_timestamps_populates_missing_metadata() {
+        let block_number = 88_888_889;
+        let metadata = TxMetadata {
+            block_number,
+            block_timestamp: None,
+            tx_hash: B256::ZERO,
+            block_hash: B256::ZERO,
+            contract_address: Address::ZERO,
+            log_index: U256::ZERO,
+            tx_index: 0,
+        };
+        let events = vec![(Vec::new(), "polygon".to_string(), metadata)];
+
+        {
+            let mut cache = BLOCK_TIMESTAMP_CACHE.write().await;
+            cache.insert(("polygon".to_string(), block_number), 1_700_000_042);
+        }
+
+        let hydrated = hydrate_block_timestamps(&events).await.unwrap();
+
+        assert_eq!(hydrated[0].2.block_timestamp, Some(U256::from(1_700_000_042u64)));
+
+        let mut cache = BLOCK_TIMESTAMP_CACHE.write().await;
+        cache.remove(&("polygon".to_string(), block_number));
+    }
+
+    #[tokio::test]
+    async fn test_hydrate_block_timestamps_fails_on_total_miss() {
+        let block_number = 88_888_890;
+        let metadata = TxMetadata {
+            block_number,
+            block_timestamp: None,
+            tx_hash: B256::ZERO,
+            block_hash: B256::ZERO,
+            contract_address: Address::ZERO,
+            log_index: U256::ZERO,
+            tx_index: 0,
+        };
+        let events = vec![(Vec::new(), "polygon".to_string(), metadata)];
+
+        let error = hydrate_block_timestamps(&events).await.unwrap_err();
+
+        assert!(error.contains("block_timestamp unavailable"));
+        assert!(error.contains("88888890"));
+        assert!(error.contains("polygon"));
+    }
+
+    #[test]
+    fn test_timestamp_dependency_detection_supports_aliases_and_conditions() {
+        let alias_operation = TableOperation {
+            operation_type: OperationType::Insert,
+            where_clause: HashMap::new(),
+            if_condition: None,
+            filter: None,
+            set: vec![SetColumn {
+                column: "observed_at".to_string(),
+                action: SetAction::Set,
+                value: Some("$rindexer_block_timestamp".to_string()),
+            }],
+        };
+        assert!(operation_needs_block_timestamp(&alias_operation));
+
+        let condition_operation = TableOperation {
+            operation_type: OperationType::Delete,
+            where_clause: HashMap::new(),
+            if_condition: Some("rindexer_block_timestamp > 0".to_string()),
+            filter: None,
+            set: Vec::new(),
+        };
+        assert!(operation_needs_block_timestamp(&condition_operation));
     }
 
     /// When metadata IS present, the async path should use it directly (not touch cache).
