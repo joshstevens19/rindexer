@@ -3529,6 +3529,42 @@ fn operation_needs_block_timestamp(operation: &TableOperation) -> bool {
         || operation.condition().is_some_and(|condition| condition.contains(BLOCK_TIMESTAMP_REF))
 }
 
+/// Resolves timestamp metadata before any sink writes run for this callback.
+///
+/// Returning `None` avoids cloning event data when no matching table operation needs a timestamp.
+pub async fn prepare_table_event_timestamps(
+    tables: &[TableRuntime],
+    event_name: &str,
+    events_data: &[(Vec<LogParam>, String, TxMetadata)],
+    providers: &HashMap<String, Arc<dyn ChainProvider>>,
+) -> Result<Option<Vec<(Vec<LogParam>, String, TxMetadata)>>, String> {
+    let any_table_needs_timestamp = tables.iter().any(|table_runtime| {
+        let handles_event =
+            table_runtime.table.events.iter().any(|event| event.event == event_name);
+        if !handles_event {
+            return false;
+        }
+
+        table_runtime.table.timestamp
+            || table_runtime.table.events.iter().any(|event| {
+                event.event == event_name
+                    && event.operations.iter().any(operation_needs_block_timestamp)
+            })
+    });
+
+    if !any_table_needs_timestamp {
+        return Ok(None);
+    }
+
+    prefetch_block_timestamps(events_data, providers, true).await;
+    if !is_running() {
+        info!("Shutdown during block timestamp resolution - no sink data written");
+        return Err("Shutdown requested".to_string());
+    }
+
+    hydrate_block_timestamps(events_data).await.map(Some)
+}
+
 /// Processes table operations for a batch of events.
 ///
 /// # Arguments
@@ -3558,36 +3594,6 @@ pub async fn process_table_operations(
         info!("Shutdown requested - skipping table processing");
         return Err("Shutdown requested".to_string());
     }
-
-    // Check if any table needs timestamps and prefetch them in batch
-    let any_table_needs_timestamp = tables.iter().any(|t| {
-        let handles_event = t.table.events.iter().any(|e| e.event == event_name);
-        if !handles_event {
-            return false;
-        }
-        // Built-in timestamp column enabled
-        if t.table.timestamp {
-            return true;
-        }
-        // Column mapping references $rindexer_block_timestamp (custom column using the
-        // built-in metadata). Without prefetch, this resolves to NULL when the RPC doesn't
-        // include blockTimestamp in eth_getLogs responses.
-        t.table.events.iter().any(|e| {
-            e.event == event_name && e.operations.iter().any(operation_needs_block_timestamp)
-        })
-    });
-
-    let hydrated_events_data = if any_table_needs_timestamp {
-        prefetch_block_timestamps(events_data, &providers, true).await;
-        if !is_running() {
-            info!("Shutdown during block timestamp resolution - no table data written");
-            return Err("Shutdown requested".to_string());
-        }
-        Some(hydrate_block_timestamps(events_data).await?)
-    } else {
-        None
-    };
-    let events_data = hydrated_events_data.as_deref().unwrap_or(events_data);
 
     // Check if any table has $call or $call_static patterns and prefetch using Multicall3
     let any_table_has_calls = tables.iter().any(|t| {

@@ -14,7 +14,10 @@ use tracing::{debug, error, info, warn};
 
 use super::cron_scheduler::{manifest_has_cron_tables, CronScheduler};
 use super::native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME};
-use super::tables::{process_table_operations, ProgressCheckpointConfig, TableRuntime, TxMetadata};
+use super::tables::{
+    prepare_table_event_timestamps, process_table_operations, ProgressCheckpointConfig,
+    TableRuntime, TxMetadata,
+};
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::clickhouse::setup::{setup_clickhouse, SetupClickhouseError};
 use crate::database::generate::{
@@ -654,6 +657,21 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                 indexed_count += 1;
             }
 
+            let run_table_ops = !params.tables.is_empty() && !table_events_data.is_empty();
+            let hydrated_table_events_data = if run_table_ops {
+                prepare_table_event_timestamps(
+                    &params.tables,
+                    &params.event_info.name,
+                    &table_events_data,
+                    &params.providers,
+                )
+                .await?
+            } else {
+                None
+            };
+            let table_events_data =
+                hydrated_table_events_data.as_deref().unwrap_or(&table_events_data);
+
             // Atomic-cursor eligibility: ONLY when Postgres is the SOLE raw-event
             // sink. With ClickHouse/CSV alongside, committing the cursor at the PG
             // write would turn their crash-recovery from at-least-once into silent
@@ -708,8 +726,6 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
             //   succeeds (at-least-once, pre-existing semantics).
             // Streams/chat run after either arm and deliberately never propagate
             // errors (see the stream error arm below).
-            let run_table_ops = !params.tables.is_empty() && !table_events_data.is_empty();
-
             if atomic_pg_cursor {
                 if run_table_ops {
                     if let Err(e) = process_table_operations(
