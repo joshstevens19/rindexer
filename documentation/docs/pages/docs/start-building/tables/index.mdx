@@ -707,7 +707,7 @@ Access transaction and block information:
 
 ```yaml
 value: $rindexer_block_number      # Block number
-value: $rindexer_block_timestamp   # Block timestamp (requires timestamp: true on table)
+value: $rindexer_block_timestamp   # Block timestamp
 value: $rindexer_tx_hash           # Transaction hash
 value: $rindexer_block_hash        # Block hash
 value: $rindexer_contract_address  # Contract that emitted the event
@@ -716,8 +716,13 @@ value: $rindexer_tx_index          # Transaction index in block
 ```
 
 :::info[Block Timestamp]
-The `$rindexer_block_timestamp` reference only works if you have `timestamp: true` set on the table.
-Without it, the column won't exist. See [timestamp](#timestamp) for details.
+Setting `timestamp: true` adds the built-in `rindexer_block_timestamp` column. You can also map
+`$rindexer_block_timestamp` to a differently named custom column without enabling the built-in
+column. When log metadata does not include the timestamp, rindexer fetches it before evaluating
+the table operation or writing to any configured sink. If resolution still fails after the
+provider's retry budget, rindexer leaves progress unadvanced so the range can be retried safely
+instead of writing a missing value.
+See [timestamp](#timestamp) for details.
 :::
 
 ### View Calls (On-Chain Data)
