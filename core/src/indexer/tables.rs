@@ -151,6 +151,7 @@ use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
 use tokio::sync::RwLock;
+use tokio_postgres::Transaction as PgTransaction;
 use tracing::{debug, info, warn};
 
 use crate::adaptive_concurrency::ADAPTIVE_CONCURRENCY;
@@ -163,8 +164,9 @@ use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::generate::generate_indexer_contract_schema_name;
 use crate::database::generate::generate_table_full_name;
 use crate::database::postgres::batch_operations::execute_dynamic_batch_operation;
-use crate::database::postgres::client::PostgresClient;
+use crate::database::postgres::client::{pg_error_to_string, PostgresClient};
 use crate::database::postgres::generate::generate_internal_event_table_name;
+use crate::database::postgres::write_mode::PgWriteMode;
 use crate::database::sql_type_wrapper::EthereumSqlTypeWrapper;
 use crate::event::{
     evaluate_arithmetic, filter_by_expression, parse_filter_expression, ComputedValue,
@@ -3488,30 +3490,50 @@ fn expand_iterate_bindings(
     Some(result)
 }
 
-/// Processes table operations for a batch of events.
+/// One custom-table operation with its rows fully resolved, ready to be written.
+///
+/// Built by [`prepare_table_operations`] without touching the database and consumed by
+/// [`apply_table_operations`] in either write mode.
+pub(crate) struct PreparedOperation<'t> {
+    /// The table the operation targets.
+    pub(crate) table: &'t TableRuntime,
+    /// The manifest operation (upsert, insert, update or delete) to run.
+    pub(crate) operation: &'t TableOperation,
+    /// Rows materialized from the event batch (`iterate` fan-out and filters applied).
+    pub(crate) rows: Vec<TableRowData>,
+    /// SQL condition for `@table` references, evaluated by the database at apply time.
+    pub(crate) sql_condition: Option<String>,
+    /// Highest block number per network among `rows`, for the shutdown checkpoint.
+    pub(crate) batch_max_blocks: HashMap<String, u64>,
+}
+
+/// Every operation of a batch that produced rows, in manifest order.
+pub(crate) struct PreparedTableOps<'t> {
+    pub(crate) ops: Vec<PreparedOperation<'t>>,
+}
+
+/// Resolves the rows of every table operation for a batch of events.
+///
+/// Does the RPC work (block timestamps, `$call` / `$call_static` via Multicall3), the
+/// `iterate` fan-out, filters and value resolution. No database access and no progress
+/// checkpoints: nothing is written here, so a shutdown returns `Err("Shutdown requested")`
+/// with nothing to record.
 ///
 /// # Arguments
 /// * `tables` - The table configurations
 /// * `event_name` - The name of the event being processed
 /// * `events_data` - Batch of events with (log_params, network, tx_metadata)
-/// * `postgres` - Optional PostgreSQL client
-/// * `clickhouse` - Optional ClickHouse client
 /// * `providers` - RPC providers for view calls (keyed by network name)
 /// * `constants` - User-defined constants from the manifest (can be network-scoped)
 /// * `multicall_addresses` - Custom Multicall3 addresses per network (None = use default address)
-/// * `checkpoint_config` - Optional config for checkpointing progress on shutdown
-#[allow(clippy::too_many_arguments)]
-pub async fn process_table_operations(
-    tables: &[TableRuntime],
+pub(crate) async fn prepare_table_operations<'t>(
+    tables: &'t [TableRuntime],
     event_name: &str,
     events_data: &[(Vec<LogParam>, String, TxMetadata)], // (log_params, network, tx_metadata)
-    postgres: Option<Arc<PostgresClient>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
     providers: Arc<HashMap<String, Arc<dyn ChainProvider>>>,
     constants: &Constants,
     multicall_addresses: &HashMap<String, Option<String>>,
-    checkpoint_config: Option<&ProgressCheckpointConfig>,
-) -> Result<(), String> {
+) -> Result<PreparedTableOps<'t>, String> {
     // Exit early if shutdown requested before we start - no progress to save
     if !is_running() {
         info!("Shutdown requested - skipping table processing");
@@ -3586,37 +3608,19 @@ pub async fn process_table_operations(
         }
     }
 
-    // Track the max block number written per network - used for checkpointing on shutdown
-    let mut max_block_written_per_network: HashMap<String, u64> = HashMap::new();
+    let mut ops: Vec<PreparedOperation<'t>> = Vec::new();
 
     for table_runtime in tables {
-        // Check for shutdown before processing each table
+        // Check for shutdown before resolving each table - nothing has been written yet
         if !is_running() {
-            // Only checkpoint if we've actually written data to the database
-            if !max_block_written_per_network.is_empty() {
-                if let Some(checkpoint) = checkpoint_config {
-                    for (network, max_block) in &max_block_written_per_network {
-                        info!(
-                            "Shutdown - checkpointing block {} for {} (last block written)",
-                            max_block, network
-                        );
-                        checkpoint.checkpoint(network, *max_block).await;
-                    }
-                }
-            } else {
-                info!(
-                    "Shutdown during table processing - no data written yet, skipping checkpoint"
-                );
-            }
+            info!("Shutdown during table processing - no data written yet, skipping checkpoint");
             return Err("Shutdown requested".to_string());
         }
 
         // Find operations for this event
-        let event_mapping = table_runtime.table.events.iter().find(|e| e.event == event_name);
-
-        let event_mapping = match event_mapping {
-            Some(em) => em,
-            None => continue,
+        let Some(event_mapping) = table_runtime.table.events.iter().find(|e| e.event == event_name)
+        else {
+            continue;
         };
 
         for operation in &event_mapping.operations {
@@ -3646,20 +3650,8 @@ pub async fn process_table_operations(
                 };
 
             for (log_params, network, tx_metadata) in events_data {
-                // Check for shutdown before processing each event - exit quickly
+                // Check for shutdown before resolving each event - exit quickly, nothing written yet
                 if !is_running() {
-                    // Checkpoint what we've written so far
-                    if !max_block_written_per_network.is_empty() {
-                        if let Some(checkpoint) = checkpoint_config {
-                            for (net, max_block) in &max_block_written_per_network {
-                                info!(
-                                    "Shutdown - checkpointing block {} for {} (mid-batch)",
-                                    max_block, net
-                                );
-                                checkpoint.checkpoint(net, *max_block).await;
-                            }
-                        }
-                    }
                     return Err("Shutdown requested".to_string());
                 }
 
@@ -3818,62 +3810,191 @@ pub async fn process_table_operations(
                 continue;
             }
 
-            // Execute the operation
-            if let Some(postgres) = &postgres {
-                execute_postgres_operation(
-                    postgres,
-                    &table_runtime.full_table_name,
-                    &table_runtime.table,
-                    operation,
-                    &rows_to_process,
-                    sql_condition.as_deref(),
-                )
-                .await?;
+            ops.push(PreparedOperation {
+                table: table_runtime,
+                operation,
+                rows: rows_to_process,
+                sql_condition,
+                batch_max_blocks,
+            });
+        }
+    }
 
-                // Journal non-reversible operations (Set/Max/Min) for reorg recalculation
-                journal_non_reversible_ops(
-                    postgres,
-                    &table_runtime.full_table_name,
-                    operation,
-                    &rows_to_process,
-                )
+    Ok(PreparedTableOps { ops })
+}
+
+/// Writes prepared operations to the configured databases.
+///
+/// `Eager` keeps the per-operation commit: each operation runs in its own
+/// transaction(s), the reorg journal is best-effort autocommit, and a shutdown
+/// detected between operations checkpoints the last block written (when
+/// `checkpoint_config` is set) before returning `Err("Shutdown requested")`.
+///
+/// `Tx` stages every statement in the caller's open transaction: no shutdown checks,
+/// no checkpoints and no ClickHouse (both are rejected with `Err`); the caller commits
+/// or drops the transaction.
+pub(crate) async fn apply_table_operations(
+    prepared: &PreparedTableOps<'_>,
+    pg: Option<PgWriteMode<'_>>,
+    clickhouse: Option<Arc<ClickhouseClient>>,
+    checkpoint_config: Option<&ProgressCheckpointConfig>,
+) -> Result<(), String> {
+    let postgres = match pg {
+        Some(PgWriteMode::Tx(tx)) => {
+            if clickhouse.is_some() {
+                return Err("apply_table_operations: ClickHouse operations cannot join a Postgres transaction".to_string());
+            }
+            if checkpoint_config.is_some() {
+                return Err("apply_table_operations: shutdown checkpoints are not allowed inside a Postgres transaction".to_string());
+            }
+            return apply_table_operations_in_tx(prepared, tx).await;
+        }
+        Some(PgWriteMode::Eager(postgres)) => Some(postgres),
+        None => None,
+    };
+
+    // Track the max block number written per network - used for checkpointing on shutdown
+    let mut max_block_written_per_network: HashMap<String, u64> = HashMap::new();
+
+    for op in &prepared.ops {
+        // Check for shutdown before each operation
+        if !is_running() {
+            // Only checkpoint if we've actually written data to the database
+            if !max_block_written_per_network.is_empty() {
+                if let Some(checkpoint) = checkpoint_config {
+                    for (network, max_block) in &max_block_written_per_network {
+                        info!(
+                            "Shutdown - checkpointing block {} for {} (last block written)",
+                            max_block, network
+                        );
+                        checkpoint.checkpoint(network, *max_block).await;
+                    }
+                }
+            } else {
+                info!(
+                    "Shutdown during table processing - no data written yet, skipping checkpoint"
+                );
+            }
+            return Err("Shutdown requested".to_string());
+        }
+
+        // Execute the operation
+        if let Some(postgres) = postgres {
+            execute_postgres_operation(
+                PgWriteMode::Eager(postgres),
+                &op.table.full_table_name,
+                &op.table.table,
+                op.operation,
+                &op.rows,
+                op.sql_condition.as_deref(),
+            )
+            .await?;
+
+            // Journal non-reversible operations (Set/Max/Min) for reorg recalculation
+            journal_non_reversible_ops(postgres, &op.table.full_table_name, op.operation, &op.rows)
                 .await;
-            }
+        }
 
-            if let Some(clickhouse) = &clickhouse {
-                execute_clickhouse_operation(
-                    clickhouse,
-                    &table_runtime.full_table_name,
-                    &table_runtime.table,
-                    operation,
-                    &rows_to_process,
-                )
-                .await?;
+        if let Some(clickhouse) = &clickhouse {
+            execute_clickhouse_operation(
+                clickhouse,
+                &op.table.full_table_name,
+                &op.table.table,
+                op.operation,
+                &op.rows,
+            )
+            .await?;
 
-                journal_non_reversible_ops_clickhouse(
-                    clickhouse,
-                    &table_runtime.full_table_name,
-                    operation,
-                    &rows_to_process,
-                )
-                .await;
-            }
+            journal_non_reversible_ops_clickhouse(
+                clickhouse,
+                &op.table.full_table_name,
+                op.operation,
+                &op.rows,
+            )
+            .await;
+        }
 
-            // DB write succeeded - update max blocks written tracker
-            for (network, block) in &batch_max_blocks {
-                max_block_written_per_network
-                    .entry(network.clone())
-                    .and_modify(|max| {
-                        if *block > *max {
-                            *max = *block;
-                        }
-                    })
-                    .or_insert(*block);
-            }
+        // DB write succeeded - update max blocks written tracker
+        for (network, block) in &op.batch_max_blocks {
+            max_block_written_per_network
+                .entry(network.clone())
+                .and_modify(|max| {
+                    if *block > *max {
+                        *max = *block;
+                    }
+                })
+                .or_insert(*block);
         }
     }
 
     Ok(())
+}
+
+/// Stages every prepared operation and its journal row in `tx`; nothing commits here.
+async fn apply_table_operations_in_tx(
+    prepared: &PreparedTableOps<'_>,
+    tx: &PgTransaction<'_>,
+) -> Result<(), String> {
+    for op in &prepared.ops {
+        execute_postgres_operation(
+            PgWriteMode::Tx(tx),
+            &op.table.full_table_name,
+            &op.table.table,
+            op.operation,
+            &op.rows,
+            op.sql_condition.as_deref(),
+        )
+        .await?;
+
+        journal_non_reversible_ops_in_tx(tx, &op.table.full_table_name, op.operation, &op.rows)
+            .await?;
+    }
+
+    Ok(())
+}
+
+/// Processes table operations for a batch of events: prepare, then apply with
+/// per-operation commits (`PgWriteMode::Eager`).
+///
+/// # Arguments
+/// * `tables` - The table configurations
+/// * `event_name` - The name of the event being processed
+/// * `events_data` - Batch of events with (log_params, network, tx_metadata)
+/// * `postgres` - Optional PostgreSQL client
+/// * `clickhouse` - Optional ClickHouse client
+/// * `providers` - RPC providers for view calls (keyed by network name)
+/// * `constants` - User-defined constants from the manifest (can be network-scoped)
+/// * `multicall_addresses` - Custom Multicall3 addresses per network (None = use default address)
+/// * `checkpoint_config` - Optional config for checkpointing progress on shutdown
+#[allow(clippy::too_many_arguments)]
+pub async fn process_table_operations(
+    tables: &[TableRuntime],
+    event_name: &str,
+    events_data: &[(Vec<LogParam>, String, TxMetadata)], // (log_params, network, tx_metadata)
+    postgres: Option<Arc<PostgresClient>>,
+    clickhouse: Option<Arc<ClickhouseClient>>,
+    providers: Arc<HashMap<String, Arc<dyn ChainProvider>>>,
+    constants: &Constants,
+    multicall_addresses: &HashMap<String, Option<String>>,
+    checkpoint_config: Option<&ProgressCheckpointConfig>,
+) -> Result<(), String> {
+    let prepared = prepare_table_operations(
+        tables,
+        event_name,
+        events_data,
+        providers,
+        constants,
+        multicall_addresses,
+    )
+    .await?;
+
+    apply_table_operations(
+        &prepared,
+        postgres.as_deref().map(PgWriteMode::Eager),
+        clickhouse,
+        checkpoint_config,
+    )
+    .await
 }
 
 /// Maps ColumnType to BatchOperationSqlType.
@@ -3957,7 +4078,7 @@ fn operation_type_to_batch_type(op_type: &OperationType) -> BatchOperationType {
 ///   Used when the `if`/`filter` condition contains `@table` references.
 ///   E.g., conditions like `$value > @balance` become SQL `EXCLUDED.value > table.balance`.
 async fn execute_postgres_operation(
-    postgres: &PostgresClient,
+    mode: PgWriteMode<'_>,
     table_name: &str,
     table_def: &Table,
     operation: &TableOperation,
@@ -4112,15 +4233,8 @@ async fn execute_postgres_operation(
     let short_table_name = table_name.split('.').next_back().unwrap_or(table_name);
     let event_name = format!("Tables::{}", short_table_name);
 
-    execute_dynamic_batch_operation(
-        postgres,
-        table_name,
-        op_type,
-        batch_rows,
-        &event_name,
-        sql_where,
-    )
-    .await?;
+    execute_dynamic_batch_operation(mode, table_name, op_type, batch_rows, &event_name, sql_where)
+        .await?;
 
     let op_label = match operation.operation_type {
         OperationType::Upsert => "UPSERT",
@@ -4321,7 +4435,16 @@ pub async fn execute_postgres_operation_internal(
     rows: &[TableRowData],
     sql_where: Option<&str>,
 ) -> Result<(), String> {
-    execute_postgres_operation(postgres, table_name, table_def, operation, rows, sql_where).await
+    // Cron operations run outside event callbacks and always commit on their own.
+    execute_postgres_operation(
+        PgWriteMode::Eager(postgres),
+        table_name,
+        table_def,
+        operation,
+        rows,
+        sql_where,
+    )
+    .await
 }
 
 /// Internal ClickHouse operation execution - used by cron scheduler.
@@ -4635,25 +4758,38 @@ fn collect_journal_values(
     value_tuples
 }
 
+/// Builds the Postgres `rindexer_internal.derived_op_log` INSERT for non-reversible
+/// (Set/Max/Min) operations, or `None` when there is nothing to journal.
+/// Batches all rows into a single statement.
+fn build_journal_sql(
+    derived_table: &str,
+    operation: &TableOperation,
+    rows: &[TableRowData],
+) -> Option<String> {
+    let values = collect_journal_values(derived_table, operation, rows, "''");
+    if values.is_empty() {
+        return None;
+    }
+
+    Some(format!(
+        "INSERT INTO rindexer_internal.derived_op_log \
+         (derived_table, network, where_key, column_name, value, block_number, tx_index, log_index) \
+         VALUES {}",
+        values.join(", ")
+    ))
+}
+
 /// Journal non-reversible (Set/Max/Min) operations to Postgres `rindexer_internal.derived_op_log`.
-/// Batches all rows into a single INSERT statement.
+/// Autocommit on its own pool checkout; a failure is logged and swallowed.
 async fn journal_non_reversible_ops(
     postgres: &PostgresClient,
     derived_table: &str,
     operation: &TableOperation,
     rows: &[TableRowData],
 ) {
-    let values = collect_journal_values(derived_table, operation, rows, "''");
-    if values.is_empty() {
+    let Some(sql) = build_journal_sql(derived_table, operation, rows) else {
         return;
-    }
-
-    let sql = format!(
-        "INSERT INTO rindexer_internal.derived_op_log \
-         (derived_table, network, where_key, column_name, value, block_number, tx_index, log_index) \
-         VALUES {}",
-        values.join(", ")
-    );
+    };
 
     if let Err(e) = postgres.batch_execute(&sql).await {
         tracing::error!(
@@ -4661,6 +4797,38 @@ async fn journal_non_reversible_ops(
             "Failed to journal non-reversible ops: {:?}", e
         );
     }
+}
+
+/// Journals non-reversible operations inside the caller's transaction, under a SQL savepoint.
+///
+/// Only the INSERT is best-effort: on failure it is logged with the eager path's text and
+/// rolled back to the savepoint so the batch continues. An error from `SAVEPOINT`,
+/// `ROLLBACK TO` or `RELEASE` propagates because the transaction is unusable after it.
+/// Separate round trips on purpose: in one simple-query string a failing INSERT would
+/// stop before `RELEASE` and leave the transaction aborted. One savepoint per operation,
+/// released on both paths: `ROLLBACK TO` keeps the savepoint defined, and a stale one
+/// would nest the next operation's `SAVEPOINT` one subtransaction deeper.
+async fn journal_non_reversible_ops_in_tx(
+    tx: &PgTransaction<'_>,
+    derived_table: &str,
+    operation: &TableOperation,
+    rows: &[TableRowData],
+) -> Result<(), String> {
+    let Some(sql) = build_journal_sql(derived_table, operation, rows) else {
+        return Ok(());
+    };
+
+    tx.batch_execute("SAVEPOINT rindexer_journal").await.map_err(|e| pg_error_to_string(&e))?;
+    if let Err(e) = tx.batch_execute(&sql).await {
+        tracing::error!(
+            table = %derived_table,
+            "Failed to journal non-reversible ops: {:?}", e
+        );
+        tx.batch_execute("ROLLBACK TO SAVEPOINT rindexer_journal")
+            .await
+            .map_err(|e| pg_error_to_string(&e))?;
+    }
+    tx.batch_execute("RELEASE SAVEPOINT rindexer_journal").await.map_err(|e| pg_error_to_string(&e))
 }
 
 /// Journal non-reversible (Set/Max/Min) operations to ClickHouse `rindexer_internal.derived_op_log`.
@@ -5919,7 +6087,7 @@ events:
 
         // First touch is a debit: row must be created at 50 - 30 = 20
         execute_postgres_operation(
-            &postgres,
+            PgWriteMode::Eager(&postgres),
             "yaml_balances",
             &table,
             operation,
@@ -5930,7 +6098,7 @@ events:
         .expect("first debit failed");
         // Second debit accumulates: 20 - 25 = -5
         execute_postgres_operation(
-            &postgres,
+            PgWriteMode::Eager(&postgres),
             "yaml_balances",
             &table,
             operation,

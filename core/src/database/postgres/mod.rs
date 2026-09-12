@@ -6,3 +6,4 @@ pub mod migrations;
 pub mod relationship;
 pub mod schema_sync;
 pub mod setup;
+pub mod write_mode;
