@@ -148,6 +148,18 @@ pub static DB_POOL_CONNECTIONS: Lazy<GaugeVec> = Lazy::new(|| {
     .expect("failed to register DB_POOL_CONNECTIONS")
 });
 
+/// Atomic no-code batches: custom-table operations, their reorg journal rows, the raw
+/// event rows and the last-synced cursor committed in one Postgres transaction.
+/// Labels: status (committed/rolled_back), reason (ok/deadlock/cursor_missing/error)
+pub static ATOMIC_BATCHES_TOTAL: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
+        "rindexer_atomic_batches_total",
+        "Atomic no-code batches (custom-table operations, journal, raw rows and cursor in one transaction) by outcome",
+        &["status", "reason"]
+    )
+    .expect("failed to register ATOMIC_BATCHES_TOTAL")
+});
+
 // =============================================================================
 // Metadata Fetch Metrics
 // =============================================================================
