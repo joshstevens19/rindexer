@@ -15,8 +15,8 @@ use tracing::{debug, error, info, warn};
 use super::cron_scheduler::{manifest_has_cron_tables, CronScheduler};
 use super::native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME};
 use super::tables::{
-    apply_table_operations, prepare_table_operations, process_table_operations, PreparedTableOps,
-    ProgressCheckpointConfig, TableRuntime, TxMetadata,
+    apply_table_operations, prepare_table_event_timestamps, prepare_table_operations,
+    process_table_operations, PreparedTableOps, ProgressCheckpointConfig, TableRuntime, TxMetadata,
 };
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::clickhouse::setup::{setup_clickhouse, SetupClickhouseError};
@@ -660,6 +660,21 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                 indexed_count += 1;
             }
 
+            let run_table_ops = !params.tables.is_empty() && !table_events_data.is_empty();
+            let hydrated_table_events_data = if run_table_ops {
+                prepare_table_event_timestamps(
+                    &params.tables,
+                    &params.event_info.name,
+                    &table_events_data,
+                    &params.providers,
+                )
+                .await?
+            } else {
+                None
+            };
+            let table_events_data =
+                hydrated_table_events_data.as_deref().unwrap_or(&table_events_data);
+
             // Atomic-cursor eligibility: ONLY when Postgres is the SOLE raw-event
             // sink. With ClickHouse/CSV alongside, committing the cursor at the PG
             // write would turn their crash-recovery from at-least-once into silent
@@ -713,15 +728,13 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
             //   semantics).
             // Streams/chat run after either arm and deliberately never propagate
             // errors (see the stream error arm below).
-            let run_table_ops = !params.tables.is_empty() && !table_events_data.is_empty();
-
             if atomic_pg_cursor {
                 // Prepare (RPC, fan-out, value resolution); nothing is written yet.
                 let prepared = if run_table_ops {
                     match prepare_table_operations(
                         &params.tables,
                         &params.event_info.name,
-                        &table_events_data,
+                        table_events_data,
                         params.providers.clone(),
                         &params.constants,
                         &params.multicall_addresses,
@@ -917,7 +930,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                     if let Err(e) = process_table_operations(
                         &params.tables,
                         &params.event_info.name,
-                        &table_events_data,
+                        table_events_data,
                         params.postgres.clone(),
                         params.clickhouse.clone(),
                         params.providers.clone(),

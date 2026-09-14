@@ -5,6 +5,7 @@
 
 ### Bug fixes
 -------------------------------------------------
+- fix: custom-table operations that reference `$rindexer_block_timestamp` now hydrate missing log timestamps before any sink writes, leave progress unadvanced after a terminal resolution miss so the range can be retried safely, and never serialize a missing value as `NULL` or zero.
 
 ### Features
 -------------------------------------------------
