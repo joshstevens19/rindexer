@@ -937,6 +937,12 @@ pub mod mock {
         block_number: U64,
         receipts: Vec<AnyTransactionReceipt>,
         traces: Vec<LocalizedTransactionTrace>,
+        /// When > 0, the next N calls to `get_block_by_number_batch{,_with_size}`
+        /// return `Err(ProviderError::CustomError(...))`. Each call decrements
+        /// the counter atomically, so on call N+1 the mock behaves normally.
+        /// Lets tests exercise the retry path in `prefetch_block_timestamps`
+        /// without spinning a real RPC.
+        block_fetch_failures_remaining: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     }
 
     impl MockChainProvider {
@@ -949,6 +955,9 @@ pub mod mock {
                 block_number: U64::ZERO,
                 receipts: vec![],
                 traces: vec![],
+                block_fetch_failures_remaining: std::sync::Arc::new(
+                    std::sync::atomic::AtomicUsize::new(0),
+                ),
             }
         }
 
@@ -975,6 +984,19 @@ pub mod mock {
         pub fn with_max_block_range(mut self, range: u64) -> Self {
             self.max_block_range = Some(U64::from(range));
             self
+        }
+
+        /// Inject N consecutive failures into `get_block_by_number_batch{,_with_size}`.
+        /// Subsequent calls succeed normally. Counter is shared across clones via Arc.
+        pub fn with_block_fetch_failures(self, n: usize) -> Self {
+            self.block_fetch_failures_remaining.store(n, std::sync::atomic::Ordering::SeqCst);
+            self
+        }
+
+        /// Snapshot the remaining failure budget (for test assertions on
+        /// "did the retry actually consume the configured failures?").
+        pub fn block_fetch_failures_remaining(&self) -> usize {
+            self.block_fetch_failures_remaining.load(std::sync::atomic::Ordering::SeqCst)
         }
     }
 
@@ -1039,6 +1061,22 @@ pub mod mock {
             block_numbers: &[U64],
             _include_txs: bool,
         ) -> Result<Vec<AnyRpcBlock>, ProviderError> {
+            // Failure-injection: if the budget is positive, decrement it and
+            // return an error to simulate a transient RPC failure. SeqCst keeps
+            // multi-task visibility predictable across the spawned retry tasks.
+            let prev = self
+                .block_fetch_failures_remaining
+                .fetch_update(
+                    std::sync::atomic::Ordering::SeqCst,
+                    std::sync::atomic::Ordering::SeqCst,
+                    |n| if n > 0 { Some(n - 1) } else { None },
+                )
+                .unwrap_or(0);
+            if prev > 0 {
+                return Err(ProviderError::CustomError(
+                    "mock: injected block-fetch failure".to_string(),
+                ));
+            }
             use std::collections::HashSet;
             let requested: HashSet<u64> = block_numbers.iter().map(|n| n.to::<u64>()).collect();
             Ok(self
