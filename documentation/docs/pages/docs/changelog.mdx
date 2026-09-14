@@ -5,6 +5,7 @@
 
 ### Bug fixes
 -------------------------------------------------
+- fix: **Chain-wide `filter:` contracts with custom `tables:` no longer fail startup** with `contract '<Name>FilterFilter' not found in manifest` when `reorg_handling` is enabled. The reorg rollback-plan setup added in v0.43.2 looked an event's contract up by its registry name, which carries the `Filter` suffix twice for filter contracts that declare tables (their manifest entry is renamed once while resolving column types and once more when the event registry is built); the lookup now also matches each filter contract's derived name.
 
 ### Features
 -------------------------------------------------
