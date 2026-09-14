@@ -13,8 +13,23 @@ use super::query_builder::{
 use crate::database::batch_operations::{
     BatchOperationAction, BatchOperationColumnBehavior, BatchOperationType, DynamicColumnDefinition,
 };
-use crate::database::postgres::client::PostgresClient;
+use crate::database::postgres::client::{copy_in_via_transaction, pg_error_to_string};
+use crate::database::postgres::write_mode::PgWriteMode;
 use crate::EthereumSqlTypeWrapper;
+
+/// One chunk of a dynamic batch operation, built but not yet sent to Postgres.
+#[derive(Debug, Clone)]
+pub enum DynamicBatchStatement {
+    /// Parameterized single statement (Upsert, Update, Delete).
+    Query { sql: String, params: Vec<EthereumSqlTypeWrapper> },
+    /// Binary COPY payload (Insert).
+    CopyIn {
+        table_name: String,
+        column_names: Vec<String>,
+        column_types: Vec<tokio_postgres::types::Type>,
+        rows: Vec<Vec<EthereumSqlTypeWrapper>>,
+    },
+}
 
 /// Executes a dynamic batch operation with runtime-defined columns.
 ///
@@ -22,11 +37,13 @@ use crate::EthereumSqlTypeWrapper;
 /// dynamically defined columns at runtime (used by custom indexing).
 ///
 /// # Arguments
+/// * `mode` - `Eager` commits every chunk in its own transaction; `Tx` stages the
+///   chunks inside the caller's transaction, which commits or rolls back all of them.
 /// * `custom_where` - Optional SQL WHERE condition for upsert operations.
 ///   Used to push conditions with `@table` references to SQL level.
 ///   E.g., `"EXCLUDED.value > token_balances.balance"` to only update if new value is greater.
 pub async fn execute_dynamic_batch_operation(
-    database: &PostgresClient,
+    mode: PgWriteMode<'_>,
     table_name: &str,
     op_type: BatchOperationType,
     rows: Vec<Vec<DynamicColumnDefinition>>,
@@ -43,7 +60,11 @@ pub async fn execute_dynamic_batch_operation(
     let max_rows_per_batch = (32767 / num_columns).max(1);
 
     for batch in rows.chunks(max_rows_per_batch) {
-        execute_batch(database, table_name, op_type, batch, custom_where).await.map_err(|e| {
+        let Some(statement) = build_batch_statement(table_name, op_type, batch, custom_where)
+        else {
+            continue;
+        };
+        execute_batch_statement(mode, statement).await.map_err(|e| {
             tracing::error!("{} - Batch operation failed: {}", event_name, e);
             e
         })?;
@@ -52,18 +73,85 @@ pub async fn execute_dynamic_batch_operation(
     Ok(())
 }
 
-async fn execute_batch(
-    database: &PostgresClient,
+/// Sends one built statement to Postgres in the given write mode.
+pub async fn execute_batch_statement(
+    mode: PgWriteMode<'_>,
+    statement: DynamicBatchStatement,
+) -> Result<(), String> {
+    match statement {
+        DynamicBatchStatement::Query { sql, params } => {
+            let param_refs: Vec<&(dyn ToSql + Sync)> =
+                params.iter().map(|param| param as &(dyn ToSql + Sync)).collect();
+
+            tracing::debug!("Custom indexing query: {}", sql);
+
+            match mode {
+                PgWriteMode::Eager(database) => database
+                    .with_transaction(&sql, &param_refs, |_| async move { Ok(()) })
+                    .await
+                    .map_err(|e| query_failure(&e, e.to_string(), &sql)),
+                PgWriteMode::Tx(transaction) => transaction
+                    .execute(sql.as_str(), &param_refs)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| query_failure(&e, pg_error_to_string(&e), &sql)),
+            }
+        }
+        DynamicBatchStatement::CopyIn { table_name, column_names, column_types, rows } => {
+            tracing::debug!(
+                "Custom indexing INSERT via binary COPY: {} rows into {}",
+                rows.len(),
+                table_name
+            );
+
+            let result = match mode {
+                PgWriteMode::Eager(database) => {
+                    database
+                        .bulk_insert_via_copy(&table_name, &column_names, &column_types, &rows)
+                        .await
+                }
+                PgWriteMode::Tx(transaction) => {
+                    copy_in_via_transaction(
+                        transaction,
+                        &table_name,
+                        &column_names,
+                        &column_types,
+                        &rows,
+                    )
+                    .await
+                }
+            };
+
+            result.map_err(|e| {
+                tracing::error!("PostgreSQL COPY error: {:?}", e);
+                e.to_string()
+            })
+        }
+    }
+}
+
+/// Logs a failed statement with its SQL and hands the caller the rendered error.
+///
+/// `rendered` is the caller's `String` form: `Display` for a `PostgresError` (whose
+/// `PgError` variant already carries the server message and SQLSTATE) and
+/// `pg_error_to_string` for a bare `tokio_postgres::Error`, whose `Display` is the kind only.
+fn query_failure(error: &impl std::fmt::Debug, rendered: String, sql: &str) -> String {
+    tracing::error!("PostgreSQL error: {:?}", error);
+    tracing::error!("Failed query:\n{}", sql);
+    rendered
+}
+
+/// Builds the statement for one chunk without touching the database.
+///
+/// Returns `None` for an empty chunk. The same statement runs eagerly or inside a
+/// caller-owned transaction with identical SQL.
+pub fn build_batch_statement(
     table_name: &str,
     op_type: BatchOperationType,
     batch: &[Vec<DynamicColumnDefinition>],
     custom_where: Option<&str>,
-) -> Result<(), String> {
-    if batch.is_empty() {
-        return Ok(());
-    }
-
-    let columns = &batch[0];
+) -> Option<DynamicBatchStatement> {
+    let columns = batch.first()?;
 
     // Extract column metadata
     let column_names: Vec<&str> = columns.iter().map(|col| col.name.as_str()).collect();
@@ -185,7 +273,7 @@ async fn execute_batch(
                 } else if set_columns.contains(&name) {
                     ColumnAggregate::LastBySeq
                 } else {
-                    // Unknown columns (shouldn't happen) — take last by sequence
+                    // Unknown columns (shouldn't happen): take last by sequence
                     ColumnAggregate::LastBySeq
                 };
                 (name, agg)
@@ -256,21 +344,12 @@ async fn execute_batch(
             let data: Vec<Vec<EthereumSqlTypeWrapper>> =
                 batch.iter().map(|row| row.iter().map(|col| col.value.clone()).collect()).collect();
 
-            tracing::debug!(
-                "Custom indexing INSERT via binary COPY: {} rows into {}",
-                data.len(),
-                table_name
-            );
-
-            database
-                .bulk_insert_via_copy(table_name, &column_names_owned, &column_types, &data)
-                .await
-                .map_err(|e| {
-                    tracing::error!("PostgreSQL COPY error: {:?}", e);
-                    e.to_string()
-                })?;
-
-            return Ok(());
+            return Some(DynamicBatchStatement::CopyIn {
+                table_name: table_name.to_string(),
+                column_names: column_names_owned,
+                column_types,
+                rows: data,
+            });
         }
         BatchOperationType::Upsert => {
             let conflict_columns: Vec<&str> = if !where_columns.is_empty() {
@@ -377,20 +456,7 @@ async fn execute_batch(
                 &insert_exprs,
             ));
 
-            let params: Vec<&(dyn ToSql + Sync)> =
-                owned_params.iter().map(|param| param as &(dyn ToSql + Sync)).collect();
-
-            tracing::debug!("Custom indexing query: {}", query);
-
-            database.with_transaction(&query, &params, |_| async move { Ok(()) }).await.map_err(
-                |e| {
-                    tracing::error!("PostgreSQL error: {:?}", e);
-                    tracing::error!("Failed query:");
-                    e.to_string()
-                },
-            )?;
-
-            return Ok(());
+            return Some(DynamicBatchStatement::Query { sql: query, params: owned_params });
         }
     }
 
@@ -420,16 +486,309 @@ async fn execute_batch(
 
     query.push_str(&build_where_clause(&where_conditions));
 
-    let params: Vec<&(dyn ToSql + Sync)> =
-        owned_params.iter().map(|param| param as &(dyn ToSql + Sync)).collect();
+    Some(DynamicBatchStatement::Query { sql: query, params: owned_params })
+}
 
-    tracing::debug!("Custom indexing query: {}", query);
+#[cfg(test)]
+mod tests {
+    use tokio_postgres::types::Type;
 
-    database.with_transaction(&query, &params, |_| async move { Ok(()) }).await.map_err(|e| {
-        tracing::error!("PostgreSQL error: {:?}", e);
-        tracing::error!("Failed query:\n{}", query);
-        e.to_string()
-    })?;
+    use super::*;
+    use crate::database::batch_operations::BatchOperationSqlType;
 
-    Ok(())
+    // The four MASTER_* constants are the SQL master's `execute_batch` produced at
+    // dd22e676 for the fixtures below (captured before the refactor). The only
+    // intended difference after the refactor is the deterministic conflict-key
+    // ORDER BY on upserts, applied through `with_order_by`.
+    const MASTER_UPSERT_ARITHMETIC: &str = r#"
+        WITH raw_data (network, holder, balance, last_block, rindexer_sequence_id) AS (
+            VALUES
+        ($1::VARCHAR, $2::TEXT, $3::NUMERIC, $4::BIGINT, $5::NUMERIC), ($6::VARCHAR, $7::TEXT, $8::NUMERIC, $9::BIGINT, $10::NUMERIC)),
+        to_process AS (
+            SELECT network, holder, SUM(balance) AS balance, (array_agg(last_block ORDER BY rindexer_sequence_id DESC))[1] AS last_block, MAX(rindexer_sequence_id) AS rindexer_sequence_id
+            FROM raw_data
+            GROUP BY network, holder
+        )
+INSERT INTO "test"."balances" (network, holder, balance, last_block, rindexer_sequence_id)
+SELECT tp.network, tp.holder, (0 - tp.balance), tp.last_block, tp.rindexer_sequence_id
+FROM to_process tp
+ON CONFLICT (network, holder)
+DO UPDATE SET last_block = CASE WHEN EXCLUDED.rindexer_sequence_id > COALESCE("test"."balances".rindexer_sequence_id, 0) THEN EXCLUDED.last_block ELSE "test"."balances".last_block END, rindexer_sequence_id = GREATEST(COALESCE("test"."balances".rindexer_sequence_id, EXCLUDED.rindexer_sequence_id), EXCLUDED.rindexer_sequence_id), balance = COALESCE("test"."balances".balance, 0) + EXCLUDED.balance - 0
+WHERE (0 - EXCLUDED."balance") <= "test"."balances"."balance""#;
+
+    const MASTER_UPSERT_SET_ONLY: &str = r#"
+        WITH raw_data (network, holder, name, rindexer_sequence_id) AS (
+            VALUES
+        ($1::VARCHAR, $2::TEXT, $3::TEXT, $4::NUMERIC), ($5::VARCHAR, $6::TEXT, $7::TEXT, $8::NUMERIC)),
+        to_process AS (
+            SELECT DISTINCT ON (network, holder) *
+            FROM raw_data
+            ORDER BY network, holder, rindexer_sequence_id DESC
+        )
+INSERT INTO "test"."balances" (network, holder, name, rindexer_sequence_id)
+SELECT tp.network, tp.holder, tp.name, tp.rindexer_sequence_id
+FROM to_process tp
+ON CONFLICT (network, holder)
+DO UPDATE SET name = EXCLUDED.name, rindexer_sequence_id = EXCLUDED.rindexer_sequence_id
+WHERE EXCLUDED.rindexer_sequence_id > COALESCE("test"."balances".rindexer_sequence_id, 0)"#;
+
+    const MASTER_UPDATE: &str = r#"
+        WITH raw_data (holder, balance, rindexer_sequence_id) AS (
+            VALUES
+        ($1::TEXT, $2::NUMERIC, $3::NUMERIC)),
+        to_process AS (
+            SELECT DISTINCT ON (holder) *
+            FROM raw_data
+            ORDER BY holder, rindexer_sequence_id DESC
+        )
+UPDATE "test"."balances" am
+SET balance = tp.balance, rindexer_sequence_id = tp.rindexer_sequence_id
+FROM to_process tp
+WHERE am.holder = tp.holder
+  AND tp.rindexer_sequence_id > am.rindexer_sequence_id"#;
+
+    const MASTER_DELETE: &str = r#"
+        WITH raw_data (holder, balance, rindexer_sequence_id) AS (
+            VALUES
+        ($1::TEXT, $2::NUMERIC, $3::NUMERIC)),
+        to_process AS (
+            SELECT DISTINCT ON (holder) *
+            FROM raw_data
+            ORDER BY holder, rindexer_sequence_id DESC
+        )
+DELETE FROM "test"."balances" am
+USING to_process tp
+WHERE am.holder = tp.holder
+  AND tp.rindexer_sequence_id >= am.rindexer_sequence_id"#;
+
+    const TABLE: &str = "test.balances";
+    const GUARD: &str = "EXCLUDED.\"balance\" <= \"test\".\"balances\".\"balance\"";
+
+    fn col(
+        name: &str,
+        sql_type: BatchOperationSqlType,
+        behavior: BatchOperationColumnBehavior,
+        action: BatchOperationAction,
+        insert_default: Option<&str>,
+    ) -> DynamicColumnDefinition {
+        DynamicColumnDefinition::new(
+            name.to_string(),
+            EthereumSqlTypeWrapper::U64(1),
+            sql_type,
+            behavior,
+            action,
+        )
+        .with_insert_default(insert_default.map(str::to_string))
+    }
+
+    /// Custody-shaped row: keyed debit with a `set` column and a sequence.
+    fn arithmetic_row() -> Vec<DynamicColumnDefinition> {
+        vec![
+            col(
+                "network",
+                BatchOperationSqlType::Varchar,
+                BatchOperationColumnBehavior::Distinct,
+                BatchOperationAction::Where,
+                None,
+            ),
+            col(
+                "holder",
+                BatchOperationSqlType::Text,
+                BatchOperationColumnBehavior::Distinct,
+                BatchOperationAction::Where,
+                None,
+            ),
+            col(
+                "balance",
+                BatchOperationSqlType::Numeric,
+                BatchOperationColumnBehavior::Normal,
+                BatchOperationAction::Subtract,
+                Some("0"),
+            ),
+            col(
+                "last_block",
+                BatchOperationSqlType::Bigint,
+                BatchOperationColumnBehavior::Normal,
+                BatchOperationAction::Set,
+                None,
+            ),
+            col(
+                "rindexer_sequence_id",
+                BatchOperationSqlType::Numeric,
+                BatchOperationColumnBehavior::Sequence,
+                BatchOperationAction::Set,
+                None,
+            ),
+        ]
+    }
+
+    fn set_only_row() -> Vec<DynamicColumnDefinition> {
+        vec![
+            col(
+                "network",
+                BatchOperationSqlType::Varchar,
+                BatchOperationColumnBehavior::Distinct,
+                BatchOperationAction::Where,
+                None,
+            ),
+            col(
+                "holder",
+                BatchOperationSqlType::Text,
+                BatchOperationColumnBehavior::Distinct,
+                BatchOperationAction::Where,
+                None,
+            ),
+            col(
+                "name",
+                BatchOperationSqlType::Text,
+                BatchOperationColumnBehavior::Normal,
+                BatchOperationAction::Set,
+                None,
+            ),
+            col(
+                "rindexer_sequence_id",
+                BatchOperationSqlType::Numeric,
+                BatchOperationColumnBehavior::Sequence,
+                BatchOperationAction::Set,
+                None,
+            ),
+        ]
+    }
+
+    fn keyed_row() -> Vec<DynamicColumnDefinition> {
+        vec![
+            col(
+                "holder",
+                BatchOperationSqlType::Text,
+                BatchOperationColumnBehavior::Distinct,
+                BatchOperationAction::Where,
+                None,
+            ),
+            col(
+                "balance",
+                BatchOperationSqlType::Numeric,
+                BatchOperationColumnBehavior::Normal,
+                BatchOperationAction::Set,
+                None,
+            ),
+            col(
+                "rindexer_sequence_id",
+                BatchOperationSqlType::Numeric,
+                BatchOperationColumnBehavior::Sequence,
+                BatchOperationAction::Set,
+                None,
+            ),
+        ]
+    }
+
+    fn query_parts(statement: DynamicBatchStatement) -> (String, usize) {
+        match statement {
+            DynamicBatchStatement::Query { sql, params } => (sql, params.len()),
+            DynamicBatchStatement::CopyIn { .. } => panic!("expected a Query statement"),
+        }
+    }
+
+    /// Master's upsert text plus the deterministic conflict-key ORDER BY.
+    fn with_order_by(master: &str, order_by: &str) -> String {
+        master.replacen("\nON CONFLICT", &format!("\nORDER BY {order_by}\nON CONFLICT"), 1)
+    }
+
+    #[test]
+    fn empty_chunk_builds_nothing() {
+        for op in [
+            BatchOperationType::Upsert,
+            BatchOperationType::Insert,
+            BatchOperationType::Update,
+            BatchOperationType::Delete,
+        ] {
+            assert!(build_batch_statement(TABLE, op, &[], None).is_none());
+        }
+    }
+
+    #[test]
+    fn arithmetic_upsert_matches_master_plus_order_by() {
+        let statement = build_batch_statement(
+            TABLE,
+            BatchOperationType::Upsert,
+            &[arithmetic_row(), arithmetic_row()],
+            Some(GUARD),
+        )
+        .expect("statement");
+
+        let (sql, params) = query_parts(statement);
+        assert_eq!(params, 10, "two rows x five columns");
+        assert_eq!(sql, with_order_by(MASTER_UPSERT_ARITHMETIC, "tp.network, tp.holder"));
+    }
+
+    #[test]
+    fn set_only_upsert_matches_master_plus_order_by() {
+        let statement = build_batch_statement(
+            TABLE,
+            BatchOperationType::Upsert,
+            &[set_only_row(), set_only_row()],
+            None,
+        )
+        .expect("statement");
+
+        let (sql, params) = query_parts(statement);
+        assert_eq!(params, 8, "two rows x four columns");
+        assert_eq!(sql, with_order_by(MASTER_UPSERT_SET_ONLY, "tp.network, tp.holder"));
+    }
+
+    #[test]
+    fn update_matches_master_and_carries_where_clause() {
+        let statement =
+            build_batch_statement(TABLE, BatchOperationType::Update, &[keyed_row()], None)
+                .expect("statement");
+
+        let (sql, params) = query_parts(statement);
+        assert_eq!(params, 3);
+        assert_eq!(sql, MASTER_UPDATE);
+        assert!(
+            sql.ends_with(
+                "WHERE am.holder = tp.holder\n  AND tp.rindexer_sequence_id > am.rindexer_sequence_id"
+            ),
+            "{sql}"
+        );
+    }
+
+    #[test]
+    fn delete_matches_master_and_carries_where_clause() {
+        let statement =
+            build_batch_statement(TABLE, BatchOperationType::Delete, &[keyed_row()], None)
+                .expect("statement");
+
+        let (sql, params) = query_parts(statement);
+        assert_eq!(params, 3);
+        assert_eq!(sql, MASTER_DELETE);
+        assert!(
+            sql.ends_with(
+                "WHERE am.holder = tp.holder\n  AND tp.rindexer_sequence_id >= am.rindexer_sequence_id"
+            ),
+            "{sql}"
+        );
+    }
+
+    #[test]
+    fn insert_builds_copy_in_from_schema_types() {
+        let statement = build_batch_statement(
+            TABLE,
+            BatchOperationType::Insert,
+            &[set_only_row(), set_only_row()],
+            None,
+        )
+        .expect("statement");
+
+        let DynamicBatchStatement::CopyIn { table_name, column_names, column_types, rows } =
+            statement
+        else {
+            panic!("expected a CopyIn statement");
+        };
+
+        assert_eq!(table_name, TABLE, "COPY targets the unformatted table name, as before");
+        assert_eq!(column_names, ["network", "holder", "name", "rindexer_sequence_id"]);
+        assert_eq!(column_types, [Type::VARCHAR, Type::TEXT, Type::TEXT, Type::NUMERIC]);
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|row| row.len() == 4));
+    }
 }

@@ -7,10 +7,6 @@
 -------------------------------------------------
 - fix: custom-table operations that reference `$rindexer_block_timestamp` now hydrate missing log timestamps before any sink writes, leave progress unadvanced after a terminal resolution miss so the range can be retried safely, and never serialize a missing value as `NULL` or zero.
 
-- fix: reorg recovery now reverses custom-table operations that use `iterate`, including native and PostgreSQL JSONB tuple arrays, typed nested/indexed fields, and paired ERC-1155 `TransferBatch` values; rollback quiesces event writers, PostgreSQL changes are atomic, unequal arrays fail before deletion, and interrupted ClickHouse reversals resume from retained attempt-scoped snapshots.
-
-- Fix live event indexing stalling when a temporary RPC retry ceiling matches the last synced block.
-
 ### Features
 -------------------------------------------------
 
@@ -18,6 +14,21 @@
 -------------------------------------------------
 
 all release branches are deployed through `release/VERSION_NUMBER` branches
+
+# 0.43.1-beta - 0.43.2-beta - 13th September 2026
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.43.1
+
+- linux binary - https://github.com/joshstevens19/rindexer/releases/download/v0.43.1/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://github.com/joshstevens19/rindexer/releases/download/v0.43.1/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://github.com/joshstevens19/rindexer/releases/download/v0.43.1/rindexer_darwin-amd64.tar.gz
+- windows binary - https://github.com/joshstevens19/rindexer/releases/download/v0.43.1/rindexer_win32-amd64.zip
+
+### Bug fixes
+-------------------------------------------------
+- fix: **Atomic custom-table writes on the Postgres no-code path**: when Postgres is the sole raw-event sink, custom-table operations (upsert, insert, update, delete), their reorg journal rows, the raw event rows and the last-synced cursor now commit in one transaction; a crash, SIGTERM or deadlock mid-batch no longer leaves table effects (for example balance `add` upserts, or append-only insert rows) applied twice on retry. Multi-row upserts (no-code tables and the `create_batch_postgres_operation!` macro) order rows by their conflict key to avoid lock-order deadlocks within a statement. New metric `rindexer_atomic_batches_total{status,reason}`. The atomic path holds one pooled connection per in-flight batch from BEGIN to COMMIT: size `DATABASE_POOL_SIZE` at or above the number of concurrently indexing events when `tables:` are in use. `Tables::` log lines on this path describe statements staged in the batch transaction and repeat if the batch is retried; the `Failed query:` log line now always includes the SQL body; the `Shutdown - checkpointing block ... (mid-batch)` info line is no longer emitted (nothing is written while rows are resolved, and the `(last block written)` line covers the between-operation case); the atomic raw-insert COPY failure line now reads `Error writing binary data, aborting early: ...`; every Postgres error rindexer renders through its `PostgresError` type (setup, migrations, indexes, relationships, factory sync, table and raw-insert writes) now includes the server message and SQLSTATE on one line (for example `db error: ERROR: deadlock detected (40P01)`). ClickHouse/CSV-alongside, factory and streams/chat configs keep the previous at-least-once behavior.
+- fix: reorg recovery now reverses custom-table operations that use `iterate`, including native and PostgreSQL JSONB tuple arrays, typed nested/indexed fields, and paired ERC-1155 `TransferBatch` values; rollback quiesces event writers, PostgreSQL changes are atomic, unequal arrays fail before deletion, and interrupted ClickHouse reversals resume from retained attempt-scoped snapshots.
+- fix: live event indexing stalling when a temporary RPC retry ceiling matches the last synced block.
 
 # 0.43.0-beta - 17th August 2026
 

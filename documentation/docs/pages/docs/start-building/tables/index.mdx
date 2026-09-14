@@ -2710,6 +2710,32 @@ contracts:
 
 ---
 
+## Delivery Semantics
+
+An event takes the **atomic path** when all of the following hold: PostgreSQL is the only storage
+(no ClickHouse or CSV alongside), the contract has no `streams` or `chat` configured, the event is not
+the contract's `factory` discovery event (other events of a contract with a `factory` block still
+qualify), and batches commit serially (`callback_concurrency` left at its default of 1, or
+`index_event_in_order: true` with any concurrency). On that path rindexer commits each batch's table
+operations, their reorg journal rows, the raw event rows and the `last_synced_block` cursor in **one
+transaction**. Raw rows are always written for an event that drives a table, whether or not it is listed
+in `include_events`. A restart, crash or database error mid-batch rolls the whole batch back and the retry
+applies every operation exactly once: an `add` upsert never double-counts and an `insert` never leaves a
+duplicate row.
+
+When any condition fails (ClickHouse or CSV alongside PostgreSQL, `streams` or `chat` on the contract,
+the factory discovery event itself, or `callback_concurrency` above 1 without `index_event_in_order`),
+operations commit per statement and are at-least-once on retry: a failure between two statements re-runs
+the batch, so an `add` upsert may be applied twice.
+
+The atomic path holds one pooled connection per in-flight batch from `BEGIN` to `COMMIT`. Size
+`DATABASE_POOL_SIZE` at or above the number of concurrently indexing events when `tables` are in use.
+Every commit and every rollback after `BEGIN` is counted in `rindexer_atomic_batches_total` (see
+[Metrics](/docs/start-building/metrics#database-metrics)); an attempt that fails before `BEGIN`, such as a
+pool checkout timeout, is retried but not counted.
+
+---
+
 ## Validation Errors
 
 rindexer validates your configuration at startup and provides clear error messages:

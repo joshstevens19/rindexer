@@ -79,8 +79,11 @@ rindexer_rpc_request_duration_seconds_count{method="eth_getLogs",network="mainne
 | `rindexer_db_operations_total` | Counter | `operation`, `status` | Total database operations |
 | `rindexer_db_operation_duration_seconds` | Histogram | `operation` | Database operation latency |
 | `rindexer_db_pool_connections` | Gauge | `database`, `state` | Connection pool size (active/idle) |
+| `rindexer_atomic_batches_total` | Counter | `status`, `reason` | Atomic no-code batches (custom-table operations, journal, raw rows and cursor in one transaction) by outcome |
 
 **Operation types:** `query`, `insert`, `update`, `delete`, `batch_insert`, `batch_execute`
+
+**Atomic batch labels:** `status` is `committed` or `rolled_back`; `reason` is `ok` on commit and otherwise `deadlock`, `cursor_missing` or `error`. A `rolled_back` batch is harmless (nothing was written and the batch is retried), so alert on the rate of `reason="deadlock"` rather than on rollbacks as such. Recorded only on the Postgres-only custom-tables path (see [Delivery Semantics](/docs/start-building/tables#delivery-semantics)).
 
 **Histogram buckets:** 1ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s
 
@@ -182,6 +185,9 @@ histogram_quantile(0.95, rate(rindexer_db_operation_duration_seconds_bucket[5m])
 
 # Database error rate
 rate(rindexer_db_operations_total{status="error"}[5m])
+
+# Atomic batch deadlock rate (each one is a rolled back, retried batch)
+rate(rindexer_atomic_batches_total{reason="deadlock"}[5m])
 ```
 
 ### Stream Delivery
