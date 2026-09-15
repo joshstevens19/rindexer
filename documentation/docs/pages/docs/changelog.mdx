@@ -5,7 +5,6 @@
 
 ### Bug fixes
 -------------------------------------------------
-- fix: **Chain-wide `filter:` contracts with custom `tables:` no longer fail startup** with `contract '<Name>FilterFilter' not found in manifest` (regression in v0.43.2, regardless of `reorg_handling`). The reorg rollback-plan setup looked an event's contract up by its registry name, which carries the `Filter` suffix twice for filter contracts that declare tables (their manifest entry is renamed once while resolving column types and once more when the event registry is built) while the manifest is re-read from disk; the lookup now falls back to matching filter contracts with the suffixes stripped and refuses an ambiguous match.
 
 ### Features
 -------------------------------------------------
@@ -14,6 +13,20 @@
 -------------------------------------------------
 
 all release branches are deployed through `release/VERSION_NUMBER` branches
+
+# 0.43.3-beta - 15th September 2026
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.43.3
+
+- linux binary - https://github.com/joshstevens19/rindexer/releases/download/v0.43.3/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://github.com/joshstevens19/rindexer/releases/download/v0.43.3/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://github.com/joshstevens19/rindexer/releases/download/v0.43.3/rindexer_darwin-amd64.tar.gz
+- windows binary - https://github.com/joshstevens19/rindexer/releases/download/v0.43.3/rindexer_win32-amd64.zip
+
+### Bug fixes
+-------------------------------------------------
+- fix: **Chain-wide `filter:` contracts with custom `tables:` no longer fail startup** with `contract '<Name>FilterFilter' not found in manifest` (regression in v0.43.2, regardless of `reorg_handling`). The reorg rollback-plan setup looked an event's contract up by its registry name, which carries the `Filter` suffix twice for filter contracts that declare tables (their manifest entry is renamed once while resolving column types and once more when the event registry is built) while the manifest is re-read from disk; the lookup now falls back to matching filter contracts with the suffixes stripped and refuses an ambiguous match.
+
 
 # 0.43.1-beta - 0.43.2-beta - 13th September 2026
 
