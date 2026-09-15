@@ -483,6 +483,49 @@ fn collect_jsonb_tuple_element_types(
     }
 }
 
+/// Resolve the manifest contract behind a registry event's contract name.
+///
+/// Chain-wide `filter:` contracts are renamed with a `Filter` suffix when the event
+/// registry is built (`identify_and_modify_filter`), and a filter contract that declares
+/// `tables:` is renamed once more before that by `resolve_table_column_types`, so the
+/// registry may know a contract as `FPMMFilter` or `FPMMFilterFilter` while the manifest
+/// copies returned by `all_contracts()` carry the name with fewer suffixes. Match the exact
+/// name first; otherwise compare filter contracts with every trailing `Filter` removed on
+/// both sides, and refuse an ambiguous match rather than guess.
+fn find_manifest_contract(
+    manifest: &Manifest,
+    contract_name: &str,
+) -> anyhow::Result<Option<crate::manifest::contract::Contract>> {
+    let contracts = manifest.all_contracts();
+    if let Some(contract) = contracts.iter().find(|contract| contract.name == contract_name) {
+        return Ok(Some(contract.clone()));
+    }
+    let wanted = strip_filter_suffixes(contract_name);
+    let candidates: Vec<&crate::manifest::contract::Contract> = contracts
+        .iter()
+        .filter(|contract| contract.is_filter() && strip_filter_suffixes(&contract.name) == wanted)
+        .collect();
+    anyhow::ensure!(
+        candidates.len() <= 1,
+        "ambiguous filter contract for '{}': {:?}",
+        contract_name,
+        candidates.iter().map(|c| c.name.as_str()).collect::<Vec<_>>()
+    );
+    Ok(candidates.first().map(|contract| (*contract).clone()))
+}
+
+/// `FPMMFilterFilter` -> `FPMM`; names without the suffix are returned unchanged.
+fn strip_filter_suffixes(name: &str) -> &str {
+    let mut stripped = name;
+    while let Some(base) = stripped.strip_suffix("Filter") {
+        if base.is_empty() {
+            break;
+        }
+        stripped = base;
+    }
+    stripped
+}
+
 fn event_source_column_types(
     manifest: &Manifest,
     project_path: &Path,
@@ -492,10 +535,7 @@ fn event_source_column_types(
     let abi_items: Vec<ABIItem> = if contract_name == NATIVE_TRANSFER_CONTRACT_NAME {
         serde_json::from_str(NATIVE_TRANSFER_ABI)?
     } else {
-        let contract = manifest
-            .all_contracts()
-            .into_iter()
-            .find(|contract| contract.name == contract_name)
+        let contract = find_manifest_contract(manifest, contract_name)?
             .ok_or_else(|| anyhow::anyhow!("contract '{}' not found in manifest", contract_name))?;
         ABIItem::read_abi_items(project_path, &contract)?
     };
@@ -1573,6 +1613,123 @@ mod tests {
     use crate::manifest::contract::ReorgSafeDistance;
     use crate::provider::mock::MockChainProvider;
     use std::path::Path;
+
+    const FILTER_TABLES_MANIFEST: &str = r#"
+name: filter_tables
+project_type: no-code
+networks:
+  - name: polygon
+    chain_id: 137
+    rpc: https://polygon.rpc.example.com
+    reorg_handling:
+      enabled: true
+storage:
+  postgres:
+    enabled: true
+contracts:
+  - name: FPMM
+    details:
+      - network: polygon
+        start_block: "4023693"
+        end_block: "87106452"
+        filter:
+          - event_name: FPMMBuy
+    abi: ./abis/fpmm_v1.json
+    include_events:
+      - FPMMBuy
+  - name: Plain
+    details:
+      - network: polygon
+        address: "0x4d97dcd97ec945f40cf65f87097ace5ea0476045"
+        start_block: "4023686"
+    abi: ./abis/conditional_tokens_v1.json
+"#;
+
+    fn filter_tables_manifest() -> Manifest {
+        serde_yaml::from_str(FILTER_TABLES_MANIFEST).expect("test manifest parses")
+    }
+
+    #[test]
+    fn find_manifest_contract_matches_exact_names() {
+        let manifest = filter_tables_manifest();
+        assert_eq!(
+            find_manifest_contract(&manifest, "Plain").unwrap().map(|c| c.name),
+            Some("Plain".to_string())
+        );
+        assert_eq!(
+            find_manifest_contract(&manifest, "FPMM").unwrap().map(|c| c.name),
+            Some("FPMM".to_string())
+        );
+        assert!(find_manifest_contract(&manifest, "Missing").unwrap().is_none());
+    }
+
+    #[test]
+    fn find_manifest_contract_matches_filter_registry_name() {
+        // A filter contract without tables is renamed once when the event registry is
+        // built: the registry knows it as `FPMMFilter` while the manifest still says `FPMM`.
+        let manifest = filter_tables_manifest();
+        let found = find_manifest_contract(&manifest, "FPMMFilter")
+            .unwrap()
+            .expect("filter contract resolves");
+        assert_eq!(found.name, "FPMM");
+        assert!(
+            find_manifest_contract(&manifest, "PlainFilter").unwrap().is_none(),
+            "plain contracts never match a filter-derived name"
+        );
+    }
+
+    #[test]
+    fn find_manifest_contract_matches_twice_renamed_name_against_unrenamed_manifest() {
+        // The manifest handed to the reorg setup may still carry the original name while
+        // the registry already carries two suffixes.
+        let manifest = filter_tables_manifest();
+        let found =
+            find_manifest_contract(&manifest, "FPMMFilterFilter").unwrap().expect("resolves");
+        assert_eq!(found.name, "FPMM");
+        assert!(find_manifest_contract(&manifest, "PlainFilterFilter").unwrap().is_none());
+    }
+
+    #[test]
+    fn find_manifest_contract_refuses_ambiguous_filter_names() {
+        // `Foo` and `FooFilter` as two filter contracts both strip to `Foo`; guessing could
+        // pick the wrong ABI, so the resolver must error instead.
+        let mut manifest = filter_tables_manifest();
+        let mut twin = manifest.contracts[0].clone();
+        twin.name = "FPMMFilter".to_string();
+        manifest.contracts.push(twin);
+        let err = find_manifest_contract(&manifest, "FPMMFilterFilter").unwrap_err();
+        assert!(err.to_string().contains("ambiguous filter contract"), "{err}");
+        // exact matches still win over the fallback
+        assert_eq!(
+            find_manifest_contract(&manifest, "FPMMFilter").unwrap().map(|c| c.name),
+            Some("FPMMFilter".to_string())
+        );
+    }
+
+    #[test]
+    fn strip_filter_suffixes_removes_every_trailing_suffix() {
+        assert_eq!(strip_filter_suffixes("FPMMFilterFilter"), "FPMM");
+        assert_eq!(strip_filter_suffixes("FPMMFilter"), "FPMM");
+        assert_eq!(strip_filter_suffixes("FPMM"), "FPMM");
+        assert_eq!(strip_filter_suffixes("Filter"), "Filter");
+        assert_eq!(strip_filter_suffixes("FilterFilter"), "Filter");
+    }
+
+    #[test]
+    fn find_manifest_contract_matches_twice_renamed_filter_with_tables() {
+        // A filter contract WITH tables is renamed by resolve_table_column_types before the
+        // registry renames it again: manifest `FPMMFilter`, registry `FPMMFilterFilter`
+        // (the production schema polymarket_indexer_fpmm_filter_filter is that name).
+        let mut manifest = filter_tables_manifest();
+        assert!(manifest.contracts[0].identify_and_modify_filter());
+        assert_eq!(manifest.contracts[0].name, "FPMMFilter");
+        let found = find_manifest_contract(&manifest, "FPMMFilterFilter")
+            .unwrap()
+            .expect("twice-renamed filter contract resolves");
+        assert_eq!(found.name, "FPMMFilter");
+        // the fallback only applies to filter contracts
+        assert!(find_manifest_contract(&manifest, "PlainFilterFilter").unwrap().is_none());
+    }
 
     fn empty_sync_config() -> SyncConfig<'static> {
         SyncConfig {
