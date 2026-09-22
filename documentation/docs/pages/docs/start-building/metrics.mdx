@@ -72,6 +72,22 @@ rindexer_rpc_request_duration_seconds_sum{method="eth_getLogs",network="mainnet"
 rindexer_rpc_request_duration_seconds_count{method="eth_getLogs",network="mainnet"} 156
 ```
 
+### HyperSync Metrics
+
+Present on networks with `hypersync.head: true` (see [networks](/docs/start-building/yaml-config/networks#head)).
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `rindexer_hypersync_archive_height` | Gauge | `network` | Latest archive height pushed over `/height/sse` |
+| `rindexer_hypersync_height_stream_reconnects_total` | Counter | `network` | Height stream drops and reconnects |
+| `rindexer_hypersync_head_fallback_total` | Counter | `network`, `reason` | Head-range log requests served by RPC instead of HyperSync (`disconnected`, `timeout`, `query_error`) |
+
+**Example query** — share of head ranges served from HyperSync's validated blocks over the last hour:
+
+```
+1 - sum(rate(rindexer_hypersync_head_fallback_total[1h])) / sum(rate(rindexer_rpc_requests_total{method="hypersync_getLogs"}[1h]))
+```
+
 ### Database Metrics
 
 | Metric | Type | Labels | Description |
