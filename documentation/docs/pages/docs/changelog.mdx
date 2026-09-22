@@ -7,6 +7,7 @@
 -------------------------------------------------
 ### Features
 -------------------------------------------------
+- feat: `networks[].hypersync.head` — serve head-range logs from [Envio HyperSync](https://docs.envio.dev/docs/HyperSync/overview)'s root-validated blocks instead of `eth_getLogs`. rindexer subscribes to the endpoint's `/height/sse` stream and waits up to `hypersync.head_wait_ms` (default 5000) for HyperSync to ingest a block before fetching its logs; ranges HyperSync serves are complete for the blocks served. Ranges it cannot serve (stream disconnected, wait timed out, query error) go to RPC as before, counted by the new `rindexer_hypersync_head_fallback_total{network,reason}` metric; also adds `rindexer_hypersync_archive_height{network}` and `rindexer_hypersync_height_stream_reconnects_total{network}`. Off by default. Rust projects with a `hypersync` network must re-run `rindexer codegen typings` after upgrading (the generated `HypersyncConfig` literal now ends with `..Default::default()` so this is the last time a new knob requires it).
 
 ## Releases
 -------------------------------------------------

@@ -139,6 +139,35 @@ fn generate_network_hypersync_provider_code(network: &Network) -> Code {
         return Code::blank();
     };
 
+    // Only set fields are emitted, over `..Default::default()`, so generated code keeps
+    // compiling when `HypersyncConfig` grows a field.
+    let mut fields = vec![
+        format!("url: {},", env_or_literal_expr(&hypersync.url)),
+        format!("api_token: {},", env_or_literal_expr(&hypersync.api_token)),
+    ];
+    if let Some(max_block_range) = hypersync.max_block_range {
+        fields.push(format!("max_block_range: Some(U64::from({max_block_range})),"));
+    }
+    if let Some(stream_concurrency) = hypersync.stream_concurrency {
+        fields.push(format!("stream_concurrency: Some({stream_concurrency}),"));
+    }
+    if let Some(batch_size) = hypersync.batch_size {
+        fields.push(format!("batch_size: Some({batch_size}),"));
+    }
+    if let Some(max_batch_size) = hypersync.max_batch_size {
+        fields.push(format!("max_batch_size: Some({max_batch_size}),"));
+    }
+    if let Some(response_bytes_target) = hypersync.response_bytes_target {
+        fields.push(format!("response_bytes_target: Some({response_bytes_target}),"));
+    }
+    if let Some(head) = hypersync.head {
+        fields.push(format!("head: Some({head}),"));
+    }
+    if let Some(head_wait_ms) = hypersync.head_wait_ms {
+        fields.push(format!("head_wait_ms: Some({head_wait_ms}),"));
+    }
+    let fields = fields.join("\n                            ");
+
     Code::new(format!(
         r#"
             static {provider_name}_HYPERSYNC: OnceCell<Arc<dyn ChainProvider>> = OnceCell::const_new();
@@ -147,13 +176,8 @@ fn generate_network_hypersync_provider_code(network: &Network) -> Code {
                 {provider_name}_HYPERSYNC
                     .get_or_init(|| async {{
                         let hypersync_config = HypersyncConfig {{
-                            url: {url},
-                            api_token: {api_token},
-                            max_block_range: {hypersync_max_block_range},
-                            stream_concurrency: {stream_concurrency},
-                            batch_size: {batch_size},
-                            max_batch_size: {max_batch_size},
-                            response_bytes_target: {response_bytes_target},
+                            {fields}
+                            ..Default::default()
                         }};
                         let rpc_provider = {fn_name}_cache().await;
                         create_hypersync_provider(&hypersync_config, "{network_name}", {chain_id}, {network_max_block_range}, rpc_provider)
@@ -169,34 +193,6 @@ fn generate_network_hypersync_provider_code(network: &Network) -> Code {
         fn_name = network_provider_fn_name(network),
         network_name = network.name,
         chain_id = network.chain_id,
-        url = env_or_literal_expr(&hypersync.url),
-        api_token = env_or_literal_expr(&hypersync.api_token),
-        hypersync_max_block_range = if let Some(max_block_range) = hypersync.max_block_range {
-            format!("Some(U64::from({max_block_range}))")
-        } else {
-            "None".to_string()
-        },
-        stream_concurrency = if let Some(stream_concurrency) = hypersync.stream_concurrency {
-            format!("Some({stream_concurrency})")
-        } else {
-            "None".to_string()
-        },
-        batch_size = if let Some(batch_size) = hypersync.batch_size {
-            format!("Some({batch_size})")
-        } else {
-            "None".to_string()
-        },
-        max_batch_size = if let Some(max_batch_size) = hypersync.max_batch_size {
-            format!("Some({max_batch_size})")
-        } else {
-            "None".to_string()
-        },
-        response_bytes_target = if let Some(response_bytes_target) = hypersync.response_bytes_target
-        {
-            format!("Some({response_bytes_target})")
-        } else {
-            "None".to_string()
-        },
         network_max_block_range = if let Some(max_block_range) = network.max_block_range {
             format!("Some(U64::from({max_block_range}))")
         } else {
@@ -389,6 +385,10 @@ mod tests {
         assert!(code.contains("create_hypersync_provider(&hypersync_config, \"ethereum\", 1,"));
         assert!(code
             .contains(r#"Some(public_read_env_value("HYPERSYNC_API_TOKEN").unwrap_or("HYPERSYNC_API_TOKEN".to_string()))"#));
+        // unset knobs are left to `..Default::default()` so older generated code keeps
+        // compiling when the config grows
+        assert!(code.contains("..Default::default()"));
+        assert!(!code.contains("max_block_range: None"));
 
         // non-hypersync networks are unaffected
         assert!(code.contains("get_base_provider_cache()"));
@@ -420,6 +420,8 @@ mod tests {
             batch_size: Some(1000),
             max_batch_size: Some(100000),
             response_bytes_target: Some(400000),
+            head: Some(true),
+            head_wait_ms: Some(2000),
         });
 
         let code = generate_network_hypersync_provider_code(&network).to_string();
@@ -438,6 +440,9 @@ mod tests {
                             batch_size: Some(1000),
                             max_batch_size: Some(100000),
                             response_bytes_target: Some(400000),
+                            head: Some(true),
+                            head_wait_ms: Some(2000),
+                            ..Default::default()
                         };
                         let rpc_provider = get_ethereum_provider_cache().await;
                         create_hypersync_provider(&hypersync_config, "ethereum", 1, Some(U64::from(5000)), rpc_provider)

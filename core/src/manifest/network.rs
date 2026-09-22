@@ -75,6 +75,20 @@ pub struct HypersyncConfig {
     /// smaller, more parallel requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_bytes_target: Option<u64>,
+
+    /// Serve head-range logs from HyperSync too. rindexer subscribes to the endpoint's
+    /// `/height/sse` stream and waits (up to `head_wait_ms`) for HyperSync to ingest a
+    /// block before fetching its logs, so live ranges it serves come from
+    /// root-validated blocks. RPC still supplies the tip header and serves any range
+    /// HyperSync cannot (stream disconnected, wait timed out, query error). Defaults to
+    /// `false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<bool>,
+
+    /// With `head: true`, how long a head-range request waits for HyperSync to ingest
+    /// its last block before the range is served from RPC. Defaults to 5000.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_wait_ms: Option<u64>,
 }
 
 /// Accepts both plain numbers and strings. The `hypersync` field deserializes through a
@@ -461,6 +475,8 @@ mod tests {
         assert!(hypersync.url.is_none());
         assert!(hypersync.api_token.is_none());
         assert!(hypersync.max_block_range.is_none());
+        assert!(hypersync.head.is_none());
+        assert!(hypersync.head_wait_ms.is_none());
 
         let network: Network = serde_yaml::from_str(
             r#"
@@ -486,14 +502,23 @@ mod tests {
                 url: https://eth.hypersync.xyz
                 api_token: test-token
                 max_block_range: 100000
+                head: true
+                head_wait_ms: 2000
             "#,
         )
         .unwrap();
 
-        let hypersync = network.hypersync.expect("hypersync should be enabled");
+        let hypersync = network.hypersync.clone().expect("hypersync should be enabled");
         assert_eq!(hypersync.url.as_deref(), Some("https://eth.hypersync.xyz"));
         assert_eq!(hypersync.api_token.as_deref(), Some("test-token"));
         assert_eq!(hypersync.max_block_range, Some(U64::from(100000)));
+        assert_eq!(hypersync.head, Some(true));
+        assert_eq!(hypersync.head_wait_ms, Some(2000));
+
+        // Round-trips through the manifest writer (`rindexer add contract` etc.).
+        let yaml = serde_yaml::to_string(&network).unwrap();
+        assert!(yaml.contains("head: true"));
+        assert!(yaml.contains("head_wait_ms: 2000"));
     }
 
     #[test]
