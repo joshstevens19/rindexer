@@ -10,15 +10,15 @@ resolver = "2"
 
 [dependencies]
 # internal dependencies
-rindexer = { path = "../core" }
+rindexer = { workspace = true }
 
 # external dependencies
 alloy = { workspace = true }
 alloy-chains = { workspace = true } # pegged to version in "foundry-block-explorers"
-foundry-block-explorers = "0.22.0"
+foundry-block-explorers = "0.24.0"
 clap = { workspace = true }
 regex = { workspace = true }
-colored = "3.0.0"
+colored = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

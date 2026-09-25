@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 # internal dependencies
-rindexer = { path = "../../core" }
+rindexer = { workspace = true }
 
 # external dependencies
 tokio = { workspace = true }

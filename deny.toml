@@ -1,0 +1,15 @@
+[bans]
+multiple-versions = "warn"
+multiple-versions-include-dev = true
+wildcards = "allow"
+workspace-default-features = "allow"
+external-default-features = "allow"
+
+# The AWS SDK and Ethers still use HTTP 0.2 alongside HTTP 1.
+skip = [
+    { name = "http", version = "=0.2.12", reason = "AWS SDK and Ethers still require HTTP 0.2" },
+]
+
+[bans.workspace-dependencies]
+duplicates = "deny"
+unused = "deny"

@@ -20,7 +20,7 @@ hex = { workspace = true }
 ethers = { version = "2.0", features = ["ws", "rustls"] }
 tokio-postgres = { workspace = true }
 regex = { workspace = true }
-dotenvy = "0.15"
+dotenvy = { workspace = true }
 csv = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]

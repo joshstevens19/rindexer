@@ -17,7 +17,7 @@ mockito = "1.7"
 testcontainers = "0.27"
 testcontainers-modules = { version = "0.15", features = ["postgres", "clickhouse", "redis", "rabbitmq", "kafka"] }
 tokio-postgres = { workspace = true, features = ["with-serde_json-1"] }
-rust_decimal = { version = "1.41", features = ["db-tokio-postgres"] }
+rust_decimal = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 
 [dependencies]
@@ -32,14 +32,14 @@ bb8-postgres = "0.9.0"
 bb8-redis = "0.26"
 bytes = "1.10.1"
 chrono = { version = "0.4", features = ["serde"] }
-colored = "3"
+colored = { workspace = true }
 croner = "3"
 csv = { workspace = true }
 clickhouse = { version = "0.15.0", features = ["rustls-tls"] }
-dotenvy = "0.15"
+dotenvy = { workspace = true }
 futures = "0.3"
 hex = { workspace = true }
-hypersync-client = "1.4.0"
+hypersync-client = "1.4.1"
 lapin = "4"
 lazy_static = "1.5.0"
 lru = "0.18"
@@ -50,7 +50,7 @@ rand = "0.10"
 redis = { version = "1.2", features = ["streams"] }
 regex = { workspace = true }
 reqwest = { workspace = true, features = ["gzip"] }
-rust_decimal = { version = "1.41", features = ["db-tokio-postgres"] }
+rust_decimal = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
@@ -93,7 +93,7 @@ prometheus = { version = "0.14", default-features = false }
 # build
 jemallocator = { version = "0.6.1", package = "tikv-jemallocator", optional = true }
 jemalloc-ctl = { version = "0.6.1", package = "tikv-jemalloc-ctl", optional = true }
-foundry-compilers = "0.19.5"
+foundry-compilers = "0.21.0"
 alloy-chains = { workspace = true }
 
 # reth
