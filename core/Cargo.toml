@@ -39,7 +39,7 @@ clickhouse = { version = "0.15.0", features = ["rustls-tls"] }
 dotenvy = "0.15"
 futures = "0.3"
 hex = { workspace = true }
-hypersync-client = "1.4.0"
+hypersync-client = "1.4.1"
 lapin = "4"
 lazy_static = "1.5.0"
 lru = "0.18"
@@ -93,7 +93,7 @@ prometheus = { version = "0.14", default-features = false }
 # build
 jemallocator = { version = "0.6.1", package = "tikv-jemallocator", optional = true }
 jemalloc-ctl = { version = "0.6.1", package = "tikv-jemalloc-ctl", optional = true }
-foundry-compilers = "0.19.5"
+foundry-compilers = "0.21.0"
 alloy-chains = { workspace = true }
 
 # reth

@@ -77,7 +77,10 @@ pub struct NativeTransfersConfig {
     pub streams: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generate_csv: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_reorg_safe_distance"
+    )]
     pub reorg_safe_distance: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tables: Option<Vec<serde_json::Value>>,
@@ -99,13 +102,36 @@ pub struct ContractConfig {
     pub name: String,
     pub details: Vec<ContractDetail>,
     pub abi: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_reorg_safe_distance"
+    )]
     pub reorg_safe_distance: Option<serde_json::Value>,
     pub include_events: Option<Vec<EventConfig>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tables: Option<Vec<serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub streams: Option<serde_json::Value>,
+}
+
+/// Emit the manifest's bool-or-u64 setting as a YAML scalar even when serde_json
+/// has its `arbitrary_precision` feature enabled by another workspace crate.
+fn serialize_reorg_safe_distance<S>(
+    value: &Option<serde_json::Value>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match value {
+        None => serializer.serialize_none(),
+        Some(serde_json::Value::Bool(value)) => serializer.serialize_bool(*value),
+        Some(serde_json::Value::Number(value)) => match value.as_u64() {
+            Some(number) => serializer.serialize_u64(number),
+            None => serde::Serialize::serialize(value, serializer),
+        },
+        Some(value) => serde::Serialize::serialize(value, serializer),
+    }
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
