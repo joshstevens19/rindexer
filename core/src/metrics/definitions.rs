@@ -353,7 +353,7 @@ pub static STREAM_PUBLISH_DROPPED_TOTAL: Lazy<CounterVec> = Lazy::new(|| {
 // =============================================================================
 
 /// Latest archive height pushed by a HyperSync endpoint's `/height/sse` stream
-/// (`hypersync.head` networks only).
+/// (`hypersync.for: realtime` networks only).
 /// Labels: network
 pub static HYPERSYNC_ARCHIVE_HEIGHT: Lazy<GaugeVec> = Lazy::new(|| {
     register_gauge_vec!(
@@ -375,7 +375,7 @@ pub static HYPERSYNC_HEIGHT_STREAM_RECONNECTS_TOTAL: Lazy<CounterVec> = Lazy::ne
     .expect("failed to register HYPERSYNC_HEIGHT_STREAM_RECONNECTS_TOTAL")
 });
 
-/// Head-range log requests that `hypersync.head` handed to RPC instead of HyperSync.
+/// Head-range log requests that `hypersync.for: realtime` handed to RPC instead of HyperSync.
 /// Labels: network, reason (disconnected/timeout/query_error)
 pub static HYPERSYNC_HEAD_FALLBACK_TOTAL: Lazy<CounterVec> = Lazy::new(|| {
     register_counter_vec!(

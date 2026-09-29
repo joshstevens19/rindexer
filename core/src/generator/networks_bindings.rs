@@ -160,11 +160,8 @@ fn generate_network_hypersync_provider_code(network: &Network) -> Code {
     if let Some(response_bytes_target) = hypersync.response_bytes_target {
         fields.push(format!("response_bytes_target: Some({response_bytes_target}),"));
     }
-    if let Some(head) = hypersync.head {
-        fields.push(format!("head: Some({head}),"));
-    }
-    if let Some(head_wait_ms) = hypersync.head_wait_ms {
-        fields.push(format!("head_wait_ms: Some({head_wait_ms}),"));
+    if let Some(r#for) = hypersync.r#for {
+        fields.push(format!("r#for: Some(HypersyncFor::{for:?}),"));
     }
     let fields = fields.join("\n                            ");
 
@@ -289,7 +286,7 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
     if networks.iter().any(|network| network.hypersync.is_some()) {
         output.push_str(&Code::new(
             r#"
-    use rindexer::{hypersync::create_hypersync_provider, manifest::network::HypersyncConfig};
+    use rindexer::{hypersync::create_hypersync_provider, manifest::network::{HypersyncConfig, HypersyncFor}};
         "#
             .to_string(),
         ));
@@ -408,7 +405,7 @@ mod tests {
     fn generated_hypersync_provider_full_output() {
         use alloy::primitives::U64;
 
-        use crate::manifest::network::HypersyncConfig;
+        use crate::manifest::network::{HypersyncConfig, HypersyncFor};
 
         let mut network = test_network("ethereum", 1);
         network.max_block_range = Some(U64::from(5000));
@@ -420,8 +417,7 @@ mod tests {
             batch_size: Some(1000),
             max_batch_size: Some(100000),
             response_bytes_target: Some(400000),
-            head: Some(true),
-            head_wait_ms: Some(2000),
+            r#for: Some(HypersyncFor::Realtime),
         });
 
         let code = generate_network_hypersync_provider_code(&network).to_string();
@@ -440,8 +436,7 @@ mod tests {
                             batch_size: Some(1000),
                             max_batch_size: Some(100000),
                             response_bytes_target: Some(400000),
-                            head: Some(true),
-                            head_wait_ms: Some(2000),
+                            r#for: Some(HypersyncFor::Realtime),
                             ..Default::default()
                         };
                         let rpc_provider = get_ethereum_provider_cache().await;

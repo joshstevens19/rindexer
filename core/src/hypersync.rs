@@ -7,10 +7,10 @@
 //! HyperSync — every other request, and any log request past the archive height,
 //! delegates to the RPC provider.
 //!
-//! With `hypersync.head` the provider also serves head ranges. It subscribes to the
-//! endpoint's `/height/sse` stream, and a log request for a block the archive has not
-//! ingested yet waits (bounded) for the pushed height to cover it before querying
-//! HyperSync. HyperSync validates every block against its `receiptsRoot` before serving
+//! With `hypersync.for: realtime` the provider also serves head ranges. It subscribes to
+//! the endpoint's `/height/sse` stream, and a log request for a block the archive has
+//! not ingested yet waits (bounded) for the archive to cover it — pushed over the stream
+//! or seen by a poll running alongside it — before querying HyperSync. HyperSync validates every block against its `receiptsRoot` before serving
 //! it, so a range HyperSync serves is complete for the block it served — something an
 //! `eth_getLogs` response cannot attest. Ranges HyperSync cannot serve (stream
 //! disconnected, wait timed out, query error) go to RPC exactly as without the flag, and
@@ -39,7 +39,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
 use crate::event::RindexerEventFilter;
-use crate::manifest::network::HypersyncConfig;
+use crate::manifest::network::{HypersyncConfig, HypersyncFor};
 use crate::metrics::rpc as rpc_metrics;
 use crate::notifications::ChainStateNotification;
 use crate::provider::{ChainProvider, JsonRpcCachedProvider, ProviderError, RetryClientError};
@@ -63,10 +63,20 @@ const HEIGHT_CACHE_TTL: Duration = Duration::from_secs(2);
 /// client default of 10, with diminishing returns beyond.
 const DEFAULT_STREAM_CONCURRENCY: usize = 20;
 
-/// Default for `hypersync.head_wait_ms`: how long a head-range log request waits for the
-/// archive to ingest its last block before the range is served from RPC. Ingest lag is
+/// How long a head-range log request waits for the archive to ingest its last block
+/// before the range is served from RPC (`hypersync.for: realtime`). Ingest lag is
 /// normally well under a second; this only bites when HyperSync has stalled.
-const DEFAULT_HEAD_WAIT: Duration = Duration::from_millis(5000);
+const HEAD_WAIT: Duration = Duration::from_secs(5);
+
+/// While a head request waits on the stream, `/height` is also polled at this cadence.
+/// A stream that keeps its keep-alives flowing while its heights stop is the one failure
+/// the client's staleness detector cannot see; the poll covers it (the same reason
+/// HyperIndex polls alongside an unproven stream).
+const HEAD_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Per-request timeout for that poll, with no client retries: a poll that hangs must not
+/// outlive the wait it is helping.
+const HEAD_POLL_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Minimum interval between "HyperSync has not ingested block" warnings per network. A
 /// stalled archive would otherwise warn on every head request of every event stream.
@@ -79,7 +89,7 @@ pub struct HypersyncProvider {
     max_block_range: Option<U64>,
     stream_config: StreamConfig,
     height_cache: Mutex<Option<(Instant, u64)>>,
-    /// Head serving via `/height/sse`; only with `hypersync.head`.
+    /// Head serving via `/height/sse`; only with `hypersync.for: realtime`.
     head: Option<Head>,
 }
 
@@ -94,12 +104,11 @@ impl Debug for HypersyncProvider {
     }
 }
 
-/// Head serving state for one network (`hypersync.head`).
+/// Head serving state for one network (`hypersync.for: realtime`).
 struct Head {
     /// Started on the first head-range request rather than at provider creation, so a
     /// long backfill does not hold an idle stream open.
     feed: OnceLock<HeadFeed>,
-    /// From `hypersync.head_wait_ms`.
     wait: Duration,
     last_wait_warning: std::sync::Mutex<Option<Instant>>,
 }
@@ -242,15 +251,13 @@ pub async fn create_hypersync_provider(
         network_name, url, max_block_range
     );
 
-    let head = if config.head.unwrap_or(false) {
-        let wait = config.head_wait_ms.map(Duration::from_millis).unwrap_or(DEFAULT_HEAD_WAIT);
-        info!(
-            "HyperSync head serving enabled for network {} ({}/height/sse, head_wait_ms: {})",
-            network_name,
-            url,
-            wait.as_millis()
-        );
-        Some(Head { feed: OnceLock::new(), wait, last_wait_warning: std::sync::Mutex::new(None) })
+    let head = if config.r#for == Some(HypersyncFor::Realtime) {
+        info!("HyperSync serving the chain head for network {} ({}/height/sse)", network_name, url);
+        Some(Head {
+            feed: OnceLock::new(),
+            wait: HEAD_WAIT,
+            last_wait_warning: std::sync::Mutex::new(None),
+        })
     } else {
         None
     };
@@ -322,13 +329,23 @@ impl HypersyncProvider {
         }
     }
 
+    /// Polls `/height` (no client retries) and records the answer in the poll cache.
+    async fn poll_height(&self) -> Option<u64> {
+        let height = self.client.health_check(Some(HEAD_POLL_TIMEOUT)).await.ok()?;
+        *self.height_cache.lock().await = Some((Instant::now(), height));
+        Some(height)
+    }
+
     /// Whether HyperSync should serve a request ending at `to_block`.
     ///
-    /// Without `hypersync.head` this is [`covers_block`](Self::covers_block). With it, a
-    /// block the archive has not ingested yet is waited for while the height stream is
-    /// live, up to `head_wait_ms`, so head ranges are served from validated data rather
-    /// than handed to RPC the moment they are requested. Returns `false` (serve from RPC)
-    /// immediately while the stream is disconnected, and on timeout.
+    /// Without `hypersync.for: realtime` this is [`covers_block`](Self::covers_block).
+    /// With it, a block the archive has not ingested yet is waited for while the height
+    /// stream is live, up to [`HEAD_WAIT`], so head ranges are served from validated data
+    /// rather than handed to RPC the moment they are requested. `/height` is polled
+    /// alongside the stream during the wait, so a connected stream that has stopped
+    /// delivering cannot hold a request past the archive actually having the block.
+    /// Returns `false` (serve from RPC) immediately while the stream is disconnected,
+    /// and on timeout.
     async fn wait_for_coverage(&self, to_block: u64) -> bool {
         if self.covers_block(to_block).await {
             return true;
@@ -339,19 +356,31 @@ impl HypersyncProvider {
         let network = self.rpc.chain.to_string();
 
         let mut state = feed.state.clone();
-        let outcome = tokio::time::timeout(
-            head.wait,
-            state.wait_for(|s| match s {
-                HeadState::Connecting => false,
-                HeadState::Connected(height) => *height >= to_block,
-                HeadState::Disconnected => true,
-            }),
-        )
+        let on_stream = state.wait_for(|s| match s {
+            HeadState::Connecting => false,
+            HeadState::Connected(height) => *height >= to_block,
+            HeadState::Disconnected => true,
+        });
+        let on_poll = async {
+            loop {
+                tokio::time::sleep(HEAD_POLL_INTERVAL).await;
+                if self.poll_height().await.is_some_and(|h| h >= to_block) {
+                    return;
+                }
+            }
+        };
+
+        let outcome = tokio::time::timeout(head.wait, async {
+            tokio::select! {
+                stream = on_stream => stream.map(|s| matches!(*s, HeadState::Connected(_))).unwrap_or(false),
+                () = on_poll => true,
+            }
+        })
         .await;
 
         match outcome {
-            Ok(Ok(s)) if matches!(*s, HeadState::Connected(_)) => true,
-            Ok(_) => {
+            Ok(true) => true,
+            Ok(false) => {
                 // Disconnected mid-wait, or the feed task is gone: don't sit out the
                 // timeout on a stream nobody is writing to.
                 rpc_metrics::record_hypersync_head_fallback(&network, "disconnected");
@@ -512,7 +541,7 @@ impl ChainProvider for HypersyncProvider {
         self.rpc.get_chain_state_notification()
     }
 
-    // The tip header stays RPC-authoritative even with `hypersync.head`: the HyperSync
+    // The tip header stays RPC-authoritative even with `for: realtime`: the HyperSync
     // archive height can lag the chain head, and the header's hash, parent hash and
     // bloom drive reorg detection and the bloom shortcut. The pushed height only decides
     // when HyperSync can serve a log range.
@@ -546,8 +575,8 @@ impl ChainProvider for HypersyncProvider {
             None => None,
         };
 
-        // The archive lags the chain head by a few blocks. Without `hypersync.head`,
-        // near-tip requests (live indexing) go to the RPC node; with it they wait for
+        // The archive lags the chain head by a few blocks. With `for: backfill`, near-tip
+        // requests (live indexing) go to the RPC node; with `for: realtime` they wait for
         // HyperSync to ingest and validate the block first.
         if !self.wait_for_coverage(to_block).await {
             return self.rpc.get_logs(event_filter).await;
@@ -789,7 +818,7 @@ mod tests {
         let started = tokio::time::Instant::now();
         provider.get_logs(&head_filter(101)).await.unwrap();
 
-        assert_eq!(started.elapsed(), Duration::ZERO, "no wait without hypersync.head");
+        assert_eq!(started.elapsed(), Duration::ZERO, "no wait with for: backfill");
     }
 
     #[tokio::test(start_paused = true)]
@@ -823,7 +852,7 @@ mod tests {
         let logs = provider.get_logs(&head_filter(101)).await.unwrap();
 
         assert!(logs.is_empty(), "expected the mocked RPC response, got {logs:?}");
-        assert_eq!(started.elapsed(), Duration::from_millis(200), "should wait out head_wait_ms");
+        assert_eq!(started.elapsed(), Duration::from_millis(200), "should wait out the head wait");
     }
 
     #[tokio::test(start_paused = true)]
@@ -876,6 +905,59 @@ mod tests {
         let _head = pusher.await.unwrap();
     }
 
+    /// A stream that stays `Connected` but stops delivering must not hold a request:
+    /// the poll running alongside it sees the archive height and lets the request go.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn head_request_is_released_by_the_poll_when_the_stream_goes_quiet() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        // A `/height` endpoint that always answers 500.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind height listener");
+        let addr = listener.local_addr().expect("listener addr");
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf);
+                let body = r#"{"height":500}"#;
+                let _ = stream.write_all(
+                    format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}", body.len())
+                        .as_bytes(),
+                );
+            }
+        });
+
+        let (rpc, _asserter) = JsonRpcCachedProvider::mock_with_asserter(1);
+        let client = Client::builder()
+            .url(format!("http://{addr}"))
+            .api_token("00000000-0000-0000-0000-000000000000")
+            .max_num_retries(0)
+            .build()
+            .expect("building a client makes no network calls");
+        let provider = HypersyncProvider {
+            client,
+            rpc,
+            max_block_range: None,
+            stream_config: StreamConfig::default(),
+            height_cache: Mutex::new(None),
+            head: None,
+        };
+        let (provider, head) = with_head_feed(provider);
+        // Connected, but the stream never advances past 100.
+        head.send_replace(HeadState::Connected(100));
+        // Long enough that only the poll can end the wait before the timeout.
+        let provider = HypersyncProvider {
+            head: provider.head.map(|h| Head { wait: Duration::from_secs(5), ..h }),
+            ..provider
+        };
+
+        let started = Instant::now();
+        assert!(provider.wait_for_coverage(101).await, "the poll should have covered the block");
+        assert!(started.elapsed() >= HEAD_POLL_INTERVAL, "released before the first poll");
+        assert!(started.elapsed() < Duration::from_secs(5), "waited out the timeout instead");
+    }
+
     #[tokio::test]
     async fn covers_block_answers_from_pushed_height_without_polling() {
         let (provider, _asserter) = provider_with_unreachable_hypersync();
@@ -914,7 +996,7 @@ mod tests {
 
     /// The feed is not opened at provider creation; the first head-range request opens
     /// it. Against an unreachable endpoint the client reports a reconnect straight away,
-    /// so the request goes to RPC without waiting out `head_wait_ms`.
+    /// so the request goes to RPC without waiting out the head wait.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn head_feed_starts_on_first_head_request() {
         let (mut provider, _asserter) = provider_with_unreachable_hypersync();
