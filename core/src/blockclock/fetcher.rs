@@ -170,39 +170,44 @@ impl BlockFetcher {
     /// - Will not make fetches if the log already has a timestamp
     /// - Will sample block ranges where doing so will minimize networking time
     /// - Will use local-first compressed "delta run-encoded" block timestamps where possible
+    /// - Will preserve the input order when partial responses require multiple fetches
     pub async fn attach_log_timestamps(
         &self,
-        logs: Vec<Log>,
+        mut logs: Vec<Log>,
     ) -> Result<Vec<Log>, BlockFetcherError> {
-        let blocks_without_ts = logs
-            .iter()
-            .filter_map(|n| if n.block_timestamp.is_none() { n.block_number } else { None })
-            .collect::<Vec<_>>();
+        let mut previous_missing_blocks = None;
+        loop {
+            let mut blocks_without_ts = logs
+                .iter()
+                .filter_map(|n| if n.block_timestamp.is_none() { n.block_number } else { None })
+                .collect::<Vec<_>>();
 
-        if blocks_without_ts.is_empty() {
-            return Ok(logs);
-        };
+            if blocks_without_ts.is_empty() {
+                return Ok(logs);
+            }
 
-        let timestamps = self.get_blocks(&blocks_without_ts).await?;
-        let (logs_with_ts, logs_without_ts) = logs
-            .into_iter()
-            .map(|mut log| {
-                if let Some(block_number) = log.block_number {
-                    if let Some(timestamp) = timestamps.get(&block_number) {
-                        log.block_timestamp = Some(*timestamp);
+            blocks_without_ts.sort_unstable();
+            blocks_without_ts.dedup();
+            if previous_missing_blocks.as_ref() == Some(&blocks_without_ts) {
+                // Report the existing missing-block error so callers can apply their retry policy.
+                return Err(BlockFetcherError::MissingBlockInRange(
+                    self.provider.chain(),
+                    U64::from(blocks_without_ts[0]),
+                ));
+            }
+
+            let timestamps = self.get_blocks(&blocks_without_ts).await?;
+            for log in &mut logs {
+                if log.block_timestamp.is_none() {
+                    if let Some(block_number) = log.block_number {
+                        if let Some(timestamp) = timestamps.get(&block_number) {
+                            log.block_timestamp = Some(*timestamp);
+                        }
                     }
                 }
-                log
-            })
-            .partition::<Vec<_>, _>(|x| x.block_timestamp.is_some());
-
-        if !logs_without_ts.is_empty() {
-            let mut completed = Box::pin(self.attach_log_timestamps(logs_without_ts)).await?;
-            completed.extend(logs_with_ts);
-            return Ok(completed);
+            }
+            previous_missing_blocks = Some(blocks_without_ts);
         }
-
-        Ok(logs_with_ts)
     }
 }
 
@@ -434,6 +439,78 @@ mod tests {
         assert!(result
             .iter()
             .any(|l| l.block_number == Some(102) && l.block_timestamp == Some(1024)));
+    }
+
+    #[tokio::test]
+    async fn attach_timestamps_preserves_order_after_partial_fetch() {
+        let provider = MockChainProvider::new(1).with_block_batches(vec![
+            vec![make_block(100, 1000), make_block(200, 2000)],
+            vec![make_block(500, 5000)],
+        ]);
+        let fetcher = BlockFetcher::new(Some(1.0), Arc::new(provider));
+        let logs = vec![make_log(100, None), make_log(200, None), make_log(500, None)];
+
+        let result = fetcher.attach_log_timestamps(logs).await.unwrap();
+
+        assert_eq!(
+            result.iter().map(|log| log.block_number).collect::<Vec<_>>(),
+            vec![Some(100), Some(200), Some(500)]
+        );
+        assert_eq!(
+            result.iter().map(|log| log.block_timestamp).collect::<Vec<_>>(),
+            vec![Some(1000), Some(2000), Some(5000)]
+        );
+    }
+
+    #[tokio::test]
+    async fn attach_timestamps_does_not_overwrite_existing_timestamp_on_same_block() {
+        let provider = provider_with_blocks(vec![(100, 2000)]);
+        let fetcher = BlockFetcher::new(Some(1.0), provider);
+        let logs = vec![make_log(100, Some(1000)), make_log(100, None)];
+
+        let result = fetcher.attach_log_timestamps(logs).await.unwrap();
+
+        assert_eq!(
+            result.iter().map(|log| log.block_timestamp).collect::<Vec<_>>(),
+            vec![Some(1000), Some(2000)]
+        );
+    }
+
+    #[tokio::test]
+    async fn attach_timestamps_preserves_completed_timestamp_after_partial_fetch() {
+        let provider = MockChainProvider::new(1).with_block_batches(vec![
+            vec![make_block(300, 3010), make_block(100_000, 1_000_000)],
+            vec![
+                make_block(100, 1000),
+                make_block(200, 2000),
+                make_block(400, 4000),
+                make_block(500, 5000),
+            ],
+        ]);
+        let fetcher = BlockFetcher::new(Some(0.001), Arc::new(provider));
+        let logs = [100, 200, 300, 400, 500, 100_000]
+            .into_iter()
+            .map(|block| make_log(block, None))
+            .collect();
+
+        let result = fetcher.attach_log_timestamps(logs).await.unwrap();
+        let block_300 = result
+            .iter()
+            .find(|log| log.block_number == Some(300))
+            .and_then(|log| log.block_timestamp);
+
+        assert_eq!(block_300, Some(3010));
+    }
+
+    #[tokio::test]
+    async fn attach_timestamps_returns_error_when_provider_repeats_missing_blocks() {
+        let fetcher = BlockFetcher::new(Some(1.0), mock_provider());
+        let result = fetcher.attach_log_timestamps(vec![make_log(100, None)]).await;
+
+        assert!(matches!(
+            result,
+            Err(BlockFetcherError::MissingBlockInRange(_, block)) if block == U64::from(100)
+        ));
     }
 
     #[tokio::test]
