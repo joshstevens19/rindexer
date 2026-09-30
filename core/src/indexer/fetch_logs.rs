@@ -2002,17 +2002,25 @@ fn calculate_process_historic_log_to_block(
 mod tests {
     use super::*;
     use crate::blockclock::BlockClock;
+    use crate::event::callback_registry::EventCallbackRegistry;
+    use crate::event::config::{ContractEventProcessingConfig, EventProcessingConfig};
+    use crate::event::contract_setup::{AddressDetails, IndexingContractSetup, NetworkContract};
     use crate::event::RindexerEventFilter;
+    use crate::indexer::IndexingEventsProgressState;
+    use crate::manifest::config::Config;
+    use crate::manifest::network::AddressFiltering;
     use crate::provider::mock::MockChainProvider;
-    use crate::provider::ChainProvider;
+    use crate::provider::{ChainProvider, JsonRpcCachedProvider};
     use alloy::network::{AnyHeader, AnyRpcBlock, AnyRpcHeader, AnyTransactionReceipt};
     use alloy::primitives::Log as PrimitiveLog;
     use alloy::primitives::{Address, Bytes, TxHash};
     use alloy::rpc::types::trace::parity::LocalizedTransactionTrace;
     use alloy::rpc::types::BlockTransactions;
-    use alloy::rpc::types::Log;
+    use alloy::rpc::types::{Log, ValueOrArray};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
     use std::sync::{Arc, Mutex as StdMutex};
-    use tokio::sync::mpsc;
+    use tokio::sync::{mpsc, Notify};
     use tokio_util::sync::CancellationToken;
 
     #[derive(Debug)]
@@ -2221,6 +2229,82 @@ mod tests {
         }
     }
 
+    fn make_log_at_block_with_index(block_number: u64, log_index: u64) -> Log {
+        let mut log = make_log_at_block(block_number);
+        log.log_index = Some(log_index);
+        log
+    }
+
+    fn make_address_filter() -> RindexerEventFilter {
+        RindexerEventFilter::new_address_filter(
+            &B256::ZERO,
+            "TestEvent",
+            &AddressDetails {
+                address: ValueOrArray::Array(vec![
+                    Address::from([1u8; 20]),
+                    Address::from([2u8; 20]),
+                ]),
+                indexed_filters: None,
+            },
+            U64::from(100),
+            U64::from(500),
+        )
+        .unwrap()
+    }
+
+    async fn make_parallel_worker_config(
+        provider: Arc<JsonRpcCachedProvider>,
+    ) -> Arc<EventProcessingConfig> {
+        let network_contract = Arc::new(NetworkContract {
+            id: "test-network-contract".to_string(),
+            network: "test".to_string(),
+            indexing_contract_setup: IndexingContractSetup::Address(AddressDetails {
+                address: ValueOrArray::Array(vec![
+                    Address::from([1u8; 20]),
+                    Address::from([2u8; 20]),
+                ]),
+                indexed_filters: None,
+            }),
+            cached_provider: provider.clone(),
+            block_clock: BlockClock::new(None, None, provider),
+            decoder: Arc::new(|_, _| Arc::new(()) as Arc<dyn std::any::Any + Send + Sync>),
+            start_block: Some(U64::from(100)),
+            end_block: Some(U64::from(500)),
+            disable_logs_bloom_checks: false,
+        });
+
+        Arc::new(EventProcessingConfig::ContractEventProcessing(ContractEventProcessingConfig {
+            id: "test-event".to_string(),
+            project_path: PathBuf::new(),
+            indexer_name: "test-indexer".to_string(),
+            contract_name: "test-contract".to_string(),
+            topic_id: B256::ZERO,
+            event_name: "TestEvent".to_string(),
+            config: Config::default(),
+            network_contract,
+            timestamps: false,
+            start_block: U64::from(100),
+            end_block: U64::from(500),
+            registry: Arc::new(EventCallbackRegistry::new()),
+            progress: IndexingEventsProgressState::monitor(&[], &[], None).await,
+            postgres: None,
+            clickhouse: None,
+            csv_details: None,
+            stream_last_synced_block_file_path: None,
+            index_event_in_order: false,
+            live_indexing: false,
+            indexing_distance_from_head: U64::ZERO,
+            cancel_token: CancellationToken::new(),
+            tables: Arc::new(vec![]),
+            reorg_sender: None,
+            streams_clients: Arc::new(None),
+            contract_abi: None,
+            providers: Arc::new(HashMap::new()),
+            constants: Arc::new(HashMap::new()),
+            multicall_addresses: Arc::new(HashMap::new()),
+        }))
+    }
+
     fn make_block(number: u64) -> AnyRpcBlock {
         AnyRpcBlock::new(
             alloy::rpc::types::Block::new(
@@ -2283,6 +2367,93 @@ mod tests {
         let result = result.expect("should return next range");
         // Next from_block should be last_log.block_number + 1 = 176
         assert_eq!(result.next.from_block(), U64::from(176));
+    }
+
+    #[tokio::test]
+    async fn historic_address_chunk_merge_advances_past_highest_log() {
+        let (provider, asserter) = JsonRpcCachedProvider::mock_with_asserter_and_address_filtering(
+            1,
+            AddressFiltering::MaxAddressPerGetLogsRequest(1),
+        );
+        asserter.push_success(&vec![
+            make_log_at_block_with_index(100, 0),
+            make_log_at_block_with_index(500, 1),
+        ]);
+        asserter.push_success(&vec![make_log_at_block_with_index(200, 0)]);
+
+        let (tx, mut rx) = mpsc::channel(4);
+        let result = fetch_historic_logs_stream(
+            false,
+            BlockClock::new(None, None, Arc::new(MockChainProvider::new(1))),
+            provider.as_ref(),
+            &tx,
+            &B256::ZERO,
+            make_address_filter(),
+            None,
+            U64::from(500),
+            "test",
+        )
+        .await
+        .expect("historic fetch should return its next filter");
+
+        let fetched = rx
+            .recv()
+            .await
+            .expect("historic fetch should dispatch its result")
+            .expect("historic fetch should dispatch successful logs");
+        let positions = fetched
+            .logs
+            .iter()
+            .map(|log| (log.block_number.unwrap(), log.log_index.unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(positions, vec![(100, 0), (200, 0), (500, 1)]);
+        assert_eq!(result.next.from_block(), U64::from(501));
+    }
+
+    #[tokio::test]
+    async fn parallel_worker_address_chunk_merge_preserves_log_order() {
+        let (provider, asserter) = JsonRpcCachedProvider::mock_with_asserter_and_address_filtering(
+            1,
+            AddressFiltering::MaxAddressPerGetLogsRequest(1),
+        );
+        asserter.push_success(&vec![
+            make_log_at_block_with_index(100, 0),
+            make_log_at_block_with_index(500, 1),
+        ]);
+        asserter.push_success(&vec![make_log_at_block_with_index(200, 0)]);
+
+        let config = make_parallel_worker_config(provider).await;
+        let (tx, mut rx) = mpsc::channel(4);
+        parallel_worker(
+            config,
+            WorkerState {
+                sequence_id: 0,
+                filter: make_address_filter(),
+                max_block_range_limitation: None,
+                original_max_limit: None,
+            },
+            tx,
+            CancellationToken::new(),
+            Arc::new(AdaptiveConcurrency::new(1, 1, 1)),
+            Arc::new(AtomicUsize::new(1)),
+            Arc::new(Notify::new()),
+        )
+        .await;
+
+        let batch = rx.recv().await.expect("parallel worker should send a final batch");
+        assert!(batch.is_final);
+        let fetched = batch
+            .results
+            .into_iter()
+            .next()
+            .expect("parallel worker should return a result")
+            .expect("parallel worker should fetch logs");
+        let positions = fetched
+            .logs
+            .iter()
+            .map(|log| (log.block_number.unwrap(), log.log_index.unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(positions, vec![(100, 0), (200, 0), (500, 1)]);
     }
 
     #[tokio::test]
