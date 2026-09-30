@@ -477,6 +477,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn attach_timestamps_preserves_completed_timestamp_after_partial_fetch() {
+        let provider = MockChainProvider::new(1).with_block_batches(vec![
+            vec![make_block(300, 3010), make_block(100_000, 1_000_000)],
+            vec![
+                make_block(100, 1000),
+                make_block(200, 2000),
+                make_block(400, 4000),
+                make_block(500, 5000),
+            ],
+        ]);
+        let fetcher = BlockFetcher::new(Some(0.001), Arc::new(provider));
+        let logs = [100, 200, 300, 400, 500, 100_000]
+            .into_iter()
+            .map(|block| make_log(block, None))
+            .collect();
+
+        let result = fetcher.attach_log_timestamps(logs).await.unwrap();
+        let block_300 = result
+            .iter()
+            .find(|log| log.block_number == Some(300))
+            .and_then(|log| log.block_timestamp);
+
+        assert_eq!(block_300, Some(3010));
+    }
+
+    #[tokio::test]
     async fn attach_timestamps_returns_error_when_provider_repeats_missing_blocks() {
         let fetcher = BlockFetcher::new(Some(1.0), mock_provider());
         let result = fetcher.attach_log_timestamps(vec![make_log(100, None)]).await;
