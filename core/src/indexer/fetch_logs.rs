@@ -457,10 +457,12 @@ async fn fetch_historic_logs_stream<P: ChainProvider>(
                     }
                     Err(error) => {
                         let halved_to_block = halved_block_number(to_block, from_block);
-                        if halved_to_block >= to_block {
+                        if halved_to_block >= to_block && error.is_missing_block_in_range() {
                             sender.send(Err(Box::new(error)));
                             return None;
                         }
+                        // Provider failures may be transient even when the range cannot shrink.
+                        // Return that range for another fetch instead of dropping its logs.
                         return Some(ProcessHistoricLogsStreamResult {
                             next: current_filter
                                 .set_from_block(from_block)
@@ -2047,8 +2049,10 @@ mod tests {
         queried_ranges: Arc<StdMutex<Vec<(u64, u64)>>>,
         cancel_token: CancellationToken,
         fail_first_logs_request: bool,
+        fail_first_block_batch: bool,
         cancel_after_requests: usize,
         request_count: AtomicUsize,
+        block_batch_count: Arc<AtomicUsize>,
     }
 
     impl RecordingLiveProvider {
@@ -2062,8 +2066,10 @@ mod tests {
                 queried_ranges,
                 cancel_token,
                 fail_first_logs_request: false,
+                fail_first_block_batch: false,
                 cancel_after_requests: 1,
                 request_count: AtomicUsize::new(0),
+                block_batch_count: Arc::new(AtomicUsize::new(0)),
             }
         }
 
@@ -2128,6 +2134,12 @@ mod tests {
             block_numbers: &[U64],
             include_txs: bool,
         ) -> Result<Vec<AnyRpcBlock>, ProviderError> {
+            let block_call = self.block_batch_count.fetch_add(1, Ordering::SeqCst);
+            if self.fail_first_block_batch && block_call == 0 {
+                return Err(ProviderError::CustomError(
+                    "transient timestamp block RPC failure".to_string(),
+                ));
+            }
             self.inner.get_block_by_number_batch(block_numbers, include_txs).await
         }
 
@@ -2566,6 +2578,70 @@ mod tests {
             vec![(100, 110), (100, 105), (100, 102)],
             "timestamp retry should shrink until the minimum range, then stop"
         );
+    }
+
+    #[tokio::test]
+    async fn historic_timestamp_provider_error_retries_at_minimum_range() {
+        let queried_ranges = Arc::new(StdMutex::new(Vec::new()));
+        let cancel_token = CancellationToken::new();
+        let mut provider = RecordingLiveProvider::new(
+            MockChainProvider::new(1)
+                .with_logs(vec![make_log_at_block(100)])
+                .with_blocks(vec![make_block(100)]),
+            queried_ranges.clone(),
+            cancel_token.clone(),
+        );
+        provider.fail_first_block_batch = true;
+        provider.cancel_after_requests = usize::MAX;
+        let block_batch_count = Arc::clone(&provider.block_batch_count);
+        let provider = Arc::new(provider);
+        let block_clock = BlockClock::new(None, Some(1.0), provider.clone());
+        let (tx, mut rx) = mpsc::channel(4);
+        let filter = RindexerEventFilter::empty_for_test()
+            .set_from_block(U64::from(100))
+            .set_to_block(U64::from(102));
+
+        let first = fetch_historic_logs_stream(
+            true,
+            block_clock.clone(),
+            provider.as_ref(),
+            &tx,
+            &B256::ZERO,
+            filter,
+            None,
+            U64::from(102),
+            "test",
+        )
+        .await
+        .expect("the one-shot block RPC error should leave a retryable range");
+        assert_eq!(first.next.from_block(), U64::from(100));
+        assert_eq!(first.next.to_block(), U64::from(102));
+        assert!(rx.try_recv().is_err(), "the failed timestamp attempt must not dispatch logs");
+
+        let retry = fetch_historic_logs_stream(
+            true,
+            block_clock,
+            provider.as_ref(),
+            &tx,
+            &B256::ZERO,
+            first.next,
+            None,
+            U64::from(102),
+            "test",
+        )
+        .await
+        .expect("the timestamp retry should advance after the provider recovers");
+        let fetched = rx
+            .try_recv()
+            .expect("the successful retry should dispatch its logs")
+            .expect("the retry should dispatch a successful result");
+
+        assert_eq!(fetched.logs.len(), 1);
+        assert_eq!(fetched.logs[0].block_timestamp, Some(0));
+        assert_eq!(retry.next.from_block(), U64::from(101));
+        assert_eq!(block_batch_count.load(Ordering::SeqCst), 2);
+        assert_eq!(queried_ranges.lock().unwrap().as_slice(), &[(100, 102), (100, 102)]);
+        cancel_token.cancel();
     }
 
     #[tokio::test]
