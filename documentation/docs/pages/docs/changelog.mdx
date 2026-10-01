@@ -5,6 +5,7 @@
 
 ### Bug fixes
 -------------------------------------------------
+- fix: live indexing no longer marks a window synced when `eth_getLogs` returns no log for a tip block whose logs bloom says the stream can have events there; the window is re-asked up to four times (about one block) first. Upstreams that serve a block header before its logs, or a lagging upstream behind a load balancer, used to drop every event of one stream for that block with no error. New metric `rindexer_live_tip_empty_logs_total{network, outcome}`.
 
 ### Features
 -------------------------------------------------

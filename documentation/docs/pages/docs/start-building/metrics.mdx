@@ -101,6 +101,7 @@ rindexer_rpc_request_duration_seconds_count{method="eth_getLogs",network="mainne
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
 | `rindexer_reorgs_detected_total` | Counter | `network` | Chain reorganizations detected |
+| `rindexer_live_tip_empty_logs_total` | Counter | `network`, `outcome` | Empty `eth_getLogs` answers for a bloom-positive tip block: `retried` (window re-asked) or `gave_up` (empty answer accepted after the re-ask budget; compare the block with the chain) |
 | `rindexer_reorg_depth` | Gauge | `network` | Depth of last detected reorg |
 
 ### Build Info

@@ -32,6 +32,62 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
+/// Re-asks of a live window whose tip block is bloom-positive for the stream but whose
+/// `eth_getLogs` answer carried no log for it (see [`tip_empty_retry_target`]). Four re-asks with
+/// the delays of [`live_tip_empty_logs_retry_delay`] span about one Polygon block, so a bloom
+/// false positive costs the stream at most that much tip latency before the window is accepted
+/// as empty.
+pub(crate) const LIVE_TIP_EMPTY_LOGS_MAX_RETRIES: u32 = 4;
+
+/// Delay before re-ask number `attempt` (1-based): 200 ms, 400 ms, 600 ms, 800 ms.
+pub(crate) fn live_tip_empty_logs_retry_delay(attempt: u32) -> Duration {
+    Duration::from_millis(200 * u64::from(attempt.clamp(1, LIVE_TIP_EMPTY_LOGS_MAX_RETRIES)))
+}
+
+/// Whether `logs` carries at least one log for `block`.
+pub(crate) fn logs_cover_block(logs: &[Log], block: U64) -> bool {
+    logs.iter().any(|log| log.block_number.map(U64::from) == Some(block))
+}
+
+/// Decide whether an `eth_getLogs` answer for the live window `[from_block, to_block]` must be
+/// re-asked before the window is marked synced, and against which block.
+///
+/// An upstream that already serves a block header but not yet the block's logs, or a lagging
+/// upstream behind a load balancer, answers the tip window with no log and no error. Taking that
+/// answer advances the stream past the block and loses every event of the stream in it for good.
+/// The tip block's logs bloom has no false negatives, so when it says the stream can have logs in
+/// the block, an answer without a log for the block is suspect.
+///
+/// `pending` is the block already under re-ask with the number of re-asks made so far. A pending
+/// block that is still inside the window and still has no log in `logs` keeps being re-asked even
+/// after the tip moved on (the window grows, the block stays inside it). Otherwise the fresh tip
+/// block is suspect when the window reaches it, the stream's bloom checks are on, the bloom says
+/// the stream can have logs there (`tip_bloom_relevant`), and the answer has no log for it.
+/// Returns the suspect block with the re-asks made so far, or `None` when the answer can be trusted.
+pub(crate) fn tip_empty_retry_target(
+    pending: Option<(U64, u32)>,
+    from_block: U64,
+    to_block: U64,
+    tip_block: U64,
+    bloom_checks_disabled: bool,
+    tip_bloom_relevant: bool,
+    logs: &[Log],
+) -> Option<(U64, u32)> {
+    if let Some((block, attempts)) = pending {
+        if block >= from_block && block <= to_block && !logs_cover_block(logs, block) {
+            return Some((block, attempts));
+        }
+    }
+    if to_block == tip_block
+        && !bloom_checks_disabled
+        && tip_bloom_relevant
+        && !logs_cover_block(logs, tip_block)
+    {
+        return Some((tip_block, 0));
+    }
+    None
+}
+
 /// Metadata for a processed block, used for reorg detection via parent hash chain validation.
 #[allow(dead_code)]
 pub struct BlockMeta {
@@ -1105,6 +1161,9 @@ async fn live_indexing_stream(
 ) {
     let mut last_seen_block_number = last_seen_block_number;
     let mut log_response_to_large_to_block: Option<U64> = None;
+    // Block under re-ask after a bloom-positive tip block came back without a log for it, with
+    // the re-asks made so far (see `tip_empty_retry_target`).
+    let mut tip_empty_retry: Option<(U64, u32)> = None;
     let mut heartbeat = HeartbeatTracker::new(Duration::from_secs(300));
     let target_iteration_duration = Duration::from_millis(200);
 
@@ -1519,6 +1578,68 @@ async fn live_indexing_stream(
                                             // Drain any pending reth signals to avoid double recovery
                                             while reth_reorg_rx.try_recv().is_ok() {}
                                             continue;
+                                        }
+
+                                        // A tip block whose logs bloom says this stream can have
+                                        // logs in it, answered with no log for it, is re-asked a
+                                        // bounded number of times before the window is marked
+                                        // synced: an upstream that serves the header before the
+                                        // block's logs, or a lagging upstream, otherwise drops
+                                        // every event of this stream in that block silently.
+                                        let tip_block = U64::from(latest_block.header.number);
+                                        let tip_bloom_relevant = to_block == tip_block
+                                            && !disable_logs_bloom_checks
+                                            && is_relevant_block(
+                                                &contract_address,
+                                                topic_id,
+                                                &latest_block,
+                                            );
+                                        match tip_empty_retry_target(
+                                            tip_empty_retry,
+                                            from_block,
+                                            to_block,
+                                            tip_block,
+                                            disable_logs_bloom_checks,
+                                            tip_bloom_relevant,
+                                            &logs,
+                                        ) {
+                                            Some((block, attempts))
+                                                if attempts < LIVE_TIP_EMPTY_LOGS_MAX_RETRIES =>
+                                            {
+                                                tip_empty_retry = Some((block, attempts + 1));
+                                                metrics::record_live_tip_empty_logs(
+                                                    network, "retried",
+                                                );
+                                                debug!(
+                                                    "{} - {} - Block {} is bloom-positive for this stream but eth_getLogs returned no log for it (window {} - {}); re-asking {}/{} before marking it synced",
+                                                    info_log_name,
+                                                    IndexingEventProgressStatus::live_log(),
+                                                    block,
+                                                    from_block,
+                                                    to_block,
+                                                    attempts + 1,
+                                                    LIVE_TIP_EMPTY_LOGS_MAX_RETRIES
+                                                );
+                                                tokio::time::sleep(
+                                                    live_tip_empty_logs_retry_delay(attempts + 1),
+                                                )
+                                                .await;
+                                                continue;
+                                            }
+                                            Some((block, attempts)) => {
+                                                tip_empty_retry = None;
+                                                metrics::record_live_tip_empty_logs(
+                                                    network, "gave_up",
+                                                );
+                                                warn!(
+                                                    "{} - {} - Block {} stayed bloom-positive with no log for this stream after {} re-asks; accepting the empty answer (a bloom false positive, or a block the upstreams never served: compare with another environment or the chain)",
+                                                    info_log_name,
+                                                    IndexingEventProgressStatus::live_log(),
+                                                    block,
+                                                    attempts
+                                                );
+                                            }
+                                            None => tip_empty_retry = None,
                                         }
 
                                         last_seen_block_number = to_block;
@@ -3009,5 +3130,166 @@ mod tests {
             let next = next.expect("self-correction returns a fixed next filter");
             assert_eq!(next.next.from_block(), U64::from(200));
         }
+    }
+}
+
+#[cfg(test)]
+mod live_tip_empty_logs_tests {
+    use super::*;
+    use alloy::primitives::Log as PrimitiveLog;
+
+    fn log_at(block_number: u64) -> Log {
+        Log {
+            inner: PrimitiveLog { address: Default::default(), data: Default::default() },
+            block_hash: None,
+            block_number: Some(block_number),
+            block_timestamp: None,
+            transaction_hash: None,
+            transaction_index: None,
+            log_index: None,
+            removed: false,
+        }
+    }
+
+    #[test]
+    fn empty_answer_for_bloom_positive_tip_is_re_asked() {
+        let target = tip_empty_retry_target(
+            None,
+            U64::from(10),
+            U64::from(10),
+            U64::from(10),
+            false,
+            true,
+            &[],
+        );
+        assert_eq!(target, Some((U64::from(10), 0)));
+    }
+
+    #[test]
+    fn bloom_negative_tip_is_trusted() {
+        assert_eq!(
+            tip_empty_retry_target(
+                None,
+                U64::from(10),
+                U64::from(10),
+                U64::from(10),
+                false,
+                false,
+                &[]
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn disabled_bloom_checks_never_re_ask() {
+        assert_eq!(
+            tip_empty_retry_target(
+                None,
+                U64::from(10),
+                U64::from(10),
+                U64::from(10),
+                true,
+                true,
+                &[]
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn window_short_of_the_tip_is_trusted() {
+        // the window ends below the tip (max_block_range or reorg_safe_distance): nothing to check
+        assert_eq!(
+            tip_empty_retry_target(
+                None,
+                U64::from(5),
+                U64::from(9),
+                U64::from(10),
+                false,
+                true,
+                &[]
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn answer_with_a_log_for_the_tip_is_trusted() {
+        let logs = vec![log_at(10)];
+        assert_eq!(
+            tip_empty_retry_target(
+                None,
+                U64::from(8),
+                U64::from(10),
+                U64::from(10),
+                false,
+                true,
+                &logs
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn pending_block_keeps_being_re_asked_while_the_window_grows_without_it() {
+        // the tip moved to 11 and the answer carries 11's log but still nothing for 10
+        let logs = vec![log_at(11)];
+        let target = tip_empty_retry_target(
+            Some((U64::from(10), 2)),
+            U64::from(10),
+            U64::from(11),
+            U64::from(11),
+            false,
+            false,
+            &logs,
+        );
+        assert_eq!(target, Some((U64::from(10), 2)));
+    }
+
+    #[test]
+    fn pending_block_is_cleared_once_its_log_arrives() {
+        let logs = vec![log_at(10), log_at(11)];
+        assert_eq!(
+            tip_empty_retry_target(
+                Some((U64::from(10), 3)),
+                U64::from(10),
+                U64::from(11),
+                U64::from(11),
+                false,
+                false,
+                &logs,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn pending_block_outside_the_window_is_dropped() {
+        // the window moved past the block (it was accepted after the re-ask budget ran out)
+        assert_eq!(
+            tip_empty_retry_target(
+                Some((U64::from(10), 4)),
+                U64::from(11),
+                U64::from(12),
+                U64::from(12),
+                false,
+                false,
+                &[]
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn re_ask_delays_grow_and_stay_bounded() {
+        assert_eq!(live_tip_empty_logs_retry_delay(1), Duration::from_millis(200));
+        assert_eq!(live_tip_empty_logs_retry_delay(4), Duration::from_millis(800));
+        assert_eq!(live_tip_empty_logs_retry_delay(9), Duration::from_millis(800));
+        assert_eq!(live_tip_empty_logs_retry_delay(0), Duration::from_millis(200));
+        let total: u64 = (1..=LIVE_TIP_EMPTY_LOGS_MAX_RETRIES)
+            .map(|a| live_tip_empty_logs_retry_delay(a).as_millis() as u64)
+            .sum();
+        assert_eq!(total, 2000);
     }
 }

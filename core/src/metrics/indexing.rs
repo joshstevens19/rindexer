@@ -2,8 +2,9 @@
 
 use super::definitions::{
     ACTIVE_INDEXING_TASKS, BLOCKS_BEHIND, BLOCKS_INDEXED_TOTAL, EVENTS_PROCESSED_TOTAL,
-    LAST_SYNCED_BLOCK, LATEST_CHAIN_BLOCK, REORGS_DETECTED_TOTAL, REORG_CASCADE, REORG_DEPTH,
-    REORG_DETECTION_SOURCE, REORG_EVENTS_DELETED, REORG_HANDLING_DURATION,
+    LAST_SYNCED_BLOCK, LATEST_CHAIN_BLOCK, LIVE_TIP_EMPTY_LOGS_TOTAL, REORGS_DETECTED_TOTAL,
+    REORG_CASCADE, REORG_DEPTH, REORG_DETECTION_SOURCE, REORG_EVENTS_DELETED,
+    REORG_HANDLING_DURATION,
 };
 
 /// Record events being indexed for a contract/event pair.
@@ -101,4 +102,10 @@ pub fn record_reorg_detection_source(network: &str, source: &str) {
 /// Record a cascading reorg detected immediately after handling a previous reorg.
 pub fn record_reorg_cascade(network: &str) {
     REORG_CASCADE.with_label_values(&[network]).inc();
+}
+
+/// Record an empty live `eth_getLogs` answer for a bloom-positive tip block, by outcome
+/// (`retried` or `gave_up`).
+pub fn record_live_tip_empty_logs(network: &str, outcome: &str) {
+    LIVE_TIP_EMPTY_LOGS_TOTAL.with_label_values(&[network, outcome]).inc();
 }
