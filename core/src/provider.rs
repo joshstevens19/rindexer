@@ -60,6 +60,9 @@ use crate::{event::RindexerEventFilter, manifest::core::Manifest};
 /// `JsonRpcCachedProvider` is the production implementation (with caching,
 /// batching, metrics, etc.).  Tests can supply a [`MockChainProvider`] that
 /// returns canned data without touching the network.
+// `async_trait` expands every `async fn` into a `#[must_use]` boxed future; the methods already
+// return `Result`, which clippy on Rust 1.99 reports as a double `must_use`.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait ChainProvider: Send + Sync + Debug {
     fn chain(&self) -> Chain;

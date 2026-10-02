@@ -12,6 +12,10 @@ pub fn indexing_event_processing() {
     metrics::inc_active_tasks();
 }
 
+// `fetch_update` was renamed `try_update` in Rust 1.99 and the old name is deprecated there;
+// `try_update` does not exist on older toolchains, so the old name stays until the workspace
+// floor is 1.99.
+#[allow(deprecated)]
 pub fn indexing_event_processed() {
     // Skip the decrement at 0 so the unsigned counter can't underflow;
     if INDEXING_TASKS
