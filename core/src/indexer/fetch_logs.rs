@@ -44,6 +44,17 @@ pub(crate) fn live_tip_empty_logs_retry_delay(attempt: u32) -> Duration {
     Duration::from_millis(200 * u64::from(attempt.clamp(1, LIVE_TIP_EMPTY_LOGS_MAX_RETRIES)))
 }
 
+/// While a block is being re-asked, hold the live window at that block. Without this, a block
+/// that arrives during the re-asks joins the window and inherits the exhausted budget of the
+/// block before it: its own empty-but-bloom-positive answer would be accepted without a single
+/// re-ask. Holding the window lets each block be judged on its own once the pending one settles.
+pub(crate) fn pin_live_window_to_retry(to_block: U64, pending: Option<(U64, u32)>) -> U64 {
+    match pending {
+        Some((block, _)) if block < to_block => block,
+        _ => to_block,
+    }
+}
+
 /// Whether `logs` carries at least one log for `block`.
 pub(crate) fn logs_cover_block(logs: &[Log], block: U64) -> bool {
     logs.iter().any(|log| log.block_number.map(U64::from) == Some(block))
@@ -58,9 +69,10 @@ pub(crate) fn logs_cover_block(logs: &[Log], block: U64) -> bool {
 /// The tip block's logs bloom has no false negatives, so when it says the stream can have logs in
 /// the block, an answer without a log for the block is suspect.
 ///
-/// `pending` is the block already under re-ask with the number of re-asks made so far. A pending
-/// block that is still inside the window and still has no log in `logs` keeps being re-asked even
-/// after the tip moved on (the window grows, the block stays inside it). Otherwise the fresh tip
+/// `pending` is the block already under re-ask with the number of re-asks made so far. The live
+/// window is held at that block while it is pending ([`pin_live_window_to_retry`]), so a pending
+/// block that still has no log in `logs` keeps being re-asked until its budget is spent; the
+/// window check here is defence in depth should the window ever reach past it. Otherwise the fresh tip
 /// block is suspect when the window reaches it, the stream's bloom checks are on, the bloom says
 /// the stream can have logs there (`tip_bloom_relevant`), and the answer has no log for it.
 /// Returns the suspect block with the re-asks made so far, or `None` when the answer can be trusted.
@@ -1412,6 +1424,9 @@ async fn live_indexing_stream(
                             } else {
                                 safe_block_number
                             };
+                            // A block under re-ask keeps the window pinned to itself (see
+                            // `pin_live_window_to_retry`): later blocks wait their turn.
+                            let to_block = pin_live_window_to_retry(to_block, tip_empty_retry);
                             // The bloom-filter shortcut only applies when the
                             // single block we're about to fetch IS `latest_block`.
                             // With `reorg_safe_distance > 0` the processed block
@@ -3279,6 +3294,21 @@ mod live_tip_empty_logs_tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn window_is_held_at_the_block_under_re_ask() {
+        // block 100 is being re-asked; the tip moved to 101: the window stays [.., 100] so 101 is
+        // judged on its own afterwards instead of inheriting 100's exhausted budget
+        assert_eq!(
+            pin_live_window_to_retry(U64::from(101), Some((U64::from(100), 2))),
+            U64::from(100)
+        );
+        assert_eq!(
+            pin_live_window_to_retry(U64::from(100), Some((U64::from(100), 2))),
+            U64::from(100)
+        );
+        assert_eq!(pin_live_window_to_retry(U64::from(101), None), U64::from(101));
     }
 
     #[test]

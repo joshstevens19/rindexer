@@ -5,7 +5,7 @@
 
 ### Bug fixes
 -------------------------------------------------
-- fix: live indexing no longer marks a window synced when `eth_getLogs` returns no log for a tip block whose logs bloom says the stream can have events there; the window is re-asked up to four times (about one block) first. Upstreams that serve a block header before its logs, or a lagging upstream behind a load balancer, used to drop every event of one stream for that block with no error. New metric `rindexer_live_tip_empty_logs_total{network, outcome}`.
+- fix: live indexing no longer marks a window synced when `eth_getLogs` returns no log for a tip block whose logs bloom says the stream can have events there; the window is held at that block and re-asked up to four times (about one block) first, and blocks arriving meanwhile wait for their own check. Upstreams that serve a block header before its logs, or a lagging upstream behind a load balancer, used to drop every event of one stream for that block with no error. New metric `rindexer_live_tip_empty_logs_total{network, outcome}`.
 - fix: `cargo clippy -D warnings` is green again on Rust 1.99 (the deprecated `fetch_update` in the task tracker and the `async_trait` double `must_use` on `ChainProvider` are allowed with a note).
 
 ### Features
