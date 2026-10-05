@@ -106,9 +106,10 @@ Use an [Envio HyperSync](https://docs.envio.dev/docs/HyperSync/overview) endpoin
 which is significantly faster than `eth_getLogs` over RPC for backfills ([benchmarks](/docs/references/rpc-node-providers#hypersync)).
 
 The `rpc` field is still required: HyperSync only serves log data, so rindexer continues to use your RPC node for everything
-else: `eth_call`, transaction receipts, traces, latest block polling and live indexing at the chain head. If HyperSync is
-briefly behind the chain head or unavailable, rindexer automatically falls back to the RPC endpoint, so indexing always
-remains correct.
+else: `eth_call`, transaction receipts, traces and latest block polling. By default live indexing at the chain head also
+stays on RPC; set `for: realtime` (below) to serve head logs from HyperSync's validated blocks too. If HyperSync is
+unavailable, rindexer falls back to the RPC endpoint (after at most 5 seconds with `for: realtime`), so indexing always
+keeps moving.
 
 A HyperSync API token is required. You can create one for free at [envio.dev/app/api-tokens](https://envio.dev/app/api-tokens).
 rindexer reads it from `hypersync.api_token` or the `HYPERSYNC_API_TOKEN` / `ENVIO_API_TOKEN` environment variables.
@@ -146,12 +147,48 @@ networks:
     batch_size: 1000 // [!code focus] # optional, initial block span per internal request before density is measured
     max_batch_size: 100000 // [!code focus] # optional, cap per internal request; helps wide sparse ranges with data, hurts empty-heavy scans
     response_bytes_target: 400000 // [!code focus] # optional, bytes each internal response is sized towards
+    for: realtime // [!code focus] # optional, backfill (default) or realtime: also serve head-range logs from HyperSync's validated blocks
 ```
 
 If the network sets [max_block_range](#max_block_range), HyperSync requests use it too unless `hypersync.max_block_range`
 is set, so a small RPC limit will slow HyperSync down.
 
 In rust projects the data source is baked into the generated typings, so run `rindexer codegen typings` after changing `hypersync`.
+
+#### for
+
+`backfill` (the default) uses HyperSync for historical sync only: once rindexer reaches the chain head, logs come from
+`eth_getLogs` on your RPC node. An `eth_getLogs` response carries no proof of its own completeness — a node with a
+corrupted receipts store, or a load balancer mixing clients that disagree, returns fewer logs with a `200 OK` and no error
+([why nodes silently miss events](https://docs.envio.dev/blog/nodes-silently-miss-events)). HyperSync rebuilds every
+block's receipts and checks them against the header's `receiptsRoot` before serving, so a range HyperSync serves is
+complete for the block it served.
+
+`realtime` serves head-range logs from HyperSync as well. rindexer subscribes to the endpoint's `/height/sse` stream
+(opened on the first head request, not during backfill), and when the live loop asks for a block HyperSync has not
+ingested yet it waits for the archive to cover it — pushed over the stream, or seen by a `/height` poll that runs
+alongside the stream every second — for up to 5 seconds, instead of asking RPC straight away. Ingest lag is normally well
+under a second.
+
+What this does and does not guarantee:
+
+- A range served by HyperSync cannot be missing logs for the blocks it served.
+- A range is served by **RPC, exactly as with `backfill`**, when the height stream is disconnected (the client reconnects
+  with backoff; head requests do not wait during that time), when HyperSync has not ingested the block within 5 seconds,
+  or when the HyperSync query errors. `rindexer_hypersync_head_fallback_total{reason}` counts these, so you can see what
+  share of your head ranges were served verified.
+- Your RPC node still supplies the latest block header, so parent-hash reorg detection (`reorg_handling`),
+  `reorg_safe_distance` and the bloom-filter shortcut work as before. Note the bloom shortcut can skip a head block on the
+  RPC header's `logsBloom` alone; set `disable_logs_bloom_checks: true` if you want every head block to go through HyperSync.
+- HyperSync serves canonical data only and never marks logs `removed`, so the live loop's removed-logs reorg signal does
+  not fire for HyperSync-served ranges. Enable `reorg_handling` on the network alongside `for: realtime` so reorgs are
+  still detected from block hashes.
+
+Head latency is bounded by HyperSync's ingest and validation. Measured on Polygon, its height push trails a 100ms
+`eth_blockNumber` poll of a paid RPC by roughly 150ms at the median and up to ~0.75s at p99, before the log query itself.
+That is the trade: a few hundred milliseconds for a range you know is complete. Metrics: `rindexer_hypersync_archive_height`,
+`rindexer_hypersync_height_stream_reconnects_total`, `rindexer_hypersync_head_fallback_total` (see
+[metrics](/docs/start-building/metrics)).
 
 Timestamp indexing (`timestamps: true`) gets an extra speed boost with HyperSync enabled: block timestamps are joined into
 the log queries directly, so rindexer does not need to fetch blocks over RPC to stamp events.

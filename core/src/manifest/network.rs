@@ -75,6 +75,25 @@ pub struct HypersyncConfig {
     /// smaller, more parallel requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_bytes_target: Option<u64>,
+
+    /// Which part of indexing HyperSync serves logs for. Defaults to `backfill`.
+    #[serde(default, rename = "for", skip_serializing_if = "Option::is_none")]
+    pub r#for: Option<HypersyncFor>,
+}
+
+/// What `hypersync.for` selects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HypersyncFor {
+    /// Historical sync only; live indexing at the chain head stays on the `rpc`
+    /// endpoint. The default.
+    Backfill,
+    /// Historical sync and the chain head. rindexer subscribes to the endpoint's
+    /// `/height/sse` stream and waits (bounded) for HyperSync to ingest a block before
+    /// fetching its logs, so live ranges it serves come from root-validated blocks. RPC
+    /// still supplies the tip header and serves any range HyperSync cannot (stream
+    /// disconnected, wait timed out, query error).
+    Realtime,
 }
 
 /// Accepts both plain numbers and strings. The `hypersync` field deserializes through a
@@ -461,6 +480,7 @@ mod tests {
         assert!(hypersync.url.is_none());
         assert!(hypersync.api_token.is_none());
         assert!(hypersync.max_block_range.is_none());
+        assert!(hypersync.r#for.is_none());
 
         let network: Network = serde_yaml::from_str(
             r#"
@@ -486,14 +506,32 @@ mod tests {
                 url: https://eth.hypersync.xyz
                 api_token: test-token
                 max_block_range: 100000
+                for: realtime
             "#,
         )
         .unwrap();
 
-        let hypersync = network.hypersync.expect("hypersync should be enabled");
+        let hypersync = network.hypersync.clone().expect("hypersync should be enabled");
         assert_eq!(hypersync.url.as_deref(), Some("https://eth.hypersync.xyz"));
         assert_eq!(hypersync.api_token.as_deref(), Some("test-token"));
         assert_eq!(hypersync.max_block_range, Some(U64::from(100000)));
+        assert_eq!(hypersync.r#for, Some(HypersyncFor::Realtime));
+
+        // Round-trips through the manifest writer (`rindexer add contract` etc.).
+        let yaml = serde_yaml::to_string(&network).unwrap();
+        assert!(yaml.contains("for: realtime"));
+
+        let network: Network = serde_yaml::from_str(
+            r#"
+            name: ethereum
+            chain_id: 1
+            rpc: https://mainnet.gateway.tenderly.co
+            hypersync:
+                for: backfill
+            "#,
+        )
+        .unwrap();
+        assert_eq!(network.hypersync.unwrap().r#for, Some(HypersyncFor::Backfill));
     }
 
     #[test]

@@ -466,6 +466,17 @@ storage:
         assert!(diff.changes.iter().any(
             |c| matches!(c, ManifestChange::NetworkConfigChanged(name) if name == "ethereum")
         ));
+
+        // Changing `for` changes where head logs come from, so it restarts too.
+        let live_yaml = BASE_MANIFEST.replace(
+            "rpc: https://eth.rpc.example.com",
+            "rpc: https://eth.rpc.example.com\n    hypersync:\n      for: realtime",
+        );
+        let live = manifest_from_yaml(&live_yaml);
+        let diff = compute_diff(&new, &live);
+        assert!(diff.changes.iter().any(
+            |c| matches!(c, ManifestChange::NetworkConfigChanged(name) if name == "ethereum")
+        ));
     }
 
     #[test]
