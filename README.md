@@ -110,6 +110,9 @@ https://crates.io/crates/rindexer
 rindexer supports any EVM chain out of the box. If you have a custom chain, you can easily add support for it by
 adding the chain's RPC URL to the YAML configuration file and defining the chain ID. No code changes are required.
 
+For faster historical backfills, a network can also fetch event logs from [HyperSync](https://rindexer.xyz/docs/references/rpc-node-providers#hypersync)
+by adding `hypersync: true`. The RPC URL is still used for everything else.
+
 ## Code structure
 
 ### core

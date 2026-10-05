@@ -94,3 +94,34 @@ networks:
 ```
 
 and you are set to go. the rpc requests now will be redirected toward erpc and it will handle caching, failover, auto-batching, rate-limiting, auto-discovery of node providers, etc. behind the scenes.
+
+## HyperSync
+
+For historical event logs, rindexer can use [HyperSync](https://docs.envio.dev/docs/HyperSync/overview) instead of
+`eth_getLogs` on your RPC. It works on any [supported network](https://docs.envio.dev/docs/HyperSync/hypersync-supported-networks).
+The `rpc` field is still required, as rindexer uses it for everything else. See the
+[hypersync network config](/docs/start-building/yaml-config/networks#hypersync) for setup.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+  hypersync: true // [!code focus]
+```
+
+The [Open Indexer Benchmark](https://github.com/enviodev/open-indexer-benchmark), maintained by Envio, runs rindexer
+with both sources. Results as of 28 September 2026, in events per second:
+
+| Scenario | HyperSync | RPC |
+|---|---|---|
+| USDC transfers (insert only) | 91,874 | 8,108 |
+| rETH balances (aggregation) | 1,179 | 235 |
+| Safe factory registrations | 7,092 | 4,537 |
+| Allowance reads (`eth_call` per event) | 7,747 | 7,089 |
+
+The RPC rows use Envio's HyperRPC endpoint. The gap is smallest when indexing waits on `eth_call`, which always goes over RPC.
