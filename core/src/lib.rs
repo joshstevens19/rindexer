@@ -56,6 +56,7 @@ mod chat;
 pub mod event;
 pub mod notifications;
 pub use indexer::reorg::ReorgEvent;
+pub use indexer::tip_logs::SharedTipLogsSettings;
 pub use notifications::ChainStateNotification;
 pub mod blockclock;
 pub mod hypersync;

@@ -1,5 +1,7 @@
 use super::GENERATED_FILE_HEADER;
-use crate::{manifest::network::Network, types::code::Code};
+use crate::{
+    indexer::tip_logs::SharedTipLogsSettings, manifest::network::Network, types::code::Code,
+};
 
 fn network_provider_name(network: &Network) -> String {
     network_provider_name_from_name(&network.name)
@@ -63,7 +65,7 @@ fn generate_network_lazy_provider_code(network: &Network) -> Code {
         {network_name}
             .get_or_init(|| async {{
                 {reth_init_fn}
-                {client_fn}(&public_read_env_value("{network_url}").unwrap_or("{network_url}".to_string()), {chain_id}, {compute_units_per_second}, {max_block_range}, {block_poll_frq} {placeholder_headers}, {get_logs_settings}, {chain_state_notification})
+                {client_fn}(&public_read_env_value("{network_url}").unwrap_or("{network_url}".to_string()), {chain_id}, {compute_units_per_second}, {max_block_range}, {block_poll_frq} {placeholder_headers}, {get_logs_settings}, {chain_state_notification}, {shared_tip_logs})
                 .await
                 .expect("Error creating provider")
             }})
@@ -99,6 +101,10 @@ fn generate_network_lazy_provider_code(network: &Network) -> Code {
         placeholder_headers =
             if network.rpc.contains("shadow") { "" } else { ", HeaderMap::new()" },
         chain_state_notification = "chain_state_notification",
+        shared_tip_logs = match SharedTipLogsSettings::resolve(network) {
+            Some(settings) => format!("Some({settings:?})"),
+            None => "None".to_string(),
+        },
         reth_init_fn = generate_reth_init_fn(network),
     ))
 }
@@ -254,7 +260,8 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
         manifest::network::{AddressFiltering, BlockPollFrequency},
         provider::{ChainProvider, RindexerProvider, create_client, JsonRpcCachedProvider, RetryClientError},
         notifications::ChainStateNotification,
-        public_read_env_value
+        public_read_env_value,
+        SharedTipLogsSettings
     };
     use std::sync::Arc;
     use tokio::sync::OnceCell;
@@ -269,13 +276,14 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
         max_block_range: Option<U64>,
         address_filtering: Option<AddressFiltering>,
         chain_state_notification: Option<Sender<ChainStateNotification>>,
+        shared_tip_logs: Option<SharedTipLogsSettings>,
     ) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
         let mut header = HeaderMap::new();
         header.insert(
             "X-SHADOW-API-KEY",
             public_read_env_value("RINDEXER_PHANTOM_API_KEY").unwrap().parse().unwrap(),
         );
-        create_client(rpc_url, chain_id, compute_units_per_second, max_block_range, block_poll_frequency, header, address_filtering, chain_state_notification).await
+        create_client(rpc_url, chain_id, compute_units_per_second, max_block_range, block_poll_frequency, header, address_filtering, chain_state_notification, shared_tip_logs).await
     }
         "#
         .to_string(),
@@ -327,6 +335,7 @@ mod tests {
             reth: None,
             reorg_handling: None,
             hypersync: None,
+            shared_tip_logs: None,
         }
     }
 
@@ -451,6 +460,31 @@ mod tests {
         "#;
 
         assert_eq!(normalized(&code), normalized(expected));
+    }
+
+    #[test]
+    fn generated_networks_pass_shared_tip_logs_settings() {
+        use crate::manifest::network::SharedTipLogsConfig;
+
+        let mut disabled = test_network("base", 8453);
+        disabled.shared_tip_logs =
+            Some(SharedTipLogsConfig { enabled: false, ..SharedTipLogsConfig::default() });
+        let code = generate_networks_code(&[test_network("ethereum", 1), disabled]).to_string();
+
+        assert!(
+            code.contains("shared_tip_logs: Option<SharedTipLogsSettings>,"),
+            "the shadow client takes the settings, which keeps the import used:\n{code}"
+        );
+        assert!(
+            code.contains(
+                "chain_state_notification, Some(SharedTipLogsSettings { empty_retry_deadline_ms: 7000, cache_blocks: 32, bloom_trusted: true }))"
+            ),
+            "an enabled network renders its resolved settings:\n{code}"
+        );
+        assert!(
+            code.contains("chain_state_notification, None)"),
+            "a disabled network renders None:\n{code}"
+        );
     }
 
     #[test]

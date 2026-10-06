@@ -236,6 +236,7 @@ pub fn handle_new_command(
             multicall3_address: None,
             reorg_handling: None,
             hypersync: None,
+            shared_tip_logs: None,
         }],
         contracts: vec![Contract {
             name: "RocketPoolETH".to_string(),

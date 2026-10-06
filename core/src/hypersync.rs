@@ -28,6 +28,7 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 use crate::event::RindexerEventFilter;
+use crate::indexer::tip_logs::SharedTipLogs;
 use crate::manifest::network::HypersyncConfig;
 use crate::metrics::rpc as rpc_metrics;
 use crate::notifications::ChainStateNotification;
@@ -319,6 +320,10 @@ impl ChainProvider for HypersyncProvider {
 
     fn chain_state_notification(&self) -> Option<Sender<ChainStateNotification>> {
         self.rpc.get_chain_state_notification()
+    }
+
+    fn shared_tip_logs(&self) -> Option<Arc<SharedTipLogs>> {
+        self.rpc.shared_tip_logs()
     }
 
     // Head tracking stays RPC-authoritative: the HyperSync archive height lags the chain

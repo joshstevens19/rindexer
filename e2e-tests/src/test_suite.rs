@@ -40,6 +40,10 @@ pub struct NetworkConfig {
     pub rpc: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reorg_handling: Option<ReorgHandlingConfig>,
+    /// The `networks[].shared_tip_logs` stanza as written to the manifest (`enabled`,
+    /// `empty_retry_deadline_ms`, `cache_blocks`); omitted means enabled with the defaults.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shared_tip_logs: Option<serde_json::Value>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
