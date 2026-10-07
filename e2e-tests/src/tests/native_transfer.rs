@@ -80,6 +80,7 @@ fn native_transfer_csv_no_panic_test(
                 chain_id: 31337,
                 rpc: context.anvil.rpc_url.clone(),
                 reorg_handling: None,
+                shared_tip_logs: None,
             }],
             global: GlobalConfig { health_port: context.health_port },
             storage: StorageConfig {

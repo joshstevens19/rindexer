@@ -18,6 +18,7 @@ clap = { workspace = true }
 tempfile = { workspace = true }
 hex = { workspace = true }
 ethers = { version = "2.0", features = ["ws", "rustls"] }
+axum = "0.8"
 tokio-postgres = { workspace = true }
 regex = { workspace = true }
 dotenvy = "0.15"

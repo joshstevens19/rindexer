@@ -35,19 +35,6 @@ pub static EVENTS_PROCESSED_TOTAL: Lazy<CounterVec> = Lazy::new(|| {
     .expect("failed to register EVENTS_PROCESSED_TOTAL")
 });
 
-/// Empty `eth_getLogs` answers for a live window whose tip block is bloom-positive for the stream.
-/// `outcome` is `retried` (the window was re-asked) or `gave_up` (the re-ask budget ran out and
-/// the empty answer was accepted; compare the block with another environment or the chain).
-/// Labels: network, outcome
-pub static LIVE_TIP_EMPTY_LOGS_TOTAL: Lazy<CounterVec> = Lazy::new(|| {
-    register_counter_vec!(
-        "rindexer_live_tip_empty_logs_total",
-        "Empty eth_getLogs answers for a bloom-positive tip block, by outcome (retried, gave_up)",
-        &["network", "outcome"]
-    )
-    .expect("failed to register LIVE_TIP_EMPTY_LOGS_TOTAL")
-});
-
 /// Last synced block number per indexing target.
 /// Labels: network, contract, event
 pub static LAST_SYNCED_BLOCK: Lazy<GaugeVec> = Lazy::new(|| {
@@ -81,6 +68,99 @@ pub static BLOCKS_BEHIND: Lazy<GaugeVec> = Lazy::new(|| {
 pub static ACTIVE_INDEXING_TASKS: Lazy<Gauge> = Lazy::new(|| {
     register_gauge!("rindexer_active_indexing_tasks", "Number of currently active indexing tasks")
         .expect("failed to register ACTIVE_INDEXING_TASKS")
+});
+
+// =============================================================================
+// Shared Tip Logs Metrics
+// =============================================================================
+
+/// Unfiltered `eth_getLogs` calls issued by the shared tip-block fetcher.
+/// Labels: network, status (success/error/timeout)
+pub static SHARED_TIP_LOGS_REQUESTS_TOTAL: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
+        "rindexer_shared_tip_logs_requests_total",
+        "Unfiltered eth_getLogs calls issued by the shared tip-block fetcher, by status",
+        &["network", "status"]
+    )
+    .expect("failed to register SHARED_TIP_LOGS_REQUESTS_TOTAL")
+});
+
+/// Terminal state per head block scheduled by the shared tip-block fetcher.
+/// Labels: network, outcome (ready/empty_bloom_zero/empty_unverified/gave_up/error/hash_mismatch/invalidated)
+pub static SHARED_TIP_LOGS_BLOCKS_TOTAL: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
+        "rindexer_shared_tip_logs_blocks_total",
+        "Terminal state per head block scheduled by the shared tip-block fetcher, by outcome",
+        &["network", "outcome"]
+    )
+    .expect("failed to register SHARED_TIP_LOGS_BLOCKS_TOTAL")
+});
+
+/// Retries issued because a block with a non-zero logs bloom answered empty.
+/// Labels: network
+pub static SHARED_TIP_LOGS_EMPTY_RETRIES_TOTAL: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
+        "rindexer_shared_tip_logs_empty_retries_total",
+        "Retries issued because a block with a non-zero logs bloom answered empty",
+        &["network"]
+    )
+    .expect("failed to register SHARED_TIP_LOGS_EMPTY_RETRIES_TOTAL")
+});
+
+/// Blocks that became ready on a retry after an empty answer (the upstream served the header before its logs).
+/// Labels: network
+pub static SHARED_TIP_LOGS_RECOVERED_TOTAL: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
+        "rindexer_shared_tip_logs_recovered_total",
+        "Blocks that became ready on a retry after an empty answer",
+        &["network"]
+    )
+    .expect("failed to register SHARED_TIP_LOGS_RECOVERED_TOTAL")
+});
+
+/// Live stream windows served from the shared tip-block cache.
+/// Labels: network, mode (window/tip/prefix_rpc_plus_tip)
+pub static SHARED_TIP_LOGS_SERVED_TOTAL: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
+        "rindexer_shared_tip_logs_served_total",
+        "Live stream windows served from the shared tip-block cache, by mode",
+        &["network", "mode"]
+    )
+    .expect("failed to register SHARED_TIP_LOGS_SERVED_TOTAL")
+});
+
+/// Live stream windows that used their own `eth_getLogs` instead of the shared cache.
+/// Labels: network, reason (gave_up/error/hash_mismatch/wait_timeout/not_scheduled)
+pub static SHARED_TIP_LOGS_FALLBACKS_TOTAL: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
+        "rindexer_shared_tip_logs_fallbacks_total",
+        "Live stream windows that used their own eth_getLogs instead of the shared cache, by reason",
+        &["network", "reason"]
+    )
+    .expect("failed to register SHARED_TIP_LOGS_FALLBACKS_TOTAL")
+});
+
+/// Seconds from the first observation of a head block to its terminal state.
+/// Labels: network
+pub static SHARED_TIP_LOGS_FETCH_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "rindexer_shared_tip_logs_fetch_seconds",
+        "Seconds from the first observation of a head block to its terminal state",
+        &["network"],
+        vec![0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 12.0]
+    )
+    .expect("failed to register SHARED_TIP_LOGS_FETCH_SECONDS")
+});
+
+/// Head blocks resident in the shared tip-block cache.
+/// Labels: network
+pub static SHARED_TIP_LOGS_CACHE_BLOCKS: Lazy<GaugeVec> = Lazy::new(|| {
+    register_gauge_vec!(
+        "rindexer_shared_tip_logs_cache_blocks",
+        "Head blocks resident in the shared tip-block cache",
+        &["network"]
+    )
+    .expect("failed to register SHARED_TIP_LOGS_CACHE_BLOCKS")
 });
 
 // =============================================================================

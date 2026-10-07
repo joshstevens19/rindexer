@@ -311,6 +311,53 @@ networks:
   disable_logs_bloom_checks: true // [!code focus]
 ```
 
+### shared_tip_logs
+
+:::info
+This field is optional. Omitted means enabled with the defaults below.
+:::
+
+Each live stream used to issue its own `eth_getLogs` for every new tip block. With `shared_tip_logs` each new tip
+block is read once per network with an unfiltered `eth_getLogs` and every stream filters that shared answer locally,
+so a network with many streams makes one call per block instead of one per stream. A block whose header has a
+non-zero logs bloom is re-asked while the upstream still answers empty (it has not indexed the block yet), and a
+block whose header bloom is zero costs no call at all.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+  shared_tip_logs: // [!code focus]
+    enabled: true // [!code focus]
+    empty_retry_deadline_ms: 7000 // [!code focus]
+    cache_blocks: 32 // [!code focus]
+```
+
+- `enabled` (default `true`): `false` restores the per-stream tip `eth_getLogs` calls on this network, and the
+  `rindexer_shared_tip_logs_*` metrics stay at zero for it.
+- `empty_retry_deadline_ms` (default `7000`): the budget, from the first observation of a head block, for a block
+  whose header has a non-zero logs bloom but answers empty, with at most 8 attempts. Past it the block is given up
+  with a warning naming it, and every stream fetches it once on its own.
+- `cache_blocks` (default `32`): recent tip blocks kept resident per network.
+
+On a network with `disable_logs_bloom_checks: true` no header bloom is trusted: every tip block is fetched, and an
+empty answer is accepted without retry. The shared read still removes the per-stream tip calls there, but it
+cannot tell an empty block from an upstream that has not indexed it yet.
+
+Memory: the cache holds at most `cache_blocks` blocks of logs per network. On a busy network such as Polygon,
+where a block carries 1,500 to 3,000 logs, 32 blocks are about 50 to 100 MB; quiet networks hold a few MB.
+
+Errors, timeouts and answers for a different block hash are re-asked at most 3 times; an empty answer for a
+block whose bloom is non-zero is re-asked up to 8 times within `empty_retry_deadline_ms`. A provider that rejects
+the unfiltered single-block `eth_getLogs` (for example a result-size cap) shows up as
+`rindexer_shared_tip_logs_fallbacks_total{reason="error"}` rising on every block; set `enabled: false` for that
+network so its streams keep their own filtered calls.
+
 ### multicall3_address
 
 :::info

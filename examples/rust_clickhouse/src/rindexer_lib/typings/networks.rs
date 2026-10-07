@@ -5,7 +5,7 @@
 
 use alloy::{primitives::U64, transports::http::reqwest::header::HeaderMap};
 use rindexer::{
-    lazy_static,
+    SharedTipLogsSettings, lazy_static,
     manifest::network::{AddressFiltering, BlockPollFrequency},
     notifications::ChainStateNotification,
     provider::{
@@ -26,6 +26,7 @@ async fn create_shadow_client(
     max_block_range: Option<U64>,
     address_filtering: Option<AddressFiltering>,
     chain_state_notification: Option<Sender<ChainStateNotification>>,
+    shared_tip_logs: Option<SharedTipLogsSettings>,
 ) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
     let mut header = HeaderMap::new();
     header.insert(
@@ -41,6 +42,7 @@ async fn create_shadow_client(
         header,
         address_filtering,
         chain_state_notification,
+        shared_tip_logs,
     )
     .await
 }
@@ -62,6 +64,11 @@ pub async fn get_ethereum_provider_cache() -> Arc<JsonRpcCachedProvider> {
                 HeaderMap::new(),
                 None,
                 chain_state_notification,
+                Some(SharedTipLogsSettings {
+                    empty_retry_deadline_ms: 7000,
+                    cache_blocks: 32,
+                    bloom_trusted: true,
+                }),
             )
             .await
             .expect("Error creating provider")
