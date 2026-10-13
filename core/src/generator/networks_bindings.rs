@@ -96,8 +96,11 @@ fn generate_network_lazy_provider_code(network: &Network) -> Code {
         } else {
             "None".to_string()
         },
-        client_fn =
-            if network.rpc.contains("shadow") { "create_shadow_client" } else { "create_client" },
+        client_fn = if network.rpc.contains("shadow") {
+            "create_shadow_client"
+        } else {
+            "create_client_with_shared_tip_logs"
+        },
         placeholder_headers =
             if network.rpc.contains("shadow") { "" } else { ", HeaderMap::new()" },
         chain_state_notification = "chain_state_notification",
@@ -258,7 +261,7 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
     use rindexer::{
         lazy_static,
         manifest::network::{AddressFiltering, BlockPollFrequency},
-        provider::{ChainProvider, RindexerProvider, create_client, JsonRpcCachedProvider, RetryClientError},
+        provider::{ChainProvider, RindexerProvider, create_client_with_shared_tip_logs, JsonRpcCachedProvider, RetryClientError},
         notifications::ChainStateNotification,
         public_read_env_value,
         SharedTipLogsSettings
@@ -283,7 +286,7 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
             "X-SHADOW-API-KEY",
             public_read_env_value("RINDEXER_PHANTOM_API_KEY").unwrap().parse().unwrap(),
         );
-        create_client(rpc_url, chain_id, compute_units_per_second, max_block_range, block_poll_frequency, header, address_filtering, chain_state_notification, shared_tip_logs).await
+        create_client_with_shared_tip_logs(rpc_url, chain_id, compute_units_per_second, max_block_range, block_poll_frequency, header, address_filtering, chain_state_notification, shared_tip_logs).await
     }
         "#
         .to_string(),

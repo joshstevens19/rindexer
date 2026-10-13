@@ -115,7 +115,6 @@ mod tests {
             Default::default(),
             None,
             None,
-            None,
         )
         .await
         .unwrap()

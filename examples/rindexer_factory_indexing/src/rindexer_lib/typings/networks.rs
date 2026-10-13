@@ -9,7 +9,8 @@ use rindexer::{
     manifest::network::{AddressFiltering, BlockPollFrequency},
     notifications::ChainStateNotification,
     provider::{
-        create_client, ChainProvider, JsonRpcCachedProvider, RetryClientError, RindexerProvider,
+        create_client_with_shared_tip_logs, ChainProvider, JsonRpcCachedProvider, RetryClientError,
+        RindexerProvider,
     },
     public_read_env_value, SharedTipLogsSettings,
 };
@@ -33,7 +34,7 @@ async fn create_shadow_client(
         "X-SHADOW-API-KEY",
         public_read_env_value("RINDEXER_PHANTOM_API_KEY").unwrap().parse().unwrap(),
     );
-    create_client(
+    create_client_with_shared_tip_logs(
         rpc_url,
         chain_id,
         compute_units_per_second,
@@ -56,7 +57,7 @@ pub async fn get_ethereum_provider_cache() -> Arc<JsonRpcCachedProvider> {
         .get_or_init(|| async {
             let chain_state_notification = None;
 
-            create_client(
+            create_client_with_shared_tip_logs(
                 &public_read_env_value("https://mainnet.gateway.tenderly.co")
                     .unwrap_or("https://mainnet.gateway.tenderly.co".to_string()),
                 1,
@@ -88,7 +89,7 @@ pub async fn get_base_provider_cache() -> Arc<JsonRpcCachedProvider> {
         .get_or_init(|| async {
             let chain_state_notification = None;
 
-            create_client(
+            create_client_with_shared_tip_logs(
                 &public_read_env_value("https://mainnet.base.org")
                     .unwrap_or("https://mainnet.base.org".to_string()),
                 8453,

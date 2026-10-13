@@ -1204,8 +1204,39 @@ pub fn validate_manifest_network_rpc_urls(manifest: &Manifest) -> Result<(), Ret
     Ok(())
 }
 
+/// Creates a network provider without the shared tip-block log fetch: its live streams issue
+/// their own tip `eth_getLogs`. Kept with its pre-0.43.5 signature so a `networks.rs` generated
+/// by an earlier version keeps compiling; regenerated typings call
+/// [`create_client_with_shared_tip_logs`] and pass the network's `shared_tip_logs` settings.
 #[allow(clippy::too_many_arguments)]
 pub async fn create_client(
+    rpc_url: &str,
+    chain_id: u64,
+    compute_units_per_second: Option<u64>,
+    max_block_range: Option<U64>,
+    block_poll_frequency: Option<BlockPollFrequency>,
+    custom_headers: HeaderMap,
+    address_filtering: Option<AddressFiltering>,
+    chain_state_notification: Option<Sender<ChainStateNotification>>,
+) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
+    create_client_with_shared_tip_logs(
+        rpc_url,
+        chain_id,
+        compute_units_per_second,
+        max_block_range,
+        block_poll_frequency,
+        custom_headers,
+        address_filtering,
+        chain_state_notification,
+        None,
+    )
+    .await
+}
+
+/// [`create_client`] plus the network's resolved `shared_tip_logs` settings (`None` disables the
+/// shared tip-block log fetch for this provider).
+#[allow(clippy::too_many_arguments)]
+pub async fn create_client_with_shared_tip_logs(
     rpc_url: &str,
     chain_id: u64,
     compute_units_per_second: Option<u64>,
@@ -1372,7 +1403,7 @@ impl CreateNetworkProvider {
             )?;
 
             // create the provider
-            let provider = create_client(
+            let provider = create_client_with_shared_tip_logs(
                 &provider_url,
                 network.chain_id,
                 network.compute_units_per_second,
@@ -1476,7 +1507,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_client_rejects_empty_rpc_url_before_url_parsing() {
-        let error = create_client("", 1301, None, None, None, HeaderMap::new(), None, None, None)
+        let error = create_client("", 1301, None, None, None, HeaderMap::new(), None, None)
             .await
             .unwrap_err();
 
