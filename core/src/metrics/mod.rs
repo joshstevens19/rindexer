@@ -104,4 +104,31 @@ mod tests {
         assert!(output.contains("rindexer_last_synced_block"));
         assert!(output.contains("rindexer_blocks_behind"));
     }
+
+    #[test]
+    fn metrics_registered() {
+        let network = "metrics_registered_network";
+        indexing::record_shared_tip_logs_request(network, "success");
+        indexing::record_shared_tip_logs_block(network, "ready");
+        indexing::record_shared_tip_logs_empty_retry(network);
+        indexing::record_shared_tip_logs_recovered(network);
+        indexing::record_shared_tip_logs_served(network, "tip");
+        indexing::record_shared_tip_logs_fallback(network, "gave_up");
+        indexing::record_shared_tip_logs_fetch_seconds(network, 0.3);
+        indexing::set_shared_tip_logs_cache_blocks(network, 4);
+
+        let output = encode_metrics().expect("should encode metrics");
+        for name in [
+            "rindexer_shared_tip_logs_requests_total",
+            "rindexer_shared_tip_logs_blocks_total",
+            "rindexer_shared_tip_logs_empty_retries_total",
+            "rindexer_shared_tip_logs_recovered_total",
+            "rindexer_shared_tip_logs_served_total",
+            "rindexer_shared_tip_logs_fallbacks_total",
+            "rindexer_shared_tip_logs_fetch_seconds",
+            "rindexer_shared_tip_logs_cache_blocks",
+        ] {
+            assert!(output.contains(name), "{name} is not exposed");
+        }
+    }
 }

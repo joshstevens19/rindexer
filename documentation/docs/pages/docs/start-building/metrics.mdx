@@ -101,8 +101,27 @@ rindexer_rpc_request_duration_seconds_count{method="eth_getLogs",network="mainne
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
 | `rindexer_reorgs_detected_total` | Counter | `network` | Chain reorganizations detected |
-| `rindexer_live_tip_empty_logs_total` | Counter | `network`, `outcome` | Empty `eth_getLogs` answers for a bloom-positive tip block: `retried` (window re-asked) or `gave_up` (empty answer accepted after the re-ask budget; compare the block with the chain) |
 | `rindexer_reorg_depth` | Gauge | `network` | Depth of last detected reorg |
+
+### Shared Tip Logs Metrics
+
+Live indexing reads each new tip block once per network with an unfiltered `eth_getLogs` and serves every stream from that answer (see [`shared_tip_logs`](/docs/start-building/yaml-config/networks#shared_tip_logs)). `rindexer_rpc_requests_total{method="eth_getLogs"}` keeps counting both the shared and the per-stream calls.
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `rindexer_shared_tip_logs_requests_total` | Counter | `network`, `status` | Unfiltered calls issued by the fetcher: `success`, `error` or `timeout` |
+| `rindexer_shared_tip_logs_blocks_total` | Counter | `network`, `outcome` | Terminal state per scheduled block: `ready`, `empty_bloom_zero` (zero header bloom, no call), `empty_unverified` (bloom checks disabled, empty answer accepted), `gave_up` (still empty after the retry budget), `error`, `hash_mismatch` or `invalidated` (dropped by a reorg signal while pending) |
+| `rindexer_shared_tip_logs_empty_retries_total` | Counter | `network` | Retries issued because a block with a non-zero logs bloom answered empty |
+| `rindexer_shared_tip_logs_recovered_total` | Counter | `network` | Blocks that became `ready` on a retry after an empty answer |
+| `rindexer_shared_tip_logs_served_total` | Counter | `network`, `mode` | Stream windows served from the cache: `window`, `tip` or `prefix_rpc_plus_tip` |
+| `rindexer_shared_tip_logs_fallbacks_total` | Counter | `network`, `reason` | Stream windows that used their own `eth_getLogs`: `gave_up`, `error`, `hash_mismatch`, `wait_timeout` or `not_scheduled` |
+| `rindexer_shared_tip_logs_fetch_seconds` | Histogram | `network` | Seconds from the first observation of a head block to its terminal state |
+| `rindexer_shared_tip_logs_cache_blocks` | Gauge | `network` | Head blocks resident in the per-network cache (at most `cache_blocks`) |
+
+The `network` label of these series is the chain name, the same label `rindexer_rpc_requests_total` carries
+(`polygon` for chain id 137), so the two can be subtracted to count the per-stream tip calls that remain.
+
+**Histogram buckets:** 50ms, 100ms, 250ms, 500ms, 1s, 2s, 3s, 5s, 8s, 12s
 
 ### Build Info
 

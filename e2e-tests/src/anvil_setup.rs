@@ -69,6 +69,14 @@ impl AnvilInstance {
         Ok(())
     }
 
+    /// Set the interval-mining period in seconds; `0` stops the `--block-time` miner so blocks
+    /// are produced only by explicit `mine_block()` calls. `evm_setAutomine(false)` does not
+    /// stop interval mining, this does.
+    pub async fn set_interval_mining(&self, seconds: u64) -> Result<()> {
+        self.rpc_call("evm_setIntervalMining", serde_json::json!([seconds])).await?;
+        Ok(())
+    }
+
     async fn start_with_args(extra_args: &[&str], chain_id: u64) -> Result<Self> {
         let port = allocate_free_port()?;
         info!("Starting local Anvil instance on port {} (chain_id={})", port, chain_id);

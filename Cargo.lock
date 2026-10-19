@@ -4680,6 +4680,7 @@ name = "e2e-tests"
 version = "0.43.4"
 dependencies = [
  "anyhow",
+ "axum",
  "clap",
  "csv",
  "dotenvy",

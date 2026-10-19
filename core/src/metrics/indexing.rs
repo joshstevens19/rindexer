@@ -2,9 +2,12 @@
 
 use super::definitions::{
     ACTIVE_INDEXING_TASKS, BLOCKS_BEHIND, BLOCKS_INDEXED_TOTAL, EVENTS_PROCESSED_TOTAL,
-    LAST_SYNCED_BLOCK, LATEST_CHAIN_BLOCK, LIVE_TIP_EMPTY_LOGS_TOTAL, REORGS_DETECTED_TOTAL,
-    REORG_CASCADE, REORG_DEPTH, REORG_DETECTION_SOURCE, REORG_EVENTS_DELETED,
-    REORG_HANDLING_DURATION,
+    LAST_SYNCED_BLOCK, LATEST_CHAIN_BLOCK, REORGS_DETECTED_TOTAL, REORG_CASCADE, REORG_DEPTH,
+    REORG_DETECTION_SOURCE, REORG_EVENTS_DELETED, REORG_HANDLING_DURATION,
+    SHARED_TIP_LOGS_BLOCKS_TOTAL, SHARED_TIP_LOGS_CACHE_BLOCKS,
+    SHARED_TIP_LOGS_EMPTY_RETRIES_TOTAL, SHARED_TIP_LOGS_FALLBACKS_TOTAL,
+    SHARED_TIP_LOGS_FETCH_SECONDS, SHARED_TIP_LOGS_RECOVERED_TOTAL, SHARED_TIP_LOGS_REQUESTS_TOTAL,
+    SHARED_TIP_LOGS_SERVED_TOTAL,
 };
 
 /// Record events being indexed for a contract/event pair.
@@ -104,8 +107,45 @@ pub fn record_reorg_cascade(network: &str) {
     REORG_CASCADE.with_label_values(&[network]).inc();
 }
 
-/// Record an empty live `eth_getLogs` answer for a bloom-positive tip block, by outcome
-/// (`retried` or `gave_up`).
-pub fn record_live_tip_empty_logs(network: &str, outcome: &str) {
-    LIVE_TIP_EMPTY_LOGS_TOTAL.with_label_values(&[network, outcome]).inc();
+/// Record one unfiltered `eth_getLogs` of the shared tip-block fetcher, by status
+/// (`success`, `error` or `timeout`).
+pub fn record_shared_tip_logs_request(network: &str, status: &str) {
+    SHARED_TIP_LOGS_REQUESTS_TOTAL.with_label_values(&[network, status]).inc();
+}
+
+/// Record the terminal state of a head block scheduled by the shared tip-block fetcher.
+pub fn record_shared_tip_logs_block(network: &str, outcome: &str) {
+    SHARED_TIP_LOGS_BLOCKS_TOTAL.with_label_values(&[network, outcome]).inc();
+}
+
+/// Record a retry issued because a block with a non-zero logs bloom answered empty.
+pub fn record_shared_tip_logs_empty_retry(network: &str) {
+    SHARED_TIP_LOGS_EMPTY_RETRIES_TOTAL.with_label_values(&[network]).inc();
+}
+
+/// Record a block that became ready on a retry after an empty answer.
+pub fn record_shared_tip_logs_recovered(network: &str) {
+    SHARED_TIP_LOGS_RECOVERED_TOTAL.with_label_values(&[network]).inc();
+}
+
+/// Record a live stream window served from the shared tip-block cache, by mode
+/// (`window`, `tip` or `prefix_rpc_plus_tip`).
+pub fn record_shared_tip_logs_served(network: &str, mode: &str) {
+    SHARED_TIP_LOGS_SERVED_TOTAL.with_label_values(&[network, mode]).inc();
+}
+
+/// Record a live stream window that used its own `eth_getLogs`, by reason
+/// (`gave_up`, `error`, `hash_mismatch`, `wait_timeout` or `not_scheduled`).
+pub fn record_shared_tip_logs_fallback(network: &str, reason: &str) {
+    SHARED_TIP_LOGS_FALLBACKS_TOTAL.with_label_values(&[network, reason]).inc();
+}
+
+/// Record the seconds from the first observation of a head block to its terminal state.
+pub fn record_shared_tip_logs_fetch_seconds(network: &str, duration_secs: f64) {
+    SHARED_TIP_LOGS_FETCH_SECONDS.with_label_values(&[network]).observe(duration_secs);
+}
+
+/// Update the number of head blocks resident in the shared tip-block cache.
+pub fn set_shared_tip_logs_cache_blocks(network: &str, blocks: usize) {
+    SHARED_TIP_LOGS_CACHE_BLOCKS.with_label_values(&[network]).set(blocks as f64);
 }

@@ -651,6 +651,7 @@ mod tests {
             reth: None,
             reorg_handling: None,
             hypersync: None,
+            shared_tip_logs: None,
         };
 
         write_networks(dir.path(), &[network]).expect("write_networks failed");
