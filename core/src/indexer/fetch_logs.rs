@@ -1377,8 +1377,9 @@ async fn live_indexing_stream(
                         );
                     }
 
-                    let latest_block_number = log_response_to_large_to_block
-                        .unwrap_or(U64::from(latest_block.header.number));
+                    let tip_block_number = U64::from(latest_block.header.number);
+                    let latest_block_number =
+                        log_response_to_large_to_block.unwrap_or(tip_block_number);
 
                     // A reduced retry ceiling can equal `last_seen_block_number` while the
                     // filter cursor is still behind it. Only declare the stream caught up when
@@ -1400,12 +1401,17 @@ async fn live_indexing_stream(
                             last_seen_block_number
                         );
 
-                        let safe_block_number =
-                            latest_block_number.saturating_sub(*reorg_safe_distance);
+                        // A retry ceiling narrows the range below the reorg-safe block. It
+                        // must not stand in for the tip, because subtracting the safe distance
+                        // from a ceiling set at the head puts it below `from_block`, and the
+                        // stream would then wait on it forever.
+                        let safe_block_number = tip_block_number
+                            .saturating_sub(*reorg_safe_distance)
+                            .min(latest_block_number);
                         let from_block = current_filter.from_block();
                         if from_block > safe_block_number {
                             if reorg_safe_distance.is_zero() {
-                                let block_distance = from_block - latest_block_number;
+                                let block_distance = from_block.saturating_sub(tip_block_number);
                                 let is_outside_reorg_range = block_distance
                                     > reorg_safe_distance_for_chain(cached_provider.chain().id());
 
@@ -1416,7 +1422,7 @@ async fn live_indexing_stream(
                                         "{} - {} - LIVE INDEXING STREAM - RPC has gone back on latest block: rpc returned {}, last seen: {}",
                                         info_log_name,
                                         IndexingEventProgressStatus::live_log(),
-                                        latest_block_number,
+                                        tip_block_number,
                                         from_block
                                     );
                                 } else {
@@ -1424,7 +1430,7 @@ async fn live_indexing_stream(
                                         "{} - {} - LIVE INDEXING STREAM - RPC has gone back on latest block: rpc returned {}, last seen: {}",
                                         info_log_name,
                                         IndexingEventProgressStatus::live_log(),
-                                        latest_block_number,
+                                        tip_block_number,
                                         from_block
                                     );
                                 }
@@ -2683,6 +2689,59 @@ mod tests {
             queried_ranges.as_slice(),
             &[(600, 603), (600, 601)],
             "the transient head error should retry the reduced range even when its cap equals last_seen_block_number",
+        );
+    }
+
+    #[tokio::test]
+    async fn live_indexing_retries_head_error_behind_reorg_safe_distance() {
+        let cancel_token = CancellationToken::new();
+        let queried_ranges = Arc::new(StdMutex::new(Vec::new()));
+        let provider = Arc::new(
+            RecordingLiveProvider::new(
+                MockChainProvider::new(1)
+                    .with_blocks(vec![make_block(603)])
+                    .with_max_block_range(500),
+                queried_ranges.clone(),
+                cancel_token.clone(),
+            )
+            .with_transient_first_logs_error(),
+        );
+        let block_clock = BlockClock::new(None, None, provider.clone());
+        let (tx, _rx) = mpsc::channel(4);
+
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            live_indexing_stream(
+                false,
+                block_clock,
+                provider,
+                &tx,
+                U64::from(599),
+                &B256::ZERO,
+                &U64::from(3),
+                RindexerEventFilter::empty_for_test()
+                    .set_from_block(U64::from(600))
+                    .set_to_block(U64::from(600)),
+                "test",
+                "test",
+                true,
+                Some(U64::from(500)),
+                cancel_token,
+                None,
+                None,
+                None,
+                &EventCallbackRegistry::default(),
+                None,
+            ),
+        )
+        .await
+        .expect("live indexing stalled behind a retry ceiling below the reorg-safe block");
+
+        let queried_ranges = queried_ranges.lock().expect("should lock");
+        assert_eq!(
+            queried_ranges.as_slice(),
+            &[(600, 600), (600, 600)],
+            "a failed single-block fetch held back by reorg_safe_distance should retry that block",
         );
     }
 
