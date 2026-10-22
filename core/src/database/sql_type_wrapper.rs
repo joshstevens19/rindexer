@@ -1653,6 +1653,8 @@ fn map_log_token_to_ethereum_wrapper(
                             for token in tokens {
                                 if let DynSolValue::FixedBytes(bytes, _) = token {
                                     vec.push(Bytes::from(*bytes));
+                                } else if let DynSolValue::Bytes(bytes) = token {
+                                    vec.push(Bytes::from(bytes.clone()));
                                 }
                             }
 
