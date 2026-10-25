@@ -292,6 +292,16 @@ This is useful when multiple contracts should write to the **same table**. Witho
 contract gets its own isolated table. With `database`, all contracts sharing the same value write
 to the same `{database}.{table_name}`.
 
+For PostgreSQL, the schema name must be a SQL identifier (letters, digits and
+underscores, starting with a letter or underscore). rindexer creates it if needed and uses it for
+startup schema synchronization as well as writes. Contracts sharing a physical
+table must declare matching columns and primary keys; identical schema changes
+are applied once.
+
+If an older version created your custom table in `{project}_{contract}` despite a
+`database` override, move or copy that data to the override schema before upgrading,
+or reindex it. rindexer does not automatically move existing tables or data.
+
 ```yaml
 contracts:
   - name: ExchangeA
