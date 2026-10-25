@@ -151,7 +151,7 @@ use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
 use tokio::sync::RwLock;
-use tokio_postgres::Transaction as PgTransaction;
+use tokio_postgres::{types::ToSql, Transaction as PgTransaction};
 use tracing::{debug, info, warn};
 
 use crate::adaptive_concurrency::ADAPTIVE_CONCURRENCY;
@@ -4758,25 +4758,109 @@ fn collect_journal_values(
     value_tuples
 }
 
-/// Builds the Postgres `rindexer_internal.derived_op_log` INSERT for non-reversible
-/// (Set/Max/Min) operations, or `None` when there is nothing to journal.
-/// Batches all rows into a single statement.
-fn build_journal_sql(
+/// A parameterized journal insert. Typed parameters let PostgreSQL preserve every
+/// supported column type in JSONB, including explicit NULLs and full-width numerics.
+struct JournalQuery {
+    sql: String,
+    params: Vec<EthereumSqlTypeWrapper>,
+}
+
+fn build_journal_queries(
     derived_table: &str,
     operation: &TableOperation,
     rows: &[TableRowData],
-) -> Option<String> {
-    let values = collect_journal_values(derived_table, operation, rows, "''");
-    if values.is_empty() {
-        return None;
+) -> Vec<JournalQuery> {
+    use tokio_postgres::types::Type;
+
+    fn bind(params: &mut Vec<EthereumSqlTypeWrapper>, value: EthereumSqlTypeWrapper) -> String {
+        let ty = value.to_type();
+        params.push(value);
+        format!("${}::{}", params.len(), ty.name())
     }
 
-    Some(format!(
-        "INSERT INTO rindexer_internal.derived_op_log \
-         (derived_table, network, where_key, column_name, value, block_number, tx_index, log_index) \
-         VALUES {}",
-        values.join(", ")
-    ))
+    fn finish(
+        queries: &mut Vec<JournalQuery>,
+        params: &mut Vec<EthereumSqlTypeWrapper>,
+        values: &mut Vec<String>,
+    ) {
+        if values.is_empty() {
+            return;
+        }
+        queries.push(JournalQuery {
+            sql: format!(
+                "INSERT INTO rindexer_internal.derived_op_log \
+                 (derived_table, network, where_key, column_name, value, block_number, tx_index, log_index, row_data) \
+                 VALUES {}", values.join(", ")
+            ),
+            params: std::mem::take(params),
+        });
+        values.clear();
+    }
+
+    let non_reversible: Vec<_> =
+        operation.set.iter().filter(|sc| sc.action.reverse().is_none()).collect();
+    if non_reversible.is_empty() || rows.is_empty() {
+        return Vec::new();
+    }
+    let mut where_keys: Vec<_> = operation.where_clause.keys().collect();
+    where_keys.sort();
+    let mut queries = Vec::new();
+    let mut params = Vec::new();
+    let mut values = Vec::new();
+    for row in rows {
+        let Some((block, tx, log)) = extract_row_metadata(row) else { continue };
+        let keys: Vec<_> = where_keys
+            .iter()
+            .filter_map(|col| row.columns.get(col.as_str()).map(|v| (col.as_str(), v)))
+            .collect();
+        if keys.is_empty() {
+            continue;
+        }
+        let where_key = keys
+            .iter()
+            .map(|(col, v)| format!("{}={}", col, format_wrapper_for_sql(v)))
+            .collect::<Vec<_>>()
+            .join(",");
+        for sc in &non_reversible {
+            let Some(value) = row.columns.get(&sc.column) else { continue };
+            // PostgreSQL's extended-query protocol has a 65535-parameter limit.
+            if params.len() + 8 + keys.len() * 2 > 65535 {
+                finish(&mut queries, &mut params, &mut values);
+            }
+            let table =
+                bind(&mut params, EthereumSqlTypeWrapper::String(derived_table.to_string()));
+            let network = bind(&mut params, EthereumSqlTypeWrapper::String(row.network.clone()));
+            let key = bind(&mut params, EthereumSqlTypeWrapper::String(where_key.clone()));
+            let column = bind(&mut params, EthereumSqlTypeWrapper::String(sc.column.clone()));
+            let value_param = bind(&mut params, value.clone());
+            let numeric = if [Type::INT2, Type::INT4, Type::INT8, Type::NUMERIC]
+                .contains(&value.to_type())
+                || matches!(
+                    value,
+                    EthereumSqlTypeWrapper::U256(_) | EthereumSqlTypeWrapper::I256(_)
+                ) {
+                format!("({value_param})::numeric")
+            } else {
+                "NULL".to_string()
+            };
+            let block = bind(&mut params, EthereumSqlTypeWrapper::U64BigInt(block));
+            let tx = bind(&mut params, EthereumSqlTypeWrapper::U64BigInt(tx));
+            let log = bind(&mut params, EthereumSqlTypeWrapper::U64BigInt(log));
+            let json_keys = keys
+                .iter()
+                .map(|(name, v)| {
+                    let name =
+                        bind(&mut params, EthereumSqlTypeWrapper::String((*name).to_string()));
+                    let v = bind(&mut params, (*v).clone());
+                    format!("{name}, to_jsonb({v})")
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            values.push(format!("({table}, {network}, {key}, {column}, {numeric}, {block}, {tx}, {log}, jsonb_build_object('where', jsonb_build_object({json_keys}), 'value', to_jsonb({value_param})))"));
+        }
+    }
+    finish(&mut queries, &mut params, &mut values);
+    queries
 }
 
 /// Journal non-reversible (Set/Max/Min) operations to Postgres `rindexer_internal.derived_op_log`.
@@ -4787,15 +4871,12 @@ async fn journal_non_reversible_ops(
     operation: &TableOperation,
     rows: &[TableRowData],
 ) {
-    let Some(sql) = build_journal_sql(derived_table, operation, rows) else {
-        return;
-    };
-
-    if let Err(e) = postgres.batch_execute(&sql).await {
-        tracing::error!(
-            table = %derived_table,
-            "Failed to journal non-reversible ops: {:?}", e
-        );
+    for query in build_journal_queries(derived_table, operation, rows) {
+        let params: Vec<&(dyn ToSql + Sync)> =
+            query.params.iter().map(|v| v as &(dyn ToSql + Sync)).collect();
+        if let Err(e) = postgres.execute(&query.sql, &params).await {
+            tracing::error!(table = %derived_table, "Failed to journal non-reversible ops: {:?}", e);
+        }
     }
 }
 
@@ -4805,7 +4886,7 @@ async fn journal_non_reversible_ops(
 /// rolled back to the savepoint so the batch continues. An error from `SAVEPOINT`,
 /// `ROLLBACK TO` or `RELEASE` propagates because the transaction is unusable after it.
 /// Separate round trips on purpose: in one simple-query string a failing INSERT would
-/// stop before `RELEASE` and leave the transaction aborted. One savepoint per operation,
+/// stop before `RELEASE` and leave the transaction aborted. One savepoint per journal statement,
 /// released on both paths: `ROLLBACK TO` keeps the savepoint defined, and a stale one
 /// would nest the next operation's `SAVEPOINT` one subtransaction deeper.
 async fn journal_non_reversible_ops_in_tx(
@@ -4814,21 +4895,21 @@ async fn journal_non_reversible_ops_in_tx(
     operation: &TableOperation,
     rows: &[TableRowData],
 ) -> Result<(), String> {
-    let Some(sql) = build_journal_sql(derived_table, operation, rows) else {
-        return Ok(());
-    };
-
-    tx.batch_execute("SAVEPOINT rindexer_journal").await.map_err(|e| pg_error_to_string(&e))?;
-    if let Err(e) = tx.batch_execute(&sql).await {
-        tracing::error!(
-            table = %derived_table,
-            "Failed to journal non-reversible ops: {:?}", e
-        );
-        tx.batch_execute("ROLLBACK TO SAVEPOINT rindexer_journal")
+    for query in build_journal_queries(derived_table, operation, rows) {
+        let params: Vec<&(dyn ToSql + Sync)> =
+            query.params.iter().map(|v| v as &(dyn ToSql + Sync)).collect();
+        tx.batch_execute("SAVEPOINT rindexer_journal").await.map_err(|e| pg_error_to_string(&e))?;
+        if let Err(e) = tx.execute(&query.sql, &params).await {
+            tracing::error!(table = %derived_table, "Failed to journal non-reversible ops: {:?}", e);
+            tx.batch_execute("ROLLBACK TO SAVEPOINT rindexer_journal")
+                .await
+                .map_err(|e| pg_error_to_string(&e))?;
+        }
+        tx.batch_execute("RELEASE SAVEPOINT rindexer_journal")
             .await
             .map_err(|e| pg_error_to_string(&e))?;
     }
-    tx.batch_execute("RELEASE SAVEPOINT rindexer_journal").await.map_err(|e| pg_error_to_string(&e))
+    Ok(())
 }
 
 /// Journal non-reversible (Set/Max/Min) operations to ClickHouse `rindexer_internal.derived_op_log`.
@@ -4871,13 +4952,17 @@ fn format_wrapper_for_sql(w: &EthereumSqlTypeWrapper) -> String {
         EthereumSqlTypeWrapper::U64(n) => format!("{}", n),
         EthereumSqlTypeWrapper::U64BigInt(n) => format!("{}", n),
         EthereumSqlTypeWrapper::U128(n) => format!("{}", n),
-        EthereumSqlTypeWrapper::U256(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::U256(n) | EthereumSqlTypeWrapper::U256Numeric(n) => {
+            format!("{}", n)
+        }
         EthereumSqlTypeWrapper::I8(n) => format!("{}", n),
         EthereumSqlTypeWrapper::I16(n) => format!("{}", n),
         EthereumSqlTypeWrapper::I32(n) => format!("{}", n),
         EthereumSqlTypeWrapper::I64(n) => format!("{}", n),
         EthereumSqlTypeWrapper::I128(n) => format!("{}", n),
-        EthereumSqlTypeWrapper::I256(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::I256(n) | EthereumSqlTypeWrapper::I256Numeric(n) => {
+            format!("{}", n)
+        }
         EthereumSqlTypeWrapper::Bytes(b) => format!("'\\x{}'", hex::encode(b)),
         // Fallback: use Debug formatting (safe for SQL numerics)
         other => format!("'{:?}'", other),
@@ -6114,5 +6199,186 @@ events:
             .expect("failed to query yaml_balances");
         let balance: String = stored.get("balance");
         assert_eq!(balance, "-5", "debits must apply against the column default");
+    }
+    /// Values must survive both journal write paths and actual reorg restoration.
+    #[tokio::test]
+    async fn postgres_journal_round_trips_typed_values_and_existing_numeric_rows() {
+        use crate::database::postgres::client::TEST_DATABASE_URL_LOCK;
+        use crate::database::postgres::generate::{
+            generate_derived_op_log_table_sql, generate_reorg_block_hashes_table_sql,
+        };
+        use crate::indexer::reorg::{
+            task::ReorgTask, BlockChainWindow, DerivedColumnJournal, DerivedTableInfo,
+        };
+        use chrono::DateTime;
+        use testcontainers::runners::AsyncRunner;
+        use testcontainers_modules::postgres::Postgres;
+
+        let _guard = TEST_DATABASE_URL_LOCK.lock().await;
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let pg = Postgres::default().start().await.unwrap();
+        let port = pg.get_host_port_ipv4(5432).await.unwrap();
+        std::env::set_var(
+            "DATABASE_URL",
+            format!("postgresql://postgres:postgres@127.0.0.1:{port}/postgres"),
+        );
+        let client = PostgresClient::new().await.unwrap();
+        // Start with the old schema and a surviving journal entry to verify the startup migration.
+        client.batch_execute("CREATE SCHEMA rindexer_internal;
+            CREATE TABLE rindexer_internal.derived_op_log (
+                id BIGSERIAL PRIMARY KEY, derived_table VARCHAR(200) NOT NULL,
+                network VARCHAR(50) NOT NULL, where_key VARCHAR(500) NOT NULL,
+                column_name VARCHAR(100) NOT NULL, value NUMERIC NOT NULL,
+                block_number BIGINT NOT NULL, tx_index INTEGER NOT NULL, log_index INTEGER NOT NULL);
+            INSERT INTO rindexer_internal.derived_op_log
+                (derived_table,network,where_key,column_name,value,block_number,tx_index,log_index)
+                VALUES ('public.journal_state','test','holder=''old''','amount',42,10,0,0);
+            CREATE TABLE journal_state (
+                network TEXT, holder TEXT, amount NUMERIC, signed NUMERIC,
+                name TEXT, owner CHAR(42), flag BOOLEAN, at TIMESTAMPTZ,
+                optional TEXT, data BYTEA, amounts NUMERIC[], PRIMARY KEY (network,holder));
+            INSERT INTO journal_state VALUES ('test','old',999,0,'',NULL,false,NULL,NULL,NULL,NULL);
+            INSERT INTO journal_state VALUES ('test','0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd',999,0,'wrong',NULL,false,NULL,'wrong',NULL,NULL);").await.unwrap();
+        client.batch_execute(&generate_derived_op_log_table_sql()).await.unwrap();
+        client.batch_execute(&generate_derived_op_log_table_sql()).await.unwrap();
+        client.batch_execute(&generate_reorg_block_hashes_table_sql()).await.unwrap();
+
+        let columns =
+            ["amount", "signed", "name", "owner", "flag", "at", "optional", "data", "amounts"];
+        let operation: TableOperation = serde_yaml::from_str(&format!(
+            "type: upsert\nwhere:\n  holder: $to\nset:\n{}",
+            columns
+                .iter()
+                .map(|column| format!("  - column: {column}\n    action: set\n    value: '0'\n"))
+                .collect::<String>()
+        ))
+        .unwrap();
+        let original = TableRowData {
+            network: "test".to_string(),
+            columns: HashMap::from([
+                ("holder".to_string(), EthereumSqlTypeWrapper::Address(Address::repeat_byte(0xcd))),
+                ("amount".to_string(), EthereumSqlTypeWrapper::U256Numeric(U256::MAX)),
+                (
+                    "signed".to_string(),
+                    EthereumSqlTypeWrapper::I256Numeric(alloy::primitives::I256::MIN),
+                ),
+                ("name".to_string(), EthereumSqlTypeWrapper::String("O'Brien\\Token".to_string())),
+                ("owner".to_string(), EthereumSqlTypeWrapper::Address(Address::repeat_byte(0xab))),
+                ("flag".to_string(), EthereumSqlTypeWrapper::Bool(true)),
+                (
+                    "at".to_string(),
+                    EthereumSqlTypeWrapper::DateTime(
+                        DateTime::from_timestamp(100, 123_000_000).unwrap(),
+                    ),
+                ),
+                ("optional".to_string(), EthereumSqlTypeWrapper::Null),
+                ("data".to_string(), EthereumSqlTypeWrapper::Bytes(vec![0, 255].into())),
+                (
+                    "amounts".to_string(),
+                    EthereumSqlTypeWrapper::VecU256Numeric(vec![U256::MAX, U256::from(1)]),
+                ),
+                (injected_columns::BLOCK_NUMBER.to_string(), EthereumSqlTypeWrapper::U64BigInt(10)),
+            ]),
+        };
+        journal_non_reversible_ops(
+            &client,
+            "public.journal_state",
+            &operation,
+            std::slice::from_ref(&original),
+        )
+        .await;
+        let mut orphan = original;
+        orphan.columns.insert(
+            injected_columns::BLOCK_NUMBER.to_string(),
+            EthereumSqlTypeWrapper::U64BigInt(20),
+        );
+        orphan
+            .columns
+            .insert("name".to_string(), EthereumSqlTypeWrapper::String("orphan".to_string()));
+        let mut connection = client.raw_connection().await.unwrap();
+        let tx = connection.transaction().await.unwrap();
+        journal_non_reversible_ops_in_tx(&tx, "public.journal_state", &operation, &[orphan])
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        drop(connection);
+        let count: i64 = client
+            .query_one("SELECT count(*) FROM rindexer_internal.derived_op_log", &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            count,
+            1 + 2 * columns.len() as i64,
+            "all types must be journaled by both write paths"
+        );
+
+        let task = ReorgTask {
+            network: "test".to_string(),
+            fork_point: 20,
+            detection_point: 20,
+            event_tables: vec![],
+            canonical_blocks: vec![],
+            derived_tables: vec![DerivedTableInfo {
+                full_table_name: "public.journal_state".to_string(),
+                cross_chain: false,
+                rollback_ops: vec![],
+                journal_columns: columns
+                    .iter()
+                    .map(|column| {
+                        DerivedColumnJournal::try_new(
+                            column.to_string(),
+                            SetAction::Set,
+                            vec!["holder".to_string()],
+                        )
+                        .unwrap()
+                    })
+                    .collect(),
+            }],
+        };
+        task.execute(&mut BlockChainWindow::try_new(32).unwrap(), Some(&client), None, None)
+            .await
+            .unwrap();
+        let old: String = client
+            .query_one("SELECT amount::text FROM journal_state WHERE holder='old'", &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(old, "42", "pre-upgrade numeric journals still restore quoted string keys");
+        let row = client.query_one("SELECT amount::text, signed::text, name, owner::text, flag, at, optional, data, amounts::text FROM journal_state WHERE holder != 'old'", &[]).await.unwrap();
+        assert_eq!(row.get::<_, String>(0), U256::MAX.to_string());
+        assert_eq!(row.get::<_, String>(1), alloy::primitives::I256::MIN.to_string());
+        assert_eq!(row.get::<_, String>(2), "O'Brien\\Token");
+        assert_eq!(row.get::<_, String>(3), format!("{:#x}", Address::repeat_byte(0xab)));
+        assert!(row.get::<_, bool>(4));
+        assert_eq!(
+            row.get::<_, DateTime<chrono::Utc>>(5),
+            DateTime::from_timestamp(100, 123_000_000).unwrap()
+        );
+        assert_eq!(row.get::<_, Option<String>>(6), None);
+        assert_eq!(row.get::<_, Vec<u8>>(7), vec![0, 255]);
+        assert_eq!(row.get::<_, String>(8), format!("{{{},1}}", U256::MAX));
+    }
+    #[test]
+    fn postgres_journal_batches_stay_within_parameter_limit() {
+        let operation: TableOperation = serde_yaml::from_str(
+            "type: upsert\nwhere:\n  holder: $to\nset:\n  - column: amount\n    action: set\n    value: $value"
+        ).unwrap();
+        let rows = (0..7000)
+            .map(|i| TableRowData {
+                network: "test".to_string(),
+                columns: HashMap::from([
+                    ("holder".to_string(), EthereumSqlTypeWrapper::Address(Address::ZERO)),
+                    ("amount".to_string(), EthereumSqlTypeWrapper::U256Numeric(U256::from(i))),
+                    (
+                        injected_columns::BLOCK_NUMBER.to_string(),
+                        EthereumSqlTypeWrapper::U64BigInt(10),
+                    ),
+                ]),
+            })
+            .collect::<Vec<_>>();
+        let queries = build_journal_queries("public.journal_state", &operation, &rows);
+        assert_eq!(queries.len(), 2);
+        assert!(queries.iter().all(|query| query.params.len() <= 65535));
     }
 }

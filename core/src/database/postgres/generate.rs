@@ -53,11 +53,14 @@ pub fn generate_derived_op_log_table_sql() -> String {
         network VARCHAR(50) NOT NULL,
         where_key VARCHAR(500) NOT NULL,
         column_name VARCHAR(100) NOT NULL,
-        value NUMERIC NOT NULL,
+        value NUMERIC,
+        row_data JSONB,
         block_number BIGINT NOT NULL,
         tx_index INTEGER NOT NULL,
         log_index INTEGER NOT NULL
     );
+    ALTER TABLE rindexer_internal.derived_op_log ADD COLUMN IF NOT EXISTS row_data JSONB;
+    ALTER TABLE rindexer_internal.derived_op_log ALTER COLUMN value DROP NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_derived_op_log_reorg
         ON rindexer_internal.derived_op_log (derived_table, column_name, where_key, block_number);"#
         .to_string()
