@@ -172,6 +172,9 @@ pub enum GenerateTablesForIndexerSqlError {
 
     #[error("failed to execute {0}")]
     Postgres(#[from] PostgresError),
+
+    #[error("Invalid custom table schema: {0}")]
+    InvalidCustomTableSchema(String),
 }
 
 /// Generate SQL for custom tables
@@ -184,6 +187,7 @@ fn generate_tables_sql(
     tables
         .iter()
         .map(|table| {
+            let schema_name = table.database.as_deref().unwrap_or(schema_name);
             let table_name = format!("{}.{}", schema_name, camel_to_snake(&table.name));
             info!("Creating custom table if not exists: {}", table_name);
 
@@ -273,7 +277,12 @@ fn generate_tables_sql(
                 format!("COMMENT ON TABLE {} IS E'@name {}';", table_name, graphql_name)
             };
 
-            format!("{}\n{}", create_table_sql, table_comment)
+            let create_schema_sql = if table.database.is_some() {
+                format!("CREATE SCHEMA IF NOT EXISTS {schema_name};\n")
+            } else {
+                String::new()
+            };
+            format!("{}{}\n{}", create_schema_sql, create_table_sql, table_comment)
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -396,6 +405,19 @@ pub fn generate_tables_for_indexer_sql(
 
             // Generate custom tables if defined
             if let Some(tables) = &contract.tables {
+                for table in tables {
+                    if let Some(schema) = &table.database {
+                        crate::indexer::reorg::validate_sql_identifier(
+                            schema,
+                            "custom table schema",
+                        )
+                        .map_err(|e| {
+                            GenerateTablesForIndexerSqlError::InvalidCustomTableSchema(
+                                e.to_string(),
+                            )
+                        })?;
+                    }
+                }
                 let clashing_table_names =
                     find_clashing_table_names(&contract_name, tables, &indexer.contracts);
                 sql.push_str(&generate_tables_sql(
@@ -686,5 +708,132 @@ tables:
         );
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // Shared custom tables must use the same PostgreSQL schema for DDL, writes and sync.
+    use crate::{
+        database::{
+            generate::{generate_table_full_name, generate_tables_for_indexer_sql},
+            postgres::schema_sync::{apply_schema_change, detect_schema_changes, SchemaChange},
+        },
+        manifest::core::Manifest,
+        PostgresClient,
+    };
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers_modules::postgres::Postgres;
+
+    #[tokio::test]
+    async fn custom_database_creates_shared_table_and_syncs_it_once() {
+        let _guard = crate::database::postgres::client::TEST_DATABASE_URL_LOCK.lock().await;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("token.json"),
+            r#"[{"type":"event","name":"Transfer","inputs":[{"name":"to","type":"address","indexed":true},{"name":"value","type":"uint256","indexed":false}]}]"#,
+        ).unwrap();
+        let mut manifest: Manifest = serde_yaml::from_str(
+            r#"
+    name: schema_test
+    project_type: no-code
+    networks:
+      - name: ethereum
+        chain_id: 1
+        rpc: http://localhost:8545
+    contracts:
+      - name: First
+        abi: ./token.json
+        details:
+          - network: ethereum
+            address: "0x0000000000000000000000000000000000000001"
+        tables:
+          - name: token_info
+            database: shared_tokens
+            columns:
+              - name: token_address
+                type: address
+              - name: balance
+                type: uint256
+            events:
+              - event: Transfer
+                operations:
+                  - type: upsert
+                    where:
+                      token_address: $to
+                    set:
+                      - column: balance
+                        action: set
+                        value: $value
+    "#,
+        )
+        .unwrap();
+        let mut second = manifest.contracts[0].clone();
+        second.name = "Second".to_string();
+        manifest.contracts.push(second);
+        let mut local = manifest.contracts[0].clone();
+        local.name = "Local".to_string();
+        local.tables.as_mut().unwrap()[0].database = None;
+        manifest.contracts.push(local);
+        let indexer = Indexer {
+            name: manifest.name.clone(),
+            contracts: manifest.contracts.clone(),
+            native_transfers: manifest.native_transfers.clone(),
+        };
+        let sql = generate_tables_for_indexer_sql(dir.path(), &indexer, false).unwrap().to_string();
+        // Fail before connecting when the override is ignored, including in CI without Docker.
+        assert!(sql.contains("CREATE SCHEMA IF NOT EXISTS shared_tokens;"));
+        assert!(sql.contains("CREATE TABLE IF NOT EXISTS shared_tokens.token_info"));
+        assert!(!sql.contains("CREATE TABLE IF NOT EXISTS schema_test_first.token_info"));
+        assert!(sql.contains("CREATE TABLE IF NOT EXISTS schema_test_local.token_info"));
+
+        let mut invalid = indexer.clone();
+        invalid.contracts[0].tables.as_mut().unwrap()[0].database =
+            Some("shared; DROP SCHEMA public".to_string());
+        assert!(matches!(
+            generate_tables_for_indexer_sql(dir.path(), &invalid, false),
+            Err(GenerateTablesForIndexerSqlError::InvalidCustomTableSchema(_))
+        ));
+
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let pg = Postgres::default().start().await.unwrap();
+        let port = pg.get_host_port_ipv4(5432).await.unwrap();
+        std::env::set_var(
+            "DATABASE_URL",
+            format!("postgresql://postgres:postgres@127.0.0.1:{port}/postgres"),
+        );
+        let client = PostgresClient::new().await.unwrap();
+        client.batch_execute(&sql).await.unwrap();
+        client.batch_execute(&sql).await.unwrap(); // restart is idempotent
+        for contract in &manifest.contracts {
+            let table = &contract.tables.as_ref().unwrap()[0];
+            let target = generate_table_full_name(
+                &manifest.name,
+                &contract.name,
+                &table.name,
+                table.database.as_deref(),
+            );
+            client.batch_execute(&format!(
+                "INSERT INTO {target} VALUES ('ethereum', '0x0000000000000000000000000000000000000001', 42, 1, 'tx', 'block', 'contract', 1) ON CONFLICT (network, token_address) DO UPDATE SET balance = {target}.balance + 1;"
+            )).await.unwrap();
+        }
+        let balance: String = client
+            .query_one("SELECT balance::text FROM shared_tokens.token_info", &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(balance, "43", "both contracts write to the same row");
+        assert!(detect_schema_changes(&client, &manifest).await.unwrap().is_empty());
+
+        // Two declarations of the same physical table produce one migration, not two ALTERs.
+        client
+            .batch_execute("ALTER TABLE shared_tokens.token_info DROP COLUMN balance")
+            .await
+            .unwrap();
+        let changes = detect_schema_changes(&client, &manifest).await.unwrap();
+        assert_eq!(changes.len(), 1, "{changes:?}");
+        assert!(matches!(&changes[0], SchemaChange::AddColumn { table_full_name, column_name, .. }
+            if table_full_name == "shared_tokens.token_info" && column_name == "balance"));
+        for change in &changes {
+            apply_schema_change(&client, change).await.unwrap();
+        }
+        assert!(detect_schema_changes(&client, &manifest).await.unwrap().is_empty());
     }
 }

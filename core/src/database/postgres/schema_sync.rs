@@ -12,7 +12,7 @@ use crate::manifest::contract::{injected_columns, Table};
 use crate::manifest::core::Manifest;
 
 /// Represents a detected schema change that may need to be applied.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SchemaChange {
     /// A new column needs to be added to the table.
     AddColumn {
@@ -289,17 +289,18 @@ pub async fn detect_schema_changes(
         let schema_name = generate_indexer_contract_schema_name(&manifest.name, &contract.name);
 
         for table in tables {
+            let schema_name = table.database.as_deref().unwrap_or(&schema_name);
             let table_name = camel_to_snake(&table.name);
             let table_full_name = format!("{}.{}", schema_name, table_name);
 
             // Check if table exists
-            if !table_exists(client, &schema_name, &table_name).await? {
+            if !table_exists(client, schema_name, &table_name).await? {
                 // Table doesn't exist yet, will be created normally
                 continue;
             }
 
             // Get existing columns
-            let existing_columns = get_existing_columns(client, &schema_name, &table_name).await?;
+            let existing_columns = get_existing_columns(client, schema_name, &table_name).await?;
             let existing_col_names: HashSet<String> =
                 existing_columns.iter().map(|c| c.name.clone()).collect();
             let existing_col_types: HashMap<String, String> =
@@ -368,7 +369,7 @@ pub async fn detect_schema_changes(
 
             // Check for primary key changes
             if let Some(current_pk) =
-                get_primary_key_columns(client, &schema_name, &table_name).await?
+                get_primary_key_columns(client, schema_name, &table_name).await?
             {
                 let expected_pk = get_expected_pk_columns(table);
 
@@ -412,6 +413,10 @@ pub async fn detect_schema_changes(
         }
     }
 
+    // Multiple contracts can declare the same physical table via `database`.
+    // Apply each identical migration once, especially ADD COLUMN on startup.
+    let mut seen = HashSet::new();
+    changes.retain(|change| seen.insert(change.clone()));
     Ok(changes)
 }
 
