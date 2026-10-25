@@ -1320,20 +1320,25 @@ impl ReorgTask {
 
                 // --- Postgres recalculation ---
                 if let Some(pg) = pg {
+                    let typed_key_join = format!(
+                        "CASE WHEN sub.row_data IS NOT NULL THEN to_jsonb(dt) @> (sub.row_data->'where') ELSE {} END",
+                        Self::journal_where_key_join(&jc.where_columns, "dt", "sub")
+                    );
                     let update_sql = if matches!(jc.action, SetAction::Set) {
                         format!(
-                            "UPDATE {} AS dt SET {} = sub.value \
+                            "UPDATE {table} AS dt SET {column} = (jsonb_populate_record(NULL::{table}, \
+                                 jsonb_build_object('{column}', COALESCE(sub.row_data->'value', to_jsonb(sub.value))))).{column} \
                              FROM ( \
-                                 SELECT DISTINCT ON (where_key) where_key, value \
+                                 SELECT DISTINCT ON (where_key) where_key, value, row_data \
                                  FROM rindexer_internal.derived_op_log \
                                  WHERE derived_table = '{}' AND column_name = '{}'{} \
                                  ORDER BY where_key, block_number DESC, tx_index DESC, log_index DESC \
                              ) sub \
                              WHERE {} {}",
-                            dt.full_table_name, jc.derived_column,
                             dt.full_table_name, jc.derived_column, network_filter,
-                            Self::journal_where_key_join(&jc.where_columns, "dt", "sub"),
+                            typed_key_join,
                             network_join,
+                            table = dt.full_table_name, column = jc.derived_column,
                         )
                     } else {
                         let agg_fn = match jc.action {
@@ -1443,19 +1448,20 @@ impl ReorgTask {
             return format!("{}.network = {}.where_key", dt_alias, sub_alias);
         }
 
-        let concat_parts: Vec<String> = where_columns
-            .iter()
-            .enumerate()
-            .map(|(i, col)| {
-                if i == 0 {
-                    format!("'{}=' || {}.{}::TEXT", col, dt_alias, col)
-                } else {
-                    format!("',{}=' || {}.{}::TEXT", col, dt_alias, col)
-                }
-            })
-            .collect();
-
-        format!("{}.where_key = {}", sub_alias, concat_parts.join(" || "))
+        let mut raw_parts = Vec::new();
+        let mut quoted_parts = Vec::new();
+        for (i, col) in where_columns.iter().enumerate() {
+            let prefix = if i == 0 { String::new() } else { ",".to_string() };
+            let value = format!("{dt_alias}.{col}");
+            raw_parts.push(format!("'{prefix}{col}=' || {value}::text"));
+            quoted_parts.push(format!("'{prefix}{col}=' || CASE WHEN jsonb_typeof(to_jsonb({value})) = 'string' THEN quote_literal({value}::text) ELSE {value}::text END"));
+        }
+        // Accept legacy unquoted keys as well as the SQL-literal keys emitted by the writer.
+        format!(
+            "({sub_alias}.where_key = {} OR {sub_alias}.where_key = {})",
+            raw_parts.join(" || "),
+            quoted_parts.join(" || ")
+        )
     }
 
     /// Build a ClickHouse expression that reconstructs the where_key string

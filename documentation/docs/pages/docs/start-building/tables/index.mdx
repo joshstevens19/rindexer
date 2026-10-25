@@ -2731,6 +2731,22 @@ pool checkout timeout, is retried but not counted.
 
 ---
 
+### PostgreSQL reorg journal values
+
+The internal `rindexer_internal.derived_op_log` stores typed `set` values and row keys
+in `row_data JSONB`. This preserves strings, addresses, booleans, timestamps, arrays,
+explicit NULLs and full-width integers when restoring the last surviving value.
+The `value` column continues to hold numeric values for `max` / `min` and legacy
+numeric entries; it is NULL for non-numeric values.
+
+Startup DDL adds `row_data` and removes the `NOT NULL` constraint on `value`, so the
+startup database role needs permission to alter this internal table. Existing
+numeric entries remain readable. Entries missing because an older version failed
+to journal a value cannot be recovered automatically; reindex the affected history.
+ClickHouse retains its numeric journal format.
+
+---
+
 ## Validation Errors
 
 rindexer validates your configuration at startup and provides clear error messages:
