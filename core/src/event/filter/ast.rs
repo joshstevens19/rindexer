@@ -187,6 +187,38 @@ pub enum Expression<'a> {
 }
 
 impl<'a> Expression<'a> {
+    /// Collect variable references from the parsed expression, preserving their source.
+    pub(crate) fn variable_references(&self) -> Vec<&ConditionLeft<'a>> {
+        fn arithmetic_variables<'a, 'b>(
+            expression: &'b ArithmeticExpr<'a>,
+            variables: &mut Vec<&'b ConditionLeft<'a>>,
+        ) {
+            match expression {
+                ArithmeticExpr::Variable(variable) => variables.push(variable),
+                ArithmeticExpr::Literal(_) => {}
+                ArithmeticExpr::Binary { left, right, .. } => {
+                    arithmetic_variables(left, variables);
+                    arithmetic_variables(right, variables);
+                }
+            }
+        }
+
+        match self {
+            Expression::Condition(condition) => {
+                let mut variables = Vec::new();
+                arithmetic_variables(&condition.left, &mut variables);
+                arithmetic_variables(&condition.right, &mut variables);
+                variables
+            }
+            Expression::Logical { left, right, .. } => {
+                let mut variables = left.variable_references();
+                variables.extend(right.variable_references());
+                variables
+            }
+            Expression::Not(inner) => inner.variable_references(),
+        }
+    }
+
     /// Checks if this expression contains any table references (@variables).
     /// Returns true if any variable in the expression has VariableSource::Table.
     pub fn has_table_references(&self) -> bool {
