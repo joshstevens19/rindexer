@@ -1,0 +1,25 @@
+core/src/indexer/reorg/task.rs
+  s_7c2daab90bf39a::t_39c44eeefe1a75 1441-1445
+core/src/indexer/tables.rs
+  s_7c2daab90bf39a::t_fc5d3471dd82ba 4730,4890-4892,4897-4901
+core/src/indexer/tables_atomic_tests.rs
+  s_7c2daab90bf39a::t_a785466e2a1a98 56,1368-1398
+documentation/docs/pages/docs/changelog.mdx
+  s_7c2daab90bf39a::t_e248a245d5358b 9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "65ee0daa44b5eaa081ea2c94f92f6a6dde9b2114",
+  "prompts": {},
+  "sessions": {
+    "s_7c2daab90bf39a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "37440dca-71d0-45bd-b4ca-50072b69c80e",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "zannis <zkalampoukis@gmail.com>"
+    }
+  }
+}
