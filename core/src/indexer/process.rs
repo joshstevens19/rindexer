@@ -485,7 +485,7 @@ async fn live_indexing_for_contract_event_dependencies(
         );
     }
 
-    let mut heartbeat = HeartbeatTracker::new(Duration::from_secs(300));
+    let mut heartbeat = HeartbeatTracker::new(cached_provider.block_poll_frequency());
     let target_iteration_duration = Duration::from_millis(200);
     let callback_permits = Arc::new(Semaphore::new(1));
 
@@ -595,10 +595,11 @@ async fn live_indexing_for_contract_event_dependencies(
             }
             HeartbeatAction::Stalled => {
                 warn!(
-                    "{} - {} - RPC tip has not advanced past block {} in the last 5 minutes",
+                    "{} - {} - RPC tip has not advanced past block {} in the last {} seconds",
                     network,
                     IndexingEventProgressStatus::live_log(),
-                    latest_block_number
+                    latest_block_number,
+                    heartbeat.stall_timeout().as_secs()
                 );
             }
         }
