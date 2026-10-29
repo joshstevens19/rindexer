@@ -9,6 +9,8 @@ use bb8_postgres::PostgresConnectionManager;
 use bytes::Buf;
 use dotenvy::dotenv;
 use futures::pin_mut;
+use openssl::ssl::{SslConnector, SslMethod, SslVersion};
+use postgres_openssl::MakeTlsConnector;
 use rust_decimal::Decimal;
 use tokio::{task, time::timeout};
 pub use tokio_postgres::types::{ToSql, Type as PgType};
@@ -16,7 +18,6 @@ use tokio_postgres::{
     binary_copy::BinaryCopyInWriter, config::SslMode, Config, CopyInSink, Error as PgError, Row,
     Statement, ToStatement, Transaction as PgTransaction,
 };
-use tokio_postgres_rustls::MakeRustlsConnect;
 use tracing::error;
 
 use crate::database::generate::generate_event_table_columns_names_sql;
@@ -123,7 +124,7 @@ pub enum CursorAdvance {
 }
 
 pub struct PostgresClient {
-    pool: Pool<PostgresConnectionManager<MakeRustlsConnect>>,
+    pool: Pool<PostgresConnectionManager<MakeTlsConnector>>,
 }
 
 impl PostgresClient {
@@ -138,21 +139,11 @@ impl PostgresClient {
                 config.ssl_mode(SslMode::Disable);
             }
 
-            let mut root_store = rustls::RootCertStore::empty();
-            root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-            let native = rustls_native_certs::load_native_certs();
-            for e in &native.errors {
-                tracing::debug!("Native cert load error (skipped): {}", e);
-            }
-            for cert in native.certs {
-                if let Err(e) = root_store.add(cert) {
-                    tracing::debug!("Skipped malformed native cert: {}", e);
-                }
-            }
-            let tls_config = rustls::ClientConfig::builder()
-                .with_root_certificates(root_store)
-                .with_no_client_auth();
-            let tls_connector = MakeRustlsConnect::new(tls_config);
+            let mut tls = SslConnector::builder(SslMethod::tls())
+                .map_err(|_| PostgresConnectionError::CouldNotCreateTlsConnector)?;
+            tls.set_min_proto_version(Some(SslVersion::TLS1_2))
+                .map_err(|_| PostgresConnectionError::CouldNotCreateTlsConnector)?;
+            let tls_connector = MakeTlsConnector::new(tls.build());
 
             // Perform a direct connection test
             let (client, connection) =
@@ -162,10 +153,7 @@ impl PostgresClient {
                     Ok(Ok((client, connection))) => (client, connection),
                     Ok(Err(e)) => {
                         // retry without ssl if ssl has been attempted and failed
-                        if !disable_ssl
-                            && config.get_ssl_mode() != SslMode::Disable
-                            && !connection_str.contains("sslmode=require")
-                        {
+                        if !disable_ssl && config.get_ssl_mode() == SslMode::Prefer {
                             return Box::pin(_new(true)).await;
                         }
                         error!("Error connecting to database: {}", e);
@@ -208,7 +196,7 @@ impl PostgresClient {
     }
 
     pub async fn from_connection(
-        pool: Pool<PostgresConnectionManager<MakeRustlsConnect>>,
+        pool: Pool<PostgresConnectionManager<MakeTlsConnector>>,
     ) -> Result<Self, PostgresConnectionError> {
         Ok(Self { pool })
     }
@@ -581,7 +569,7 @@ impl PostgresClient {
 
     pub async fn raw_connection(
         &self,
-    ) -> Result<PooledConnection<'_, PostgresConnectionManager<MakeRustlsConnect>>, PostgresError>
+    ) -> Result<PooledConnection<'_, PostgresConnectionManager<MakeTlsConnector>>, PostgresError>
     {
         let conn = self.pool.get().await?;
 
