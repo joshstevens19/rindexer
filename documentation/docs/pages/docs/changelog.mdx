@@ -2,9 +2,11 @@
 
 ### Breaking changes
 -------------------------------------------------
+- breaking: PostgreSQL TLS now uses OpenSSL CA locations (`SSL_CERT_FILE` / `SSL_CERT_DIR`) instead of bundled and native Rustls roots. Custom Rust pools passed to `PostgresClient::from_connection` must use `postgres_openssl::MakeTlsConnector`; explicitly typed `raw_connection` results must use the same connector.
 
 ### Bug fixes
 -------------------------------------------------
+- fix: verify PostgreSQL certificates with trailing-dot DNS names, including Cloud SQL shared-CA certificates, without disabling certificate or hostname checks; required TLS never falls back to plaintext.
 ### Features
 -------------------------------------------------
 - feat: **Shared tip-block log fetch** - live indexing reads each new tip block once per network with an unfiltered `eth_getLogs` shared by every live stream, which filters it locally, instead of one filtered call per stream per block; a block whose header has a non-zero logs bloom is re-asked while the upstream still answers empty, and a zero-bloom block costs no call. New `networks[].shared_tip_logs` knob (`enabled` default `true`, `empty_retry_deadline_ms` default `7000`, `cache_blocks` default `32`) and the `rindexer_shared_tip_logs_*` metrics. Supersedes the per-stream tip re-ask of 0.43.4; `rindexer_live_tip_empty_logs_total` is removed. Rust-mode projects pick it up after `rindexer codegen typings` (the regenerated `networks.rs` calls `create_client_with_shared_tip_logs`); an existing `networks.rs` keeps compiling, since `create_client` keeps its signature, and keeps the per-stream tip calls.
