@@ -1,16 +1,22 @@
-use crate::abi::{EventInfo, ParamTypeError, ReadAbiError};
+#![cfg_attr(not(feature = "postgres"), allow(dead_code))]
+#[cfg(feature = "postgres")]
 use crate::database::postgres::client::PostgresError;
-use crate::database::postgres::generate::{
-    generate_columns_with_data_types, generate_derived_op_log_table_sql,
-    generate_internal_cron_table_name, generate_internal_event_table_name,
-    generate_reorg_block_hashes_table_sql, GenerateInternalFactoryEventTableNameParams,
+use crate::{
+    abi::{EventInfo, ParamTypeError, ReadAbiError},
+    database::postgres::generate::{
+        generate_columns_with_data_types, generate_derived_op_log_table_sql,
+        generate_internal_cron_table_name, generate_internal_event_table_name,
+        generate_reorg_block_hashes_table_sql, GenerateInternalFactoryEventTableNameParams,
+    },
+    helpers::{camel_to_snake, snake_to_camel},
+    indexer::{
+        native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME},
+        Indexer,
+    },
+    manifest::contract::{injected_columns, Contract, FactoryDetailsYaml, Table},
+    types::code::Code,
+    ABIItem,
 };
-use crate::helpers::{camel_to_snake, snake_to_camel};
-use crate::indexer::native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME};
-use crate::indexer::Indexer;
-use crate::manifest::contract::{injected_columns, Contract, FactoryDetailsYaml, Table};
-use crate::types::code::Code;
-use crate::ABIItem;
 use alloy::primitives::keccak256;
 use std::path::Path;
 use tracing::{error, info};
@@ -171,6 +177,7 @@ pub enum GenerateTablesForIndexerSqlError {
     ParamTypeError(#[from] ParamTypeError),
 
     #[error("failed to execute {0}")]
+    #[cfg(feature = "postgres")]
     Postgres(#[from] PostgresError),
 }
 

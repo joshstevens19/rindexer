@@ -1,22 +1,26 @@
-use std::{collections::HashMap, sync::Arc};
-
-use alloy::primitives::{B256, U64};
-use anyhow::Context;
-use tokio_postgres::Transaction as PgTransaction;
-
+use super::{validate_sql_condition, window::BlockChainWindow};
+#[cfg(feature = "clickhouse")]
 use crate::database::clickhouse::client::ClickhouseClient;
+#[cfg(feature = "postgres")]
 use crate::database::postgres::client::PostgresClient;
-use crate::event::{
-    parse_arithmetic_expression, parse_filter_expression, Accessor, ArithmeticExpr, ConditionLeft,
-    VariableSource,
+#[cfg(any(feature = "postgres", feature = "clickhouse"))]
+use crate::helpers::generate_random_id;
+use crate::{
+    event::{
+        parse_arithmetic_expression, parse_filter_expression, Accessor, ArithmeticExpr,
+        ConditionLeft, VariableSource,
+    },
+    helpers::camel_to_snake,
+    manifest::contract::{ColumnType, IterateBinding, SetAction},
+    metrics::indexing as metrics,
+    provider::ChainProvider,
 };
-use crate::helpers::{camel_to_snake, generate_random_id};
-use crate::manifest::contract::{ColumnType, IterateBinding, SetAction};
-use crate::metrics::indexing as metrics;
-use crate::provider::ChainProvider;
-
-use super::validate_sql_condition;
-use super::window::BlockChainWindow;
+use alloy::primitives::{B256, U64};
+#[cfg(any(feature = "postgres", feature = "clickhouse"))]
+use anyhow::Context;
+use std::{collections::HashMap, sync::Arc};
+#[cfg(feature = "postgres")]
+use tokio_postgres::Transaction as PgTransaction;
 
 #[derive(Clone)]
 pub struct EventTableInfo {
@@ -336,7 +340,9 @@ pub struct ReorgTaskResult {
 
 #[derive(Clone, Copy, PartialEq)]
 enum SnapshotBackend {
+    #[cfg(feature = "postgres")]
     Postgres,
+    #[cfg(feature = "clickhouse")]
     Clickhouse,
 }
 
@@ -703,10 +709,11 @@ impl ReorgTask {
         }
     }
 
+    #[cfg(any(feature = "postgres", feature = "clickhouse"))]
     async fn validate_iterate_lengths(
         &self,
-        pg: Option<&PgTransaction<'_>>,
-        ch: Option<&Arc<ClickhouseClient>>,
+        #[cfg(feature = "postgres")] pg: Option<&PgTransaction<'_>>,
+        #[cfg(feature = "clickhouse")] ch: Option<&Arc<ClickhouseClient>>,
         rollback_plan: &DerivedTableRollbackPlan,
     ) -> anyhow::Result<()> {
         for dt in &self.derived_tables {
@@ -735,14 +742,18 @@ impl ReorgTask {
                         mismatch,
                     );
 
-                    let mismatch_count = match (dialect, pg, ch) {
-                        (SqlDialect::Postgres, Some(pg), _) => {
+                    let mismatch_count = match dialect {
+                        #[cfg(feature = "postgres")]
+                        SqlDialect::Postgres if pg.is_some() => {
+                            let pg = pg.unwrap();
                             pg.query_one(&query, &[])
                                 .await
                                 .context("failed to validate PostgreSQL rollback iterate lengths")?
                                 .get::<_, i64>(0) as u64
                         }
-                        (SqlDialect::Clickhouse, _, Some(ch)) => ch
+                        #[cfg(feature = "clickhouse")]
+                        SqlDialect::Clickhouse if ch.is_some() => ch
+                            .unwrap()
                             .query_one::<u64>(&query)
                             .await
                             .context("failed to validate ClickHouse rollback iterate lengths")?,
@@ -765,14 +776,23 @@ impl ReorgTask {
     /// Returns the snapshots needed for phase 2.
     /// Fails the entire reorg task if any snapshot cannot be created — this prevents
     /// event deletion from proceeding without proper reversal data.
+    #[cfg(any(feature = "postgres", feature = "clickhouse"))]
     async fn snapshot_for_reversal(
         &self,
-        pg: Option<&PgTransaction<'_>>,
-        ch: Option<&Arc<ClickhouseClient>>,
+        #[cfg(feature = "postgres")] pg: Option<&PgTransaction<'_>>,
+        #[cfg(feature = "clickhouse")] ch: Option<&Arc<ClickhouseClient>>,
         rollback_plan: &DerivedTableRollbackPlan,
     ) -> anyhow::Result<ReversalSnapshots> {
-        self.validate_iterate_lengths(pg, ch, rollback_plan).await?;
+        self.validate_iterate_lengths(
+            #[cfg(feature = "postgres")]
+            pg,
+            #[cfg(feature = "clickhouse")]
+            ch,
+            rollback_plan,
+        )
+        .await?;
 
+        #[cfg(feature = "clickhouse")]
         let (attempt_id, clickhouse_marker, resumed) = match ch {
             Some(ch) => {
                 let (attempt_id, marker, resumed) = self.clickhouse_reversal_attempt(ch).await?;
@@ -784,26 +804,59 @@ impl ReorgTask {
                 false,
             ),
         };
+        #[cfg(not(feature = "clickhouse"))]
+        let (attempt_id, clickhouse_marker, resumed) = (
+            format!("_rindexer_reorg_snap_{}", generate_random_id(24).to_ascii_lowercase()),
+            None::<String>,
+            false,
+        );
         let mut snapshots = Vec::new();
         let create_result = self
-            .create_reversal_snapshots(pg, ch, rollback_plan, &attempt_id, &mut snapshots)
+            .create_reversal_snapshots(
+                #[cfg(feature = "postgres")]
+                pg,
+                #[cfg(feature = "clickhouse")]
+                ch,
+                rollback_plan,
+                &attempt_id,
+                &mut snapshots,
+            )
             .await;
         if let Err(error) = create_result {
             if !resumed {
-                Self::cleanup_reversal_snapshots(&snapshots, None, pg, ch).await;
+                Self::cleanup_reversal_snapshots(
+                    &snapshots,
+                    None,
+                    #[cfg(feature = "postgres")]
+                    pg,
+                    #[cfg(feature = "clickhouse")]
+                    ch,
+                )
+                .await;
             }
             return Err(error);
         }
 
+        #[cfg(not(feature = "clickhouse"))]
+        let has_clickhouse_snapshots = false;
+        #[cfg(feature = "clickhouse")]
         let has_clickhouse_snapshots =
             snapshots.iter().any(|snap| snap.backend == SnapshotBackend::Clickhouse);
+        #[cfg(feature = "clickhouse")]
         if has_clickhouse_snapshots && !resumed {
             if let (Some(ch), Some(marker)) = (ch, clickhouse_marker.as_deref()) {
                 if let Err(error) = ch
                     .execute(&format!("CREATE TABLE {} (ready UInt8) ENGINE = Memory", marker))
                     .await
                 {
-                    Self::cleanup_reversal_snapshots(&snapshots, None, pg, Some(ch)).await;
+                    Self::cleanup_reversal_snapshots(
+                        &snapshots,
+                        None,
+                        #[cfg(feature = "postgres")]
+                        pg,
+                        Some(ch),
+                    )
+                    .await;
                     return Err(error)
                         .context("Failed to mark ClickHouse reversal snapshots ready");
                 }
@@ -816,6 +869,7 @@ impl ReorgTask {
         })
     }
 
+    #[cfg(feature = "clickhouse")]
     async fn clickhouse_reversal_attempt(
         &self,
         ch: &Arc<ClickhouseClient>,
@@ -858,10 +912,11 @@ impl ReorgTask {
         Ok((attempt_id, marker, false))
     }
 
+    #[cfg(any(feature = "postgres", feature = "clickhouse"))]
     async fn create_reversal_snapshots(
         &self,
-        pg: Option<&PgTransaction<'_>>,
-        ch: Option<&Arc<ClickhouseClient>>,
+        #[cfg(feature = "postgres")] pg: Option<&PgTransaction<'_>>,
+        #[cfg(feature = "clickhouse")] ch: Option<&Arc<ClickhouseClient>>,
         rollback_plan: &DerivedTableRollbackPlan,
         attempt_id: &str,
         snapshots: &mut Vec<ReversalSnapshot>,
@@ -1032,6 +1087,7 @@ impl ReorgTask {
                     ))
                 };
 
+                #[cfg(feature = "postgres")]
                 if let Some(pg) = pg {
                     let pg_temp = format!("{}_pg", temp_base);
                     let pg_create = format!(
@@ -1057,6 +1113,7 @@ impl ReorgTask {
                     tracing::debug!(temp_table = %pg_temp, "Created PG reorg reversal snapshot");
                 }
 
+                #[cfg(feature = "clickhouse")]
                 if let Some(ch) = ch {
                     let ch_temp = format!("rindexer_internal.{}_ch", temp_base);
                     // Join engine (ANY/LEFT, keyed by the snapshot-side where
@@ -1092,12 +1149,14 @@ impl ReorgTask {
     }
 
     /// Phase 2: After event deletion, apply reverse UPDATEs from snapshots.
+    #[cfg(any(feature = "postgres", feature = "clickhouse"))]
     async fn apply_reversal_from_snapshots(
         snapshots: &[ReversalSnapshot],
-        pg: Option<&PgTransaction<'_>>,
-        ch: Option<&Arc<ClickhouseClient>>,
+        #[cfg(feature = "postgres")] pg: Option<&PgTransaction<'_>>,
+        #[cfg(feature = "clickhouse")] ch: Option<&Arc<ClickhouseClient>>,
     ) -> anyhow::Result<()> {
         for snap in snapshots {
+            #[cfg(feature = "postgres")]
             let where_join: Vec<String> = snap
                 .where_columns
                 .iter()
@@ -1107,6 +1166,7 @@ impl ReorgTask {
                 .collect();
 
             match snap.backend {
+                #[cfg(feature = "postgres")]
                 SnapshotBackend::Postgres => {
                     let Some(pg) = pg else { continue };
                     let pg_set_clauses: Vec<String> = snap
@@ -1144,6 +1204,7 @@ impl ReorgTask {
                         "PostgreSQL: reversed accumulative ops"
                     );
                 }
+                #[cfg(feature = "clickhouse")]
                 SnapshotBackend::Clickhouse => {
                     let Some(ch) = ch else { continue };
 
@@ -1225,14 +1286,16 @@ impl ReorgTask {
         Ok(())
     }
 
+    #[cfg(any(feature = "postgres", feature = "clickhouse"))]
     async fn cleanup_reversal_snapshots(
         snapshots: &[ReversalSnapshot],
-        clickhouse_marker: Option<&str>,
-        pg: Option<&PgTransaction<'_>>,
-        ch: Option<&Arc<ClickhouseClient>>,
+        _clickhouse_marker: Option<&str>,
+        #[cfg(feature = "postgres")] pg: Option<&PgTransaction<'_>>,
+        #[cfg(feature = "clickhouse")] ch: Option<&Arc<ClickhouseClient>>,
     ) {
         for snap in snapshots.iter().rev() {
             let result = match snap.backend {
+                #[cfg(feature = "postgres")]
                 SnapshotBackend::Postgres => match pg {
                     Some(pg) => pg
                         .batch_execute(&format!("DROP TABLE IF EXISTS {}", snap.temp_table))
@@ -1240,6 +1303,7 @@ impl ReorgTask {
                         .map_err(anyhow::Error::from),
                     None => continue,
                 },
+                #[cfg(feature = "clickhouse")]
                 SnapshotBackend::Clickhouse => match ch {
                     Some(ch) => ch
                         .execute(&format!("DROP TABLE IF EXISTS {}", snap.temp_table))
@@ -1256,7 +1320,8 @@ impl ReorgTask {
                 );
             }
         }
-        if let (Some(marker), Some(ch)) = (clickhouse_marker, ch) {
+        #[cfg(feature = "clickhouse")]
+        if let (Some(marker), Some(ch)) = (_clickhouse_marker, ch) {
             if let Err(error) = ch.execute(&format!("DROP TABLE IF EXISTS {}", marker)).await {
                 tracing::warn!(
                     temp_table = %marker,
@@ -1269,10 +1334,11 @@ impl ReorgTask {
 
     /// Recalculate non-reversible columns (Set/Max/Min) from the operation journal.
     /// Deletes journal entries in the reorg range, then recalculates from remaining entries.
+    #[cfg(any(feature = "postgres", feature = "clickhouse"))]
     async fn recalculate_from_journal(
         &self,
-        pg: Option<&PgTransaction<'_>>,
-        ch: Option<&Arc<ClickhouseClient>>,
+        #[cfg(feature = "postgres")] pg: Option<&PgTransaction<'_>>,
+        #[cfg(feature = "clickhouse")] ch: Option<&Arc<ClickhouseClient>>,
     ) -> anyhow::Result<()> {
         for dt in &self.derived_tables {
             if dt.journal_columns.is_empty() {
@@ -1282,17 +1348,20 @@ impl ReorgTask {
             let network_filter = self.network_filter(dt.cross_chain);
 
             // Delete journal entries in the reorg range
+            #[cfg(feature = "postgres")]
             let pg_delete = format!(
                 "DELETE FROM rindexer_internal.derived_op_log \
                  WHERE derived_table = '{}' AND block_number >= {}{}",
                 dt.full_table_name, self.fork_point, network_filter,
             );
+            #[cfg(feature = "clickhouse")]
             let ch_delete = format!(
                 "ALTER TABLE rindexer_internal.derived_op_log DELETE \
                  WHERE derived_table = '{}' AND block_number >= {}{} SETTINGS mutations_sync = 1",
                 dt.full_table_name, self.fork_point, network_filter,
             );
 
+            #[cfg(feature = "postgres")]
             if let Some(pg) = pg {
                 pg.batch_execute(&pg_delete).await.with_context(|| {
                     format!(
@@ -1301,6 +1370,7 @@ impl ReorgTask {
                     )
                 })?;
             }
+            #[cfg(feature = "clickhouse")]
             if let Some(ch) = ch {
                 ch.execute(&ch_delete).await.with_context(|| {
                     format!(
@@ -1312,6 +1382,7 @@ impl ReorgTask {
 
             // Recalculate each non-reversible column from remaining journal entries
             for jc in &dt.journal_columns {
+                #[cfg(feature = "postgres")]
                 let network_join = if dt.cross_chain {
                     String::new()
                 } else {
@@ -1319,6 +1390,7 @@ impl ReorgTask {
                 };
 
                 // --- Postgres recalculation ---
+                #[cfg(feature = "postgres")]
                 if let Some(pg) = pg {
                     let update_sql = if matches!(jc.action, SetAction::Set) {
                         format!(
@@ -1375,6 +1447,7 @@ impl ReorgTask {
                 }
 
                 // --- ClickHouse recalculation ---
+                #[cfg(feature = "clickhouse")]
                 if let Some(ch) = ch {
                     let ch_network = if dt.cross_chain {
                         "1 = 1".to_string()
@@ -1438,6 +1511,7 @@ impl ReorgTask {
     /// Build a WHERE clause joining derived table rows to journal where_key.
     /// The journal stores where_key as "col1=val1,col2=val2", so we match using
     /// string concatenation on the derived table side.
+    #[cfg(feature = "postgres")]
     fn journal_where_key_join(where_columns: &[String], dt_alias: &str, sub_alias: &str) -> String {
         if where_columns.is_empty() {
             return format!("{}.network = {}.where_key", dt_alias, sub_alias);
@@ -1460,6 +1534,7 @@ impl ReorgTask {
 
     /// Build a ClickHouse expression that reconstructs the where_key string
     /// from table columns using `concat()`.
+    #[cfg(feature = "clickhouse")]
     fn journal_where_key_concat_ch(where_columns: &[String]) -> String {
         if where_columns.is_empty() {
             return "network".to_string();
@@ -1481,13 +1556,21 @@ impl ReorgTask {
     pub async fn execute(
         &self,
         window: &mut BlockChainWindow,
-        postgres: Option<&PostgresClient>,
-        clickhouse: Option<&Arc<ClickhouseClient>>,
+        #[cfg(feature = "postgres")] postgres: Option<&PostgresClient>,
+        #[cfg(feature = "clickhouse")] clickhouse: Option<&Arc<ClickhouseClient>>,
         provider: Option<&Arc<dyn ChainProvider>>,
     ) -> anyhow::Result<ReorgTaskResult> {
         let rollback_plan = DerivedTableRollbackPlan::default();
-        self.execute_with_rollback_plan(window, postgres, clickhouse, provider, &rollback_plan)
-            .await
+        self.execute_with_rollback_plan(
+            window,
+            #[cfg(feature = "postgres")]
+            postgres,
+            #[cfg(feature = "clickhouse")]
+            clickhouse,
+            provider,
+            &rollback_plan,
+        )
+        .await
     }
 
     /// Execute a reorg with optional iterate and type metadata for derived-table rollback.
@@ -1498,8 +1581,8 @@ impl ReorgTask {
     pub async fn execute_with_rollback_plan(
         &self,
         window: &mut BlockChainWindow,
-        postgres: Option<&PostgresClient>,
-        clickhouse: Option<&Arc<ClickhouseClient>>,
+        #[cfg(feature = "postgres")] postgres: Option<&PostgresClient>,
+        #[cfg(feature = "clickhouse")] clickhouse: Option<&Arc<ClickhouseClient>>,
         provider: Option<&Arc<dyn ChainProvider>>,
         rollback_plan: &DerivedTableRollbackPlan,
     ) -> anyhow::Result<ReorgTaskResult> {
@@ -1540,33 +1623,53 @@ impl ReorgTask {
             vec![]
         };
 
-        let corrected_blocks_owned: Vec<(u64, String, String)> = canonical
-            .iter()
-            .map(|(n, h, p)| (*n, format!("{:#x}", h), format!("{:#x}", p)))
-            .collect();
+        #[cfg(not(any(feature = "postgres", feature = "clickhouse")))]
+        let (total_deleted, affected_tx_hashes) = (0, Vec::new());
+        #[cfg(any(feature = "postgres", feature = "clickhouse"))]
+        let (total_deleted, affected_tx_hashes) = {
+            let corrected_blocks_owned: Vec<(u64, String, String)> = canonical
+                .iter()
+                .map(|(n, h, p)| (*n, format!("{:#x}", h), format!("{:#x}", p)))
+                .collect();
 
-        let corrected_blocks: Vec<(u64, &str, &str)> =
-            corrected_blocks_owned.iter().map(|(n, h, p)| (*n, h.as_str(), p.as_str())).collect();
+            let corrected_blocks: Vec<(u64, &str, &str)> = corrected_blocks_owned
+                .iter()
+                .map(|(n, h, p)| (*n, h.as_str(), p.as_str()))
+                .collect();
 
-        let mut pg_connection = match postgres {
-            Some(pg) => Some(pg.raw_connection().await.context("PostgreSQL connection failed")?),
-            None => None,
-        };
-        let pg_transaction = match pg_connection.as_mut() {
-            Some(connection) => {
-                Some(connection.transaction().await.context("PostgreSQL transaction failed")?)
-            }
-            None => None,
-        };
-        let pg = pg_transaction.as_ref();
+            #[cfg(feature = "postgres")]
+            let mut pg_connection = match postgres {
+                Some(pg) => {
+                    Some(pg.raw_connection().await.context("PostgreSQL connection failed")?)
+                }
+                None => None,
+            };
+            #[cfg(feature = "postgres")]
+            let pg_transaction = match pg_connection.as_mut() {
+                Some(connection) => {
+                    Some(connection.transaction().await.context("PostgreSQL transaction failed")?)
+                }
+                None => None,
+            };
+            #[cfg(feature = "postgres")]
+            let pg = pg_transaction.as_ref();
 
-        let reversal_snapshots = self.snapshot_for_reversal(pg, clickhouse, rollback_plan).await?;
+            let reversal_snapshots = self
+                .snapshot_for_reversal(
+                    #[cfg(feature = "postgres")]
+                    pg,
+                    #[cfg(feature = "clickhouse")]
+                    clickhouse,
+                    rollback_plan,
+                )
+                .await?;
 
-        let rollback_result: anyhow::Result<(u64, Vec<String>)> = async {
+            let rollback_result: anyhow::Result<(u64, Vec<String>)> = async {
             let mut affected_tx_hashes = Vec::new();
             let mut total_deleted = 0u64;
 
-            if let Some(pg) = pg {
+            #[cfg(feature = "postgres")]
+if let Some(pg) = pg {
                 let table_names =
                     self.event_tables.iter().map(|t| t.full_name.as_str()).collect::<Vec<_>>();
                 let checkpoint_tables = self
@@ -1589,7 +1692,8 @@ impl ReorgTask {
                 affected_tx_hashes = tx_hashes;
             }
 
-            if let Some(ch) = clickhouse {
+            #[cfg(feature = "clickhouse")]
+if let Some(ch) = clickhouse {
                 let tables = self
                     .event_tables
                     .iter()
@@ -1612,7 +1716,11 @@ impl ReorgTask {
                     .await
                     .context("ClickHouse reorg rollback failed")?;
 
-                if pg.is_none() {
+                #[cfg(feature = "postgres")]
+                let has_postgres = pg.is_some();
+                #[cfg(not(feature = "postgres"))]
+                let has_postgres = false;
+                if !has_postgres {
                     total_deleted = ch_deleted;
                     affected_tx_hashes = ch_tx_hashes;
                 } else if ch_deleted != total_deleted {
@@ -1625,10 +1733,14 @@ impl ReorgTask {
                 }
             }
 
-            Self::apply_reversal_from_snapshots(&reversal_snapshots.entries, pg, clickhouse)
+            Self::apply_reversal_from_snapshots(&reversal_snapshots.entries, #[cfg(feature = "postgres")]
+pg, #[cfg(feature = "clickhouse")]
+clickhouse)
                 .await
                 .context("Accumulative reversal from snapshots failed")?;
-            self.recalculate_from_journal(pg, clickhouse)
+            self.recalculate_from_journal(#[cfg(feature = "postgres")]
+pg, #[cfg(feature = "clickhouse")]
+clickhouse)
                 .await
                 .context("Journal recalculation failed")?;
 
@@ -1638,7 +1750,8 @@ impl ReorgTask {
                 }
                 let network_filter = self.network_filter(dt.cross_chain);
 
-                if let Some(pg) = pg {
+                #[cfg(feature = "postgres")]
+if let Some(pg) = pg {
                     let query = format!(
                         "DELETE FROM {} WHERE rindexer_block_number >= {}{}",
                         dt.full_table_name, self.fork_point, network_filter
@@ -1655,7 +1768,8 @@ impl ReorgTask {
                         dt.full_table_name
                     );
                 }
-                if let Some(ch) = clickhouse {
+                #[cfg(feature = "clickhouse")]
+if let Some(ch) = clickhouse {
                     let query = format!(
                         "ALTER TABLE {} DELETE WHERE rindexer_block_number >= {}{} SETTINGS mutations_sync = 1",
                         dt.full_table_name, self.fork_point, network_filter
@@ -1678,19 +1792,25 @@ impl ReorgTask {
         }
         .await;
 
-        if rollback_result.is_ok() {
-            Self::cleanup_reversal_snapshots(
-                &reversal_snapshots.entries,
-                reversal_snapshots.clickhouse_marker.as_deref(),
-                pg,
-                clickhouse,
-            )
-            .await;
-        }
-        let (total_deleted, affected_tx_hashes) = rollback_result?;
-        if let Some(transaction) = pg_transaction {
-            transaction.commit().await.context("PostgreSQL reorg commit failed")?;
-        }
+            if rollback_result.is_ok() {
+                Self::cleanup_reversal_snapshots(
+                    &reversal_snapshots.entries,
+                    reversal_snapshots.clickhouse_marker.as_deref(),
+                    #[cfg(feature = "postgres")]
+                    pg,
+                    #[cfg(feature = "clickhouse")]
+                    clickhouse,
+                )
+                .await;
+            }
+            let (total_deleted, affected_tx_hashes) = rollback_result?;
+            #[cfg(feature = "postgres")]
+            if let Some(transaction) = pg_transaction {
+                transaction.commit().await.context("PostgreSQL reorg commit failed")?;
+            }
+
+            (total_deleted, affected_tx_hashes)
+        };
 
         // Update the in-memory window after all DB changes succeed.
         // When canonical blocks are available (parent-hash detection), overwrite with corrected hashes.

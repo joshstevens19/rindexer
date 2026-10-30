@@ -1,42 +1,46 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    sync::{Arc, Mutex as StdMutex},
-    time::Instant,
-};
-
-use alloy::primitives::B256;
-use aws_sdk_sns::{config::http::HttpResponse, error::SdkError, operation::publish::PublishError};
-use futures::future::join_all;
-use serde_json::{json, Value};
-use thiserror::Error;
-use tokio::{
-    sync::Mutex as AsyncMutex,
-    task,
-    task::{JoinError, JoinHandle},
-};
-use tracing::warn;
-
 use crate::{
     event::{filter_event_data_by_conditions, EventMessage},
-    indexer::native_transfer::EVENT_NAME,
-    indexer::reorg::AffectedTable,
+    indexer::{native_transfer::EVENT_NAME, reorg::AffectedTable},
     manifest::stream::{
-        CloudflareQueuesStreamConfig, CloudflareQueuesStreamQueueConfig, RabbitMQStreamConfig,
-        RabbitMQStreamQueueConfig, RedisStreamConfig, RedisStreamStreamConfig,
-        SNSStreamTopicConfig, StreamEvent, StreamsConfig, WebhookStreamConfig,
+        CloudflareQueuesStreamConfig, CloudflareQueuesStreamQueueConfig, StreamEvent,
+        StreamsConfig, WebhookStreamConfig,
     },
-    metrics::streams::{self as stream_metrics, stream_type},
-    streams::{
-        CloudflareQueues, CloudflareQueuesError, RabbitMQ, RabbitMQError, Redis, RedisError,
-        Webhook, WebhookError, SNS,
-    },
+    metrics::{streams as stream_metrics, streams::stream_type},
+    streams::{CloudflareQueues, CloudflareQueuesError, Webhook, WebhookError},
 };
-
+#[cfg(feature = "sns")]
+use crate::{manifest::stream::SNSStreamTopicConfig, streams::SNS};
 #[cfg(feature = "kafka")]
 use crate::{
     manifest::stream::{KafkaStreamConfig, KafkaStreamQueueConfig},
     streams::kafka::{Kafka, KafkaError},
 };
+#[cfg(feature = "rabbitmq")]
+use crate::{
+    manifest::stream::{RabbitMQStreamConfig, RabbitMQStreamQueueConfig},
+    streams::{RabbitMQ, RabbitMQError},
+};
+#[cfg(feature = "redis")]
+use crate::{
+    manifest::stream::{RedisStreamConfig, RedisStreamStreamConfig},
+    streams::{Redis, RedisError},
+};
+use alloy::primitives::B256;
+#[cfg(feature = "sns")]
+use aws_sdk_sns::{config::http::HttpResponse, error::SdkError, operation::publish::PublishError};
+use futures::future::join_all;
+use serde_json::{json, Value};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::{Arc, Mutex as StdMutex},
+    time::Instant,
+};
+use thiserror::Error;
+use tokio::{
+    sync::Mutex as AsyncMutex,
+    task::{self, JoinError, JoinHandle},
+};
+use tracing::warn;
 
 // we should limit the max chunk size we send over when streaming to 70KB - 100KB is most limits
 // we can add this to yaml if people need it
@@ -51,6 +55,7 @@ const FINALIZED_BUFFER_SOFT_CAP: usize = 10_000;
 type StreamPublishes = Vec<JoinHandle<Result<usize, StreamError>>>;
 
 #[derive(Debug, Clone)]
+#[cfg(feature = "sns")]
 struct SNSStream {
     config: Vec<SNSStreamTopicConfig>,
     client: Arc<SNS>,
@@ -60,12 +65,14 @@ struct SNSStream {
 #[derive(Error, Debug)]
 pub enum StreamError {
     #[error("SNS could not publish - {0}")]
+    #[cfg(feature = "sns")]
     SnsCouldNotPublish(#[from] SdkError<PublishError, HttpResponse>),
 
     #[error("Webhook could not publish: {0}")]
     WebhookCouldNotPublish(#[from] WebhookError),
 
     #[error("RabbitMQ could not publish: {0}")]
+    #[cfg(feature = "rabbitmq")]
     RabbitMQCouldNotPublish(#[from] RabbitMQError),
 
     #[cfg(feature = "kafka")]
@@ -73,6 +80,7 @@ pub enum StreamError {
     KafkaCouldNotPublish(#[from] KafkaError),
 
     #[error("Redis could not publish: {0}")]
+    #[cfg(feature = "redis")]
     RedisCouldNotPublish(#[from] RedisError),
 
     #[error("Cloudflare Queues could not publish: {0}")]
@@ -89,6 +97,7 @@ struct WebhookStream {
 }
 
 #[derive(Debug)]
+#[cfg(feature = "rabbitmq")]
 pub struct RabbitMQStream {
     config: RabbitMQStreamConfig,
     client: Arc<RabbitMQ>,
@@ -102,6 +111,7 @@ pub struct KafkaStream {
 }
 
 #[derive(Debug)]
+#[cfg(feature = "redis")]
 pub struct RedisStream {
     config: RedisStreamConfig,
     client: Arc<Redis>,
@@ -128,11 +138,14 @@ pub(crate) struct BufferKey {
 
 #[derive(Debug)]
 pub struct StreamsClients {
+    #[cfg(feature = "sns")]
     sns: Option<SNSStream>,
     webhook: Option<WebhookStream>,
+    #[cfg(feature = "rabbitmq")]
     rabbitmq: Option<RabbitMQStream>,
     #[cfg(feature = "kafka")]
     kafka: Option<KafkaStream>,
+    #[cfg(feature = "redis")]
     redis: Option<RedisStream>,
     cloudflare_queues: Option<CloudflareQueuesStream>,
     /// Per-(stream-type, config-index, network, event) buffers for
@@ -152,6 +165,7 @@ type FinalizedDeliveryBuffer = (BufferKey, Vec<(u64, Vec<Value>)>);
 impl StreamsClients {
     pub async fn new(stream_config: StreamsConfig) -> Self {
         #[allow(clippy::manual_map)]
+        #[cfg(feature = "sns")]
         let sns = if let Some(config) = &stream_config.sns {
             Some(SNSStream {
                 config: config.topics.clone(),
@@ -173,6 +187,7 @@ impl StreamsClients {
         // currently aborts the indexer process even if the broker would
         // recover seconds later. The same critique applies to the Kafka
         // `unwrap_or_else(panic)` below — fix both together.
+        #[cfg(feature = "rabbitmq")]
         let rabbitmq = if let Some(config) = stream_config.rabbitmq.as_ref() {
             Some(RabbitMQStream {
                 config: config.clone(),
@@ -202,6 +217,7 @@ impl StreamsClients {
         };
 
         #[allow(clippy::manual_map)]
+        #[cfg(feature = "redis")]
         let redis = if let Some(config) = stream_config.redis.as_ref() {
             Some(RedisStream {
                 config: config.clone(),
@@ -229,11 +245,14 @@ impl StreamsClients {
         };
 
         Self {
+            #[cfg(feature = "sns")]
             sns,
             webhook,
+            #[cfg(feature = "rabbitmq")]
             rabbitmq,
             #[cfg(feature = "kafka")]
             kafka,
+            #[cfg(feature = "redis")]
             redis,
             cloudflare_queues,
             finalized_buffers: AsyncMutex::new(HashMap::new()),
@@ -266,11 +285,14 @@ impl StreamsClients {
     #[cfg(test)]
     pub(crate) fn empty_for_test() -> Self {
         Self {
+            #[cfg(feature = "sns")]
             sns: None,
             webhook: None,
+            #[cfg(feature = "rabbitmq")]
             rabbitmq: None,
             #[cfg(feature = "kafka")]
             kafka: None,
+            #[cfg(feature = "redis")]
             redis: None,
             cloudflare_queues: None,
             finalized_buffers: AsyncMutex::new(HashMap::new()),
@@ -335,21 +357,20 @@ impl StreamsClients {
     }
 
     fn has_any_streams(&self) -> bool {
-        self.sns.is_some()
-            || self.webhook.is_some()
-            || self.rabbitmq.is_some()
-            || {
-                #[cfg(feature = "kafka")]
-                {
-                    self.kafka.is_some()
-                }
-                #[cfg(not(feature = "kafka"))]
-                {
-                    false
-                }
-            }
-            || self.redis.is_some()
-            || self.cloudflare_queues.is_some()
+        [
+            #[cfg(feature = "sns")]
+            self.sns.is_some(),
+            self.webhook.is_some(),
+            #[cfg(feature = "rabbitmq")]
+            self.rabbitmq.is_some(),
+            #[cfg(feature = "kafka")]
+            self.kafka.is_some(),
+            #[cfg(feature = "redis")]
+            self.redis.is_some(),
+            self.cloudflare_queues.is_some(),
+        ]
+        .into_iter()
+        .any(|enabled| enabled)
     }
 
     fn chunk_data(&self, data_array: &Vec<Value>) -> Vec<Vec<Value>> {
@@ -389,6 +410,7 @@ impl StreamsClients {
         alias_name.unwrap_or_else(|| event_message.event_name.clone())
     }
 
+    #[cfg(any(feature = "sns", test))]
     fn create_chunk_message_raw(
         &self,
         events: &[StreamEvent],
@@ -545,6 +567,7 @@ impl StreamsClients {
             || config_events.iter().any(|e| e.event_name == event_name)
     }
 
+    #[cfg(feature = "sns")]
     fn sns_stream_tasks(
         &self,
         config: &SNSStreamTopicConfig,
@@ -644,6 +667,7 @@ impl StreamsClients {
         tasks
     }
 
+    #[cfg(feature = "rabbitmq")]
     fn rabbitmq_stream_tasks(
         &self,
         config: &RabbitMQStreamQueueConfig,
@@ -751,6 +775,7 @@ impl StreamsClients {
         tasks
     }
 
+    #[cfg(feature = "redis")]
     fn redis_stream_tasks(
         &self,
         config: &RedisStreamStreamConfig,
@@ -876,6 +901,7 @@ impl StreamsClients {
             let chunks = Arc::new(self.chunk_data(data_array));
             let mut streams: Vec<StreamPublishes> = Vec::new();
 
+            #[cfg(feature = "sns")]
             if let Some(sns) = &self.sns {
                 for (idx, config) in sns.config.iter().enumerate() {
                     if Self::should_send_for_config(
@@ -934,6 +960,7 @@ impl StreamsClients {
                 }
             }
 
+            #[cfg(feature = "rabbitmq")]
             if let Some(rabbitmq) = &self.rabbitmq {
                 for (idx, config) in rabbitmq.config.exchanges.iter().enumerate() {
                     if Self::should_send_for_config(
@@ -993,6 +1020,7 @@ impl StreamsClients {
                 }
             }
 
+            #[cfg(feature = "redis")]
             if let Some(redis) = &self.redis {
                 for (idx, config) in redis.config.streams.iter().enumerate() {
                     if Self::should_send_for_config(
@@ -1289,6 +1317,7 @@ impl StreamsClients {
             );
 
             let tasks: StreamPublishes = match key.stream_type {
+                #[cfg(feature = "sns")]
                 stream_type::SNS => {
                     let sns = self.sns.as_ref().expect("sns buffer without sns config");
                     self.sns_stream_tasks(
@@ -1312,6 +1341,7 @@ impl StreamsClients {
                         false,
                     )
                 }
+                #[cfg(feature = "rabbitmq")]
                 stream_type::RABBITMQ => {
                     let rabbitmq =
                         self.rabbitmq.as_ref().expect("rabbitmq buffer without rabbitmq config");
@@ -1336,6 +1366,7 @@ impl StreamsClients {
                         false,
                     )
                 }
+                #[cfg(feature = "redis")]
                 stream_type::REDIS => {
                     let redis = self.redis.as_ref().expect("redis buffer without redis config");
                     self.redis_stream_tasks(
@@ -1478,11 +1509,14 @@ mod tests {
 
     fn empty_clients() -> StreamsClients {
         StreamsClients {
+            #[cfg(feature = "sns")]
             sns: None,
             webhook: None,
+            #[cfg(feature = "rabbitmq")]
             rabbitmq: None,
             #[cfg(feature = "kafka")]
             kafka: None,
+            #[cfg(feature = "redis")]
             redis: None,
             cloudflare_queues: None,
             finalized_buffers: AsyncMutex::new(HashMap::new()),
@@ -1492,11 +1526,14 @@ mod tests {
 
     fn webhook_clients(config: Vec<WebhookStreamConfig>) -> StreamsClients {
         StreamsClients {
+            #[cfg(feature = "sns")]
             sns: None,
             webhook: Some(WebhookStream { config, client: Arc::new(Webhook::new()) }),
+            #[cfg(feature = "rabbitmq")]
             rabbitmq: None,
             #[cfg(feature = "kafka")]
             kafka: None,
+            #[cfg(feature = "redis")]
             redis: None,
             cloudflare_queues: None,
             finalized_buffers: AsyncMutex::new(HashMap::new()),
@@ -1514,11 +1551,14 @@ mod tests {
             queues,
         };
         StreamsClients {
+            #[cfg(feature = "sns")]
             sns: None,
             webhook: None,
+            #[cfg(feature = "rabbitmq")]
             rabbitmq: None,
             #[cfg(feature = "kafka")]
             kafka: None,
+            #[cfg(feature = "redis")]
             redis: None,
             cloudflare_queues: Some(CloudflareQueuesStream {
                 config,

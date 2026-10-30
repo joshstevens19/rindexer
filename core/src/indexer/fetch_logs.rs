@@ -1,19 +1,27 @@
-use crate::adaptive_concurrency::{AdaptiveConcurrency, ADAPTIVE_CONCURRENCY};
-use crate::blockclock::BlockClock;
+#[cfg(feature = "clickhouse")]
 use crate::database::clickhouse::client::ClickhouseClient;
-use crate::event::callback_registry::{EventCallbackRegistry, TraceCallbackRegistry};
-use crate::helpers::{halved_block_number, is_relevant_block};
-use crate::indexer::heartbeat::{HeartbeatAction, HeartbeatTracker};
-use crate::indexer::reorg::{
-    detect_and_handle_reorg, reorg_safe_distance_for_chain, ReorgContext, ReorgCoordinator,
-};
-use crate::indexer::tip_logs::{filter_logs_for_stream, SharedTipLogs, TipLookup};
-use crate::metrics::indexing as metrics;
+#[cfg(feature = "postgres")]
 use crate::PostgresClient;
 use crate::{
-    event::{config::EventProcessingConfig, RindexerEventFilter},
-    indexer::{reorg::handle_chain_notification, IndexingEventProgressStatus},
+    adaptive_concurrency::{AdaptiveConcurrency, ADAPTIVE_CONCURRENCY},
+    blockclock::BlockClock,
+    event::{
+        callback_registry::{EventCallbackRegistry, TraceCallbackRegistry},
+        config::EventProcessingConfig,
+        RindexerEventFilter,
+    },
+    helpers::{halved_block_number, is_relevant_block},
+    indexer::{
+        heartbeat::{HeartbeatAction, HeartbeatTracker},
+        reorg::{
+            detect_and_handle_reorg, handle_chain_notification, reorg_safe_distance_for_chain,
+            ReorgContext, ReorgCoordinator,
+        },
+        tip_logs::{filter_logs_for_stream, SharedTipLogs, TipLookup},
+        IndexingEventProgressStatus,
+    },
     is_running,
+    metrics::indexing as metrics,
     provider::{ChainProvider, ProviderError},
 };
 use alloy::{
@@ -23,12 +31,21 @@ use alloy::{
 use lru::LruCache;
 use rand::{random_bool, random_ratio};
 use regex::Regex;
-use std::collections::{BTreeMap, HashSet};
-use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
-use tokio::sync::Mutex;
-use tokio::{sync::mpsc, time::Instant};
+use std::{
+    collections::{BTreeMap, HashSet},
+    error::Error,
+    num::NonZeroUsize,
+    str::FromStr,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
+use tokio::{
+    sync::{mpsc, Mutex},
+    time::Instant,
+};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -241,7 +258,9 @@ pub fn fetch_logs_stream(
                         original_max_limit,
                         config.cancel_token().clone(),
                         reorg_coordinator,
+                        #[cfg(feature = "postgres")]
                         config.postgres(),
+                        #[cfg(feature = "clickhouse")]
                         config.clickhouse(),
                         &registry,
                         trace_registry.as_deref(),
@@ -346,7 +365,9 @@ pub fn fetch_logs_stream(
                 original_max_limit,
                 config.cancel_token().clone(),
                 reorg_coordinator,
+                #[cfg(feature = "postgres")]
                 config.postgres(),
+                #[cfg(feature = "clickhouse")]
                 config.clickhouse(),
                 &registry,
                 trace_registry.as_deref(),
@@ -1167,8 +1188,8 @@ async fn live_indexing_stream(
     original_max_limit: Option<U64>,
     cancel_token: CancellationToken,
     reorg_coordinator: Option<Arc<Mutex<ReorgCoordinator>>>,
-    postgres: Option<Arc<PostgresClient>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    #[cfg(feature = "postgres")] postgres: Option<Arc<PostgresClient>>,
+    #[cfg(feature = "clickhouse")] clickhouse: Option<Arc<ClickhouseClient>>,
     registry: &EventCallbackRegistry,
     trace_registry: Option<&TraceCallbackRegistry>,
 ) {
@@ -1244,7 +1265,9 @@ async fn live_indexing_stream(
                 match guard.on_exex_reorg(fork_block, last_reverted) {
                     Ok(task) => {
                         let reorg_ctx = ReorgContext {
+                            #[cfg(feature = "postgres")]
                             postgres: postgres.as_deref(),
+                            #[cfg(feature = "clickhouse")]
                             clickhouse: clickhouse.as_ref(),
                             registry: Some(registry),
                             trace_registry,
@@ -1317,7 +1340,9 @@ async fn live_indexing_stream(
                             IndexingEventProgressStatus::live_log()
                         );
                         let reorg_ctx = ReorgContext {
+                            #[cfg(feature = "postgres")]
                             postgres: postgres.as_deref(),
+                            #[cfg(feature = "clickhouse")]
                             clickhouse: clickhouse.as_ref(),
                             registry: Some(registry),
                             trace_registry,
@@ -1606,7 +1631,9 @@ async fn live_indexing_stream(
                                                 ) {
                                                     Ok(task) => {
                                                         let reorg_ctx = ReorgContext {
+                                                            #[cfg(feature = "postgres")]
                                                             postgres: postgres.as_deref(),
+                                                            #[cfg(feature = "clickhouse")]
                                                             clickhouse: clickhouse.as_ref(),
                                                             registry: Some(registry),
                                                             trace_registry,
@@ -2616,7 +2643,9 @@ mod tests {
             Some(configured_max_block_range),
             cancel_token,
             None,
+            #[cfg(feature = "postgres")]
             None,
+            #[cfg(feature = "clickhouse")]
             None,
             &EventCallbackRegistry::default(),
             None,
@@ -2669,7 +2698,9 @@ mod tests {
                 Some(U64::from(500)),
                 cancel_token,
                 None,
+                #[cfg(feature = "postgres")]
                 None,
+                #[cfg(feature = "clickhouse")]
                 None,
                 &EventCallbackRegistry::default(),
                 None,
@@ -2924,7 +2955,9 @@ mod tests {
             None,
             cancel_token.clone(),
             None,
+            #[cfg(feature = "postgres")]
             None,
+            #[cfg(feature = "clickhouse")]
             None,
             &registry,
             None,

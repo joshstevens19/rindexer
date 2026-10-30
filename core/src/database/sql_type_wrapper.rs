@@ -1,16 +1,21 @@
-use std::str::FromStr;
-
-use crate::helpers::parse_solidity_integer_type;
-use crate::{abi::ABIInput, event::callback_registry::TxInformation, types::core::LogParam};
+use crate::{
+    abi::ABIInput, event::callback_registry::TxInformation, helpers::parse_solidity_integer_type,
+    types::core::LogParam,
+};
 #[allow(deprecated)]
 use alloy::{
     dyn_abi::DynSolValue,
     primitives::{Address, Bytes, B128, B256, B512, I256, U256, U512},
 };
+#[cfg(feature = "postgres")]
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, Utc};
+#[cfg(feature = "postgres")]
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
+#[cfg(feature = "postgres")]
+use std::str::FromStr;
+#[cfg(feature = "postgres")]
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type as PgType};
 use tracing::error;
 use uuid::Uuid;
@@ -19,10 +24,12 @@ use uuid::Uuid;
 /// Backslashes must be escaped first, then single quotes — ClickHouse uses
 /// C-style backslash escaping, so an unescaped trailing `\` would consume
 /// the closing `'` delimiter and break out of the string.
+#[cfg(feature = "clickhouse")]
 fn ch_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('\'', "\\'")
 }
 
+#[cfg(feature = "postgres")]
 fn serialize_bytea_array<'a>(
     values: impl IntoIterator<Item = &'a [u8]>,
     ty: &PgType,
@@ -251,6 +258,7 @@ impl EthereumSqlTypeWrapper {
         }
     }
 
+    #[cfg(feature = "postgres")]
     pub fn to_type(&self) -> PgType {
         match self {
             // Boolean
@@ -370,6 +378,7 @@ impl EthereumSqlTypeWrapper {
         }
     }
 
+    #[cfg(feature = "clickhouse")]
     pub fn to_clickhouse_value(&self) -> String {
         match self {
             // Boolean
@@ -606,6 +615,7 @@ impl EthereumSqlTypeWrapper {
         }
     }
 
+    #[cfg(feature = "postgres")]
     fn serialize_vec_decimal<T: ToString>(
         values: &Vec<T>,
         ty: &PgType,
@@ -637,6 +647,7 @@ impl EthereumSqlTypeWrapper {
         Ok(IsNull::No)
     }
 
+    #[cfg(feature = "postgres")]
     fn convert_to_base_10000_numeric_digits<T: Into<u128> + Copy>(value: T) -> Vec<i16> {
         let mut groups = Vec::new();
         let mut num: u128 = value.into();
@@ -648,6 +659,7 @@ impl EthereumSqlTypeWrapper {
         groups
     }
 
+    #[cfg(feature = "postgres")]
     fn convert_u256_to_base_10000_numeric_digits(value: &U256) -> Vec<i16> {
         let mut groups = Vec::new();
         let mut num = *value;
@@ -667,6 +679,7 @@ impl EthereumSqlTypeWrapper {
         groups
     }
 
+    #[cfg(feature = "postgres")]
     fn write_numeric_to_postgres<T>(
         value: T,
         is_negative: bool,
@@ -698,6 +711,7 @@ impl EthereumSqlTypeWrapper {
         Ok(IsNull::No)
     }
 
+    #[cfg(feature = "postgres")]
     fn write_u256_numeric_to_postgres<T>(
         value: T,
         is_negative: bool,
@@ -729,6 +743,7 @@ impl EthereumSqlTypeWrapper {
         Ok(IsNull::No)
     }
 
+    #[cfg(feature = "postgres")]
     fn serialize_numeric_array<T>(
         values: &[T],
         out: &mut BytesMut,
@@ -758,6 +773,7 @@ impl EthereumSqlTypeWrapper {
         Ok(IsNull::No)
     }
 
+    #[cfg(feature = "postgres")]
     fn serialize_numeric_u256_array<T>(
         values: &[T],
         out: &mut BytesMut,
@@ -788,6 +804,7 @@ impl EthereumSqlTypeWrapper {
     }
 }
 
+#[cfg(feature = "postgres")]
 impl ToSql for EthereumSqlTypeWrapper {
     fn to_sql(
         &self,
@@ -2337,6 +2354,7 @@ mod tests {
     // =========================================================================
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_u256_numeric_serializes_as_decimal_string() {
         let val = U256::from(1_500_000u64);
         let wrapper = EthereumSqlTypeWrapper::U256Numeric(val);
@@ -2344,12 +2362,14 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_u256_numeric_zero() {
         let wrapper = EthereumSqlTypeWrapper::U256Numeric(U256::ZERO);
         assert_eq!(wrapper.to_clickhouse_value(), "0");
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_u256_numeric_large_value() {
         let val = U256::from(1_000_000_000_000_000u64);
         let wrapper = EthereumSqlTypeWrapper::U256Numeric(val);
@@ -2357,18 +2377,21 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_u256_numeric_nullable_some() {
         let wrapper = EthereumSqlTypeWrapper::U256NumericNullable(Some(U256::from(42u64)));
         assert_eq!(wrapper.to_clickhouse_value(), "42");
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_u256_numeric_nullable_none() {
         let wrapper = EthereumSqlTypeWrapper::U256NumericNullable(None);
         assert_eq!(wrapper.to_clickhouse_value(), "NULL");
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_vec_u256_numeric() {
         let vals = vec![U256::from(100u64), U256::from(200u64), U256::from(300u64)];
         let wrapper = EthereumSqlTypeWrapper::VecU256Numeric(vals);
@@ -2376,6 +2399,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_i256_numeric() {
         let val = I256::try_from(-42i64).unwrap();
         let wrapper = EthereumSqlTypeWrapper::I256Numeric(val);
@@ -2383,6 +2407,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_u256_bytes() {
         let val = U256::from(0xDEADBEEFu64);
         let wrapper = EthereumSqlTypeWrapper::U256Bytes(val);
@@ -2392,6 +2417,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_u256_bytes_nullable() {
         let val = U256::from(123u64);
         let wrapper = EthereumSqlTypeWrapper::U256BytesNullable(val);
@@ -2400,6 +2426,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_i256_bytes() {
         let val = I256::try_from(99i64).unwrap();
         let wrapper = EthereumSqlTypeWrapper::I256Bytes(val);
@@ -2408,6 +2435,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_address_bytes() {
         let addr = Address::from_str("0x1234567890123456789012345678901234567890").unwrap();
         let wrapper = EthereumSqlTypeWrapper::AddressBytes(addr);
@@ -2416,6 +2444,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_address_bytes_nullable() {
         let addr = Address::from_str("0xabcdefabcdefabcdefabcdefabcdefabcdefabcd").unwrap();
         let wrapper = EthereumSqlTypeWrapper::AddressBytesNullable(addr);
@@ -2424,6 +2453,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_b256_bytes() {
         let hash =
             B256::from_str("0x0000000000000000000000000000000000000000000000000000000000000001")
@@ -2434,18 +2464,21 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_regular_u256_unchanged() {
         let wrapper = EthereumSqlTypeWrapper::U256(U256::from(999u64));
         assert_eq!(wrapper.to_clickhouse_value(), "999");
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_u64_bigint() {
         let wrapper = EthereumSqlTypeWrapper::U64BigInt(12345678u64);
         assert_eq!(wrapper.to_clickhouse_value(), "12345678");
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_string_char_is_quoted() {
         let wrapper = EthereumSqlTypeWrapper::StringChar(
             "0x145c6705ffbf461e85d08b4a7f5850d6b52a7364d93a057722ca1194034f3ba4".to_string(),
@@ -2457,12 +2490,14 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_string_varchar_escapes_quotes() {
         let wrapper = EthereumSqlTypeWrapper::StringVarchar("abc'def".to_string());
         assert_eq!(wrapper.to_clickhouse_value(), "'abc\\'def'");
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_string_escapes_backslash_before_quotes() {
         // A trailing backslash without escaping would consume the closing quote:
         // 'hello\' → ClickHouse sees the \' as an escaped quote, string never closes.
@@ -2475,6 +2510,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_string_escapes_backslash_in_vec() {
         let wrapper = EthereumSqlTypeWrapper::VecStringVarchar(vec![
             "normal".to_string(),
@@ -2485,6 +2521,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_vec_string_char_is_quoted() {
         let wrapper =
             EthereumSqlTypeWrapper::VecStringChar(vec!["0xaaa".to_string(), "0xbbb".to_string()]);
@@ -2493,12 +2530,14 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "Unsupported")]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_jsonb_panics() {
         EthereumSqlTypeWrapper::JSONB(json!({"k": "v"})).to_clickhouse_value();
     }
 
     #[test]
     #[should_panic(expected = "Unsupported")]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_uuid_panics() {
         EthereumSqlTypeWrapper::Uuid(Uuid::new_v4()).to_clickhouse_value();
     }
@@ -2508,6 +2547,7 @@ mod tests {
     // =========================================================================
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_u256_numeric_max_value() {
         // U256::MAX = 2^256 - 1 — must not overflow or truncate
         let wrapper = EthereumSqlTypeWrapper::U256Numeric(U256::MAX);
@@ -2519,6 +2559,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_u256_numeric_one_wei() {
         // Smallest non-zero value — must not be lost
         let wrapper = EthereumSqlTypeWrapper::U256Numeric(U256::from(1u64));
@@ -2526,6 +2567,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_u256_numeric_typical_usdc_amount() {
         // 1.5 USDC = 1_500_000 raw (6 decimals) — stored as-is, NOT pre-divided
         let wrapper = EthereumSqlTypeWrapper::U256Numeric(U256::from(1_500_000u64));
@@ -2534,6 +2576,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_u256_numeric_sub_one_usdc() {
         // 0.5 USDC = 500_000 raw — this is the value that broke with integer division
         let wrapper = EthereumSqlTypeWrapper::U256Numeric(U256::from(500_000u64));
@@ -2541,6 +2584,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_i256_numeric_negative() {
         let val = I256::try_from(-1_000_000i64).unwrap();
         let wrapper = EthereumSqlTypeWrapper::I256Numeric(val);
@@ -2548,6 +2592,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_i256_numeric_min_value() {
         let wrapper = EthereumSqlTypeWrapper::I256Numeric(I256::MIN);
         let result = wrapper.to_clickhouse_value();
@@ -2556,6 +2601,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_address_bytes_is_checksummed() {
         // rindexer outputs EIP-55 checksummed addresses
         let addr = Address::from_str("0xe111180000d2663C0091e4f400237545B87B996B").unwrap();
@@ -2567,6 +2613,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_vec_address_bytes() {
         let addr1 = Address::from_str("0x1111111111111111111111111111111111111111").unwrap();
         let addr2 = Address::from_str("0x2222222222222222222222222222222222222222").unwrap();
@@ -2579,6 +2626,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_b256_bytes_hash() {
         let hash =
             B256::from_str("0xabcdef0000000000000000000000000000000000000000000000000000000001")
@@ -2590,6 +2638,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_vec_b256_bytes() {
         let h1 =
             B256::from_str("0x0000000000000000000000000000000000000000000000000000000000000001")
@@ -2604,6 +2653,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_vec_i256_bytes() {
         let v1 = I256::try_from(42i64).unwrap();
         let v2 = I256::try_from(-99i64).unwrap();
@@ -2613,6 +2663,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_null_value() {
         let wrapper = EthereumSqlTypeWrapper::Null;
         assert_eq!(wrapper.to_clickhouse_value(), "NULL");
@@ -2624,6 +2675,7 @@ mod tests {
     // =========================================================================
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_u256_and_u256_numeric_produce_same_output() {
         let val = U256::from(123_456_789u64);
         let raw = EthereumSqlTypeWrapper::U256(val);
@@ -2632,6 +2684,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_u256_and_u256_numeric_zero_same() {
         let raw = EthereumSqlTypeWrapper::U256(U256::ZERO);
         let numeric = EthereumSqlTypeWrapper::U256Numeric(U256::ZERO);
@@ -2639,6 +2692,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
     fn test_ch_u256_and_u256_numeric_max_same() {
         let raw = EthereumSqlTypeWrapper::U256(U256::MAX);
         let numeric = EthereumSqlTypeWrapper::U256Numeric(U256::MAX);

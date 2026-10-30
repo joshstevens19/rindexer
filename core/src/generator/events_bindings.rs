@@ -710,12 +710,13 @@ pub fn generate_event_handlers(
     let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
 
     let mut imports = String::new();
+    let postgres_import = if storage.postgres_enabled() { "PgType, " } else { "" };
     imports.push_str(&format!(
         r#"#![allow(non_snake_case)]
 {GENERATED_FILE_HEADER}
 use rindexer::{{
     event::callback_registry::EventCallbackRegistry,
-    EthereumSqlTypeWrapper, PgType, rindexer_error, rindexer_info
+    EthereumSqlTypeWrapper, {postgres_import}rindexer_error, rindexer_info
 }};
 "#
     ));
@@ -1072,6 +1073,12 @@ mod tests {
             .lines()
             .any(|l| l.contains("insert_bulk_with_cursor") && !l.trim_start().starts_with("//"));
         assert!(!atomic_call, "atomic call must never be emitted:\n{code}");
+    }
+
+    #[test]
+    fn handlers_without_postgres_do_not_import_pg_types() {
+        let code = generated_handlers(PLAIN_CONTRACT, "csv:\n  enabled: true");
+        assert!(!code.contains("PgType"));
     }
 
     #[test]
