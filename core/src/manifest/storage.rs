@@ -1,9 +1,4 @@
-use std::path::Path;
-
-use serde::de::Error;
-use serde::{Deserialize, Deserializer, Serialize};
-use tracing::info;
-
+#[cfg(feature = "postgres")]
 use crate::{
     database::postgres::{
         indexes::{
@@ -17,6 +12,11 @@ use crate::{
     },
     manifest::contract::Contract,
 };
+use serde::{de::Error, Deserialize, Deserializer, Serialize};
+#[cfg(feature = "postgres")]
+use std::path::Path;
+#[cfg(feature = "postgres")]
+use tracing::info;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ForeignKey {
@@ -158,15 +158,19 @@ impl<'de> Deserialize<'de> for Storage {
 #[derive(thiserror::Error, Debug)]
 pub enum RelationshipsAndIndexersError {
     #[error("{0}")]
+    #[cfg(feature = "postgres")]
     DropLastKnownRelationshipsError(#[from] DropLastKnownRelationshipsError),
 
     #[error("Yaml relationship error: {0}")]
+    #[cfg(feature = "postgres")]
     RelationshipError(#[from] CreateRelationshipError),
 
     #[error("{0}")]
+    #[cfg(feature = "postgres")]
     DropLastKnownIndexesError(#[from] DropLastKnownIndexesError),
 
     #[error("Could not prepare and drop indexes: {0}")]
+    #[cfg(feature = "postgres")]
     FailedToPrepareAndDropIndexes(#[from] PrepareIndexesError),
 }
 
@@ -239,6 +243,7 @@ impl Storage {
         self.csv.as_ref().is_some_and(|details| details.disable_create_headers.unwrap_or_default())
     }
 
+    #[cfg(feature = "postgres")]
     pub async fn create_relationships_and_indexes(
         &self,
         project_path: &Path,

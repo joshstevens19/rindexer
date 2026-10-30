@@ -1,20 +1,19 @@
-use std::str::FromStr;
-use std::sync::Arc;
-
+use super::{
+    event_writer_barrier,
+    persistence::ReorgBlockHashPersistence,
+    task::{DerivedTableInfo, DerivedTableRollbackPlan, EventTableInfo, ReorgTask},
+    window::{BlockChainWindow, ParentValidation},
+    ReorgContext,
+};
+use crate::{
+    event::callback_registry::ReorgNotification, metrics::indexing as metrics,
+    provider::ChainProvider, streams::StreamsClients,
+};
 use alloy::primitives::{B256, U64};
 use anyhow::Context;
+use std::{str::FromStr, sync::Arc};
 use tokio::sync::OwnedRwLockWriteGuard;
 use tracing::{info, warn};
-
-use crate::event::callback_registry::ReorgNotification;
-use crate::metrics::indexing as metrics;
-use crate::provider::ChainProvider;
-use crate::streams::StreamsClients;
-
-use super::persistence::ReorgBlockHashPersistence;
-use super::task::{DerivedTableInfo, DerivedTableRollbackPlan, EventTableInfo, ReorgTask};
-use super::window::{BlockChainWindow, ParentValidation};
-use super::{event_writer_barrier, ReorgContext};
 
 /// Number of blocks between periodic flushes of the in-memory block window to the database.
 /// Balances write frequency against data-loss risk on crash.
@@ -424,7 +423,9 @@ impl ReorgCoordinator {
         let result = match reorg_task
             .execute_with_rollback_plan(
                 &mut self.window,
+                #[cfg(feature = "postgres")]
                 ctx.postgres,
+                #[cfg(feature = "clickhouse")]
                 ctx.clickhouse,
                 self.provider.as_ref(),
                 &self.rollback_plan,
@@ -584,7 +585,12 @@ mod tests {
     }
 
     fn make_coordinator(window: BlockChainWindow) -> ReorgCoordinator {
-        let persistence = Arc::new(ReorgBlockHashPersistence::new(None, None));
+        let persistence = Arc::new(ReorgBlockHashPersistence::new(
+            #[cfg(feature = "postgres")]
+            None,
+            #[cfg(feature = "clickhouse")]
+            None,
+        ));
         ReorgCoordinator {
             network: "test".to_string(),
             window,
@@ -629,8 +635,14 @@ mod tests {
         const NETWORK: &str = "writer-barrier-test";
         let mut coordinator = make_coordinator(BlockChainWindow::try_new(100).unwrap());
         coordinator.network = NETWORK.to_string();
-        let ctx =
-            ReorgContext { postgres: None, clickhouse: None, registry: None, trace_registry: None };
+        let ctx = ReorgContext {
+            #[cfg(feature = "postgres")]
+            postgres: None,
+            #[cfg(feature = "clickhouse")]
+            clickhouse: None,
+            registry: None,
+            trace_registry: None,
+        };
         let task = |network: &str| ReorgTask {
             network: network.to_string(),
             fork_point: 10,
@@ -762,7 +774,9 @@ mod tests {
         }));
 
         let ctx = ReorgContext {
+            #[cfg(feature = "postgres")]
             postgres: None,
+            #[cfg(feature = "clickhouse")]
             clickhouse: None,
             registry: Some(&registry),
             trace_registry: None,
@@ -806,7 +820,9 @@ mod tests {
         }));
 
         let ctx = ReorgContext {
+            #[cfg(feature = "postgres")]
             postgres: None,
+            #[cfg(feature = "clickhouse")]
             clickhouse: None,
             registry: None,
             trace_registry: Some(&trace_registry),
@@ -857,7 +873,12 @@ mod tests {
     #[test]
     fn test_derived_tables_propagate_to_tasks() {
         let window = make_window_with_blocks(&[(10, 10, 9), (11, 11, 10), (12, 12, 11)]);
-        let persistence = Arc::new(ReorgBlockHashPersistence::new(None, None));
+        let persistence = Arc::new(ReorgBlockHashPersistence::new(
+            #[cfg(feature = "postgres")]
+            None,
+            #[cfg(feature = "clickhouse")]
+            None,
+        ));
         let coordinator = ReorgCoordinator {
             network: "test".to_string(),
             window,
@@ -896,7 +917,12 @@ mod tests {
     #[test]
     fn test_derived_tables_propagate_to_removed_logs_task() {
         let window = make_window_with_blocks(&[(10, 10, 9), (11, 11, 10)]);
-        let persistence = Arc::new(ReorgBlockHashPersistence::new(None, None));
+        let persistence = Arc::new(ReorgBlockHashPersistence::new(
+            #[cfg(feature = "postgres")]
+            None,
+            #[cfg(feature = "clickhouse")]
+            None,
+        ));
         let coordinator = ReorgCoordinator {
             network: "test".to_string(),
             window,
@@ -923,7 +949,12 @@ mod tests {
     #[test]
     fn test_on_exex_reorg() {
         let window = BlockChainWindow::try_new(100).unwrap();
-        let persistence = Arc::new(ReorgBlockHashPersistence::new(None, None));
+        let persistence = Arc::new(ReorgBlockHashPersistence::new(
+            #[cfg(feature = "postgres")]
+            None,
+            #[cfg(feature = "clickhouse")]
+            None,
+        ));
         let coordinator = ReorgCoordinator {
             network: "test".to_string(),
             window,
@@ -965,7 +996,12 @@ mod tests {
         window: BlockChainWindow,
         streams_clients: Vec<Arc<Option<StreamsClients>>>,
     ) -> ReorgCoordinator {
-        let persistence = Arc::new(ReorgBlockHashPersistence::new(None, None));
+        let persistence = Arc::new(ReorgBlockHashPersistence::new(
+            #[cfg(feature = "postgres")]
+            None,
+            #[cfg(feature = "clickhouse")]
+            None,
+        ));
         ReorgCoordinator {
             network: "ethereum".to_string(),
             window,
@@ -994,8 +1030,14 @@ mod tests {
         let mut coordinator = make_coordinator_with_streams(window, streams.clone());
 
         let task = coordinator.on_exex_reorg(101, 110).unwrap();
-        let ctx =
-            ReorgContext { postgres: None, clickhouse: None, registry: None, trace_registry: None };
+        let ctx = ReorgContext {
+            #[cfg(feature = "postgres")]
+            postgres: None,
+            #[cfg(feature = "clickhouse")]
+            clickhouse: None,
+            registry: None,
+            trace_registry: None,
+        };
         coordinator.handle_reorg(task, &ctx).await.unwrap();
 
         let remaining =
@@ -1054,8 +1096,14 @@ mod tests {
         assert_eq!(task.fork_point, 101);
         assert_eq!(task.detection_point, 110);
 
-        let ctx =
-            ReorgContext { postgres: None, clickhouse: None, registry: None, trace_registry: None };
+        let ctx = ReorgContext {
+            #[cfg(feature = "postgres")]
+            postgres: None,
+            #[cfg(feature = "clickhouse")]
+            clickhouse: None,
+            registry: None,
+            trace_registry: None,
+        };
         coordinator.handle_reorg(task, &ctx).await.unwrap();
 
         let remaining =
@@ -1078,8 +1126,14 @@ mod tests {
         );
 
         let task = coordinator.on_exex_reorg(100, 100).unwrap();
-        let ctx =
-            ReorgContext { postgres: None, clickhouse: None, registry: None, trace_registry: None };
+        let ctx = ReorgContext {
+            #[cfg(feature = "postgres")]
+            postgres: None,
+            #[cfg(feature = "clickhouse")]
+            clickhouse: None,
+            registry: None,
+            trace_registry: None,
+        };
         coordinator.handle_reorg(task, &ctx).await.unwrap();
 
         let remaining =
@@ -1104,8 +1158,14 @@ mod tests {
         );
 
         let task = coordinator.on_exex_reorg(101, 102).unwrap();
-        let ctx =
-            ReorgContext { postgres: None, clickhouse: None, registry: None, trace_registry: None };
+        let ctx = ReorgContext {
+            #[cfg(feature = "postgres")]
+            postgres: None,
+            #[cfg(feature = "clickhouse")]
+            clickhouse: None,
+            registry: None,
+            trace_registry: None,
+        };
         coordinator.handle_reorg(task, &ctx).await.unwrap();
 
         for s in &streams {

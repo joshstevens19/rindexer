@@ -159,7 +159,7 @@ Release profiles in `core/Cargo.toml` and `cli/Cargo.toml` use `lto = "fat"` +
 
 | Crate | Features |
 |---|---|
-| `rindexer` (core) | `jemalloc`, `debug-json`, `kafka` (rdkafka; builds bundled librdkafka from source — via cmake on Windows only), `reth` (embedded reth node/ExEx — huge dep tree). **No default features.** |
+| `rindexer` (core) | `jemalloc`, `debug-json`, `kafka` (rdkafka; builds bundled librdkafka from source — via cmake on Windows only), `reth` (embedded reth node/ExEx — huge dep tree). Default integrations: `postgres`, `clickhouse`, `graphql` (implies `postgres`), `hypersync`, `phantom`, `discord`, `telegram`, `sns`, `redis`, `rabbitmq`. For minimal builds use `--no-default-features` and select required integrations. |
 | `rindexer_cli` (cli) | `default = ["kafka"]`, plus `jemalloc`, `reth`, `kafka` (forwarding to core) |
 
 `reth`-gated code does not compile in a default build, and `kafka`-gated code does not

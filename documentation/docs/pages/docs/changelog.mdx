@@ -2,11 +2,13 @@
 
 ### Breaking changes
 -------------------------------------------------
+- breaking: Rust consumers using `default-features = false` must now explicitly enable their integrations (for example, `features = ["postgres"]`). The default feature set preserves existing integrations. When disabling PostgreSQL, regenerate typings with `rindexer codegen typings` and remove unused `PgType` imports from custom handlers; newly generated handlers omit that import.
 
 ### Bug fixes
 -------------------------------------------------
 ### Features
 -------------------------------------------------
+- feat: Optional `postgres`, `clickhouse`, `graphql`, `hypersync`, `phantom`, `discord`, `telegram`, `sns`, `redis`, and `rabbitmq` Cargo features let Rust indexers exclude unused drivers and SDKs. `graphql` includes `postgres`; builds without it skip the Node/GraphQL build and embedded binary. Startup rejects configured integrations missing their feature.
 - feat: **Shared tip-block log fetch** - live indexing reads each new tip block once per network with an unfiltered `eth_getLogs` shared by every live stream, which filters it locally, instead of one filtered call per stream per block; a block whose header has a non-zero logs bloom is re-asked while the upstream still answers empty, and a zero-bloom block costs no call. New `networks[].shared_tip_logs` knob (`enabled` default `true`, `empty_retry_deadline_ms` default `7000`, `cache_blocks` default `32`) and the `rindexer_shared_tip_logs_*` metrics. Supersedes the per-stream tip re-ask of 0.43.4; `rindexer_live_tip_empty_logs_total` is removed. Rust-mode projects pick it up after `rindexer codegen typings` (the regenerated `networks.rs` calls `create_client_with_shared_tip_logs`); an existing `networks.rs` keeps compiling, since `create_client` keeps its signature, and keeps the per-stream tip calls.
 
 ## Releases

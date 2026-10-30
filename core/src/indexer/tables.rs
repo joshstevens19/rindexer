@@ -142,43 +142,54 @@
 //!                 value: $value
 //! ```
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
-use alloy::dyn_abi::{DynSolType, DynSolValue};
-use alloy::primitives::{Address, Bytes, B256, I256, U256, U64};
+#[cfg(any(feature = "postgres", feature = "clickhouse"))]
+use crate::database::batch_operations::{BatchOperationColumnBehavior, DynamicColumnDefinition};
+#[cfg(feature = "clickhouse")]
+use crate::database::clickhouse::{
+    batch_operations::execute_dynamic_batch_operation as execute_clickhouse_dynamic_batch_operation,
+    client::ClickhouseClient,
+};
+#[cfg(feature = "postgres")]
+use crate::database::{
+    generate::generate_indexer_contract_schema_name,
+    postgres::{
+        batch_operations::execute_dynamic_batch_operation,
+        client::{pg_error_to_string, PostgresClient},
+        generate::generate_internal_event_table_name,
+        write_mode::PgWriteMode,
+    },
+};
+use crate::{
+    adaptive_concurrency::ADAPTIVE_CONCURRENCY,
+    database::{
+        batch_operations::{BatchOperationAction, BatchOperationSqlType, BatchOperationType},
+        generate::generate_table_full_name,
+        sql_type_wrapper::EthereumSqlTypeWrapper,
+    },
+    event::{evaluate_arithmetic, filter_by_expression, parse_filter_expression, ComputedValue},
+    manifest::{
+        contract::{
+            compute_sequence_id, injected_columns, ColumnType, IterateBinding, OperationType,
+            SetAction, SetColumn, Table, TableOperation,
+        },
+        core::Constants,
+    },
+    provider::ChainProvider,
+    system_state::is_running,
+    types::core::LogParam,
+};
+use alloy::{
+    dyn_abi::{DynSolType, DynSolValue},
+    primitives::{Address, Bytes, B256, I256, U256, U64},
+};
 use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
+#[cfg(feature = "postgres")]
 use tokio_postgres::Transaction as PgTransaction;
 use tracing::{debug, info, warn};
-
-use crate::adaptive_concurrency::ADAPTIVE_CONCURRENCY;
-use crate::database::batch_operations::{
-    BatchOperationAction, BatchOperationColumnBehavior, BatchOperationSqlType, BatchOperationType,
-    DynamicColumnDefinition,
-};
-use crate::database::clickhouse::batch_operations::execute_dynamic_batch_operation as execute_clickhouse_dynamic_batch_operation;
-use crate::database::clickhouse::client::ClickhouseClient;
-use crate::database::generate::generate_indexer_contract_schema_name;
-use crate::database::generate::generate_table_full_name;
-use crate::database::postgres::batch_operations::execute_dynamic_batch_operation;
-use crate::database::postgres::client::{pg_error_to_string, PostgresClient};
-use crate::database::postgres::generate::generate_internal_event_table_name;
-use crate::database::postgres::write_mode::PgWriteMode;
-use crate::database::sql_type_wrapper::EthereumSqlTypeWrapper;
-use crate::event::{
-    evaluate_arithmetic, filter_by_expression, parse_filter_expression, ComputedValue,
-};
-use crate::manifest::contract::{
-    compute_sequence_id, injected_columns, ColumnType, IterateBinding, OperationType, SetAction,
-    SetColumn, Table, TableOperation,
-};
-use crate::manifest::core::Constants;
-use crate::provider::ChainProvider;
-use crate::system_state::is_running;
-use crate::types::core::LogParam;
 
 /// Configuration for tracking and checkpointing progress during table operations.
 #[derive(Clone)]
@@ -186,6 +197,7 @@ pub struct ProgressCheckpointConfig {
     pub indexer_name: String,
     pub contract_name: String,
     pub event_name: String,
+    #[cfg(feature = "postgres")]
     pub postgres: Option<Arc<PostgresClient>>,
 }
 
@@ -194,14 +206,21 @@ impl ProgressCheckpointConfig {
         indexer_name: String,
         contract_name: String,
         event_name: String,
-        postgres: Option<Arc<PostgresClient>>,
+        #[cfg(feature = "postgres")] postgres: Option<Arc<PostgresClient>>,
     ) -> Self {
-        Self { indexer_name, contract_name, event_name, postgres }
+        Self {
+            indexer_name,
+            contract_name,
+            event_name,
+            #[cfg(feature = "postgres")]
+            postgres,
+        }
     }
 
     /// Save the last synced block for a specific network.
     /// Only updates if the new block is higher than the current value.
     pub async fn checkpoint(&self, network: &str, block_number: u64) {
+        #[cfg(feature = "postgres")]
         if let Some(postgres) = &self.postgres {
             let schema =
                 generate_indexer_contract_schema_name(&self.indexer_name, &self.contract_name);
@@ -3835,12 +3854,14 @@ pub(crate) async fn prepare_table_operations<'t>(
 /// or drops the transaction.
 pub(crate) async fn apply_table_operations(
     prepared: &PreparedTableOps<'_>,
-    pg: Option<PgWriteMode<'_>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    #[cfg(feature = "postgres")] pg: Option<PgWriteMode<'_>>,
+    #[cfg(feature = "clickhouse")] clickhouse: Option<Arc<ClickhouseClient>>,
     checkpoint_config: Option<&ProgressCheckpointConfig>,
 ) -> Result<(), String> {
+    #[cfg(feature = "postgres")]
     let postgres = match pg {
         Some(PgWriteMode::Tx(tx)) => {
+            #[cfg(feature = "clickhouse")]
             if clickhouse.is_some() {
                 return Err("apply_table_operations: ClickHouse operations cannot join a Postgres transaction".to_string());
             }
@@ -3879,6 +3900,7 @@ pub(crate) async fn apply_table_operations(
         }
 
         // Execute the operation
+        #[cfg(feature = "postgres")]
         if let Some(postgres) = postgres {
             execute_postgres_operation(
                 PgWriteMode::Eager(postgres),
@@ -3895,6 +3917,7 @@ pub(crate) async fn apply_table_operations(
                 .await;
         }
 
+        #[cfg(feature = "clickhouse")]
         if let Some(clickhouse) = &clickhouse {
             execute_clickhouse_operation(
                 clickhouse,
@@ -3931,6 +3954,7 @@ pub(crate) async fn apply_table_operations(
 }
 
 /// Stages every prepared operation and its journal row in `tx`; nothing commits here.
+#[cfg(feature = "postgres")]
 async fn apply_table_operations_in_tx(
     prepared: &PreparedTableOps<'_>,
     tx: &PgTransaction<'_>,
@@ -3971,8 +3995,8 @@ pub async fn process_table_operations(
     tables: &[TableRuntime],
     event_name: &str,
     events_data: &[(Vec<LogParam>, String, TxMetadata)], // (log_params, network, tx_metadata)
-    postgres: Option<Arc<PostgresClient>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    #[cfg(feature = "postgres")] postgres: Option<Arc<PostgresClient>>,
+    #[cfg(feature = "clickhouse")] clickhouse: Option<Arc<ClickhouseClient>>,
     providers: Arc<HashMap<String, Arc<dyn ChainProvider>>>,
     constants: &Constants,
     multicall_addresses: &HashMap<String, Option<String>>,
@@ -3990,7 +4014,9 @@ pub async fn process_table_operations(
 
     apply_table_operations(
         &prepared,
+        #[cfg(feature = "postgres")]
         postgres.as_deref().map(PgWriteMode::Eager),
+        #[cfg(feature = "clickhouse")]
         clickhouse,
         checkpoint_config,
     )
@@ -4077,6 +4103,7 @@ fn operation_type_to_batch_type(op_type: &OperationType) -> BatchOperationType {
 /// * `sql_where` - Optional SQL WHERE condition for upsert operations.
 ///   Used when the `if`/`filter` condition contains `@table` references.
 ///   E.g., conditions like `$value > @balance` become SQL `EXCLUDED.value > table.balance`.
+#[cfg(feature = "postgres")]
 async fn execute_postgres_operation(
     mode: PgWriteMode<'_>,
     table_name: &str,
@@ -4249,6 +4276,7 @@ async fn execute_postgres_operation(
 }
 
 /// Executes a ClickHouse operation for tables using the batch operations infrastructure.
+#[cfg(feature = "clickhouse")]
 async fn execute_clickhouse_operation(
     clickhouse: &ClickhouseClient,
     table_name: &str,
@@ -4427,6 +4455,7 @@ async fn execute_clickhouse_operation(
 
 /// Internal PostgreSQL operation execution - used by cron scheduler.
 /// This is a public wrapper around `execute_postgres_operation`.
+#[cfg(feature = "postgres")]
 pub async fn execute_postgres_operation_internal(
     postgres: &PostgresClient,
     table_name: &str,
@@ -4449,6 +4478,7 @@ pub async fn execute_postgres_operation_internal(
 
 /// Internal ClickHouse operation execution - used by cron scheduler.
 /// This is a public wrapper around `execute_clickhouse_operation`.
+#[cfg(feature = "clickhouse")]
 pub async fn execute_clickhouse_operation_internal(
     clickhouse: &ClickhouseClient,
     table_name: &str,
@@ -4761,6 +4791,7 @@ fn collect_journal_values(
 /// Builds the Postgres `rindexer_internal.derived_op_log` INSERT for non-reversible
 /// (Set/Max/Min) operations, or `None` when there is nothing to journal.
 /// Batches all rows into a single statement.
+#[cfg(feature = "postgres")]
 fn build_journal_sql(
     derived_table: &str,
     operation: &TableOperation,
@@ -4781,6 +4812,7 @@ fn build_journal_sql(
 
 /// Journal non-reversible (Set/Max/Min) operations to Postgres `rindexer_internal.derived_op_log`.
 /// Autocommit on its own pool checkout; a failure is logged and swallowed.
+#[cfg(feature = "postgres")]
 async fn journal_non_reversible_ops(
     postgres: &PostgresClient,
     derived_table: &str,
@@ -4808,6 +4840,7 @@ async fn journal_non_reversible_ops(
 /// stop before `RELEASE` and leave the transaction aborted. One savepoint per operation,
 /// released on both paths: `ROLLBACK TO` keeps the savepoint defined, and a stale one
 /// would nest the next operation's `SAVEPOINT` one subtransaction deeper.
+#[cfg(feature = "postgres")]
 async fn journal_non_reversible_ops_in_tx(
     tx: &PgTransaction<'_>,
     derived_table: &str,
@@ -4833,6 +4866,7 @@ async fn journal_non_reversible_ops_in_tx(
 
 /// Journal non-reversible (Set/Max/Min) operations to ClickHouse `rindexer_internal.derived_op_log`.
 /// Batches all rows into a single INSERT statement.
+#[cfg(feature = "clickhouse")]
 async fn journal_non_reversible_ops_clickhouse(
     clickhouse: &ClickhouseClient,
     derived_table: &str,
@@ -6051,6 +6085,7 @@ events:
 
         let container = Postgres::default().start().await.expect("failed to start postgres");
         let port = container.get_host_port_ipv4(5432).await.expect("failed to get postgres port");
+        #[cfg(feature = "postgres")]
         let postgres = {
             let _guard = crate::database::postgres::client::TEST_DATABASE_URL_LOCK.lock().await;
             std::env::set_var(
@@ -6087,6 +6122,7 @@ events:
 
         // First touch is a debit: row must be created at 50 - 30 = 20
         execute_postgres_operation(
+            #[cfg(feature = "postgres")]
             PgWriteMode::Eager(&postgres),
             "yaml_balances",
             &table,
@@ -6098,6 +6134,7 @@ events:
         .expect("first debit failed");
         // Second debit accumulates: 20 - 25 = -5
         execute_postgres_operation(
+            #[cfg(feature = "postgres")]
             PgWriteMode::Eager(&postgres),
             "yaml_balances",
             &table,

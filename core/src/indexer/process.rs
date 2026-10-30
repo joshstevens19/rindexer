@@ -1,41 +1,35 @@
-use alloy::primitives::{B256, U64};
-
-use futures::future::join_all;
-use futures::stream::FuturesUnordered;
-use futures::{poll, FutureExt, StreamExt};
-use std::{collections::HashMap, sync::Arc, time::Duration};
-use tokio::sync::Semaphore;
-use tokio::{
-    sync::Mutex,
-    task::{JoinError, JoinHandle},
-    time::Instant,
-};
-use tracing::{debug, error, info, warn};
-
-use crate::helpers::is_relevant_block;
-use crate::indexer::heartbeat::{HeartbeatAction, HeartbeatTracker};
-use crate::indexer::reorg::{
-    detect_and_handle_reorg, event_writer_barrier, reorg_safe_distance_for_chain, ReorgContext,
-    ReorgCoordinator,
-};
-use crate::metrics::indexing as metrics;
-use crate::provider::ChainProvider;
 use crate::{
     event::{
         callback_registry::{EventResult, TraceCallbackRegistry},
         config::EventProcessingConfig,
         BuildRindexerFilterError, RindexerEventFilter,
     },
+    helpers::is_relevant_block,
     indexer::{
         dependency::{ContractEventsDependenciesConfig, EventDependencies},
         fetch_logs::{fetch_logs_stream, FetchLogsResult},
+        heartbeat::{HeartbeatAction, HeartbeatTracker},
         last_synced::update_progress_and_last_synced_task,
         progress::IndexingEventProgressStatus,
+        reorg::{
+            detect_and_handle_reorg, event_writer_barrier, reorg_safe_distance_for_chain,
+            ReorgContext, ReorgCoordinator,
+        },
         task_tracker::{indexing_event_processed, indexing_event_processing},
     },
     is_running,
-    provider::ProviderError,
+    metrics::indexing as metrics,
+    provider::{ChainProvider, ProviderError},
 };
+use alloy::primitives::{B256, U64};
+use futures::{future::join_all, poll, stream::FuturesUnordered, FutureExt, StreamExt};
+use std::{collections::HashMap, sync::Arc, time::Duration};
+use tokio::{
+    sync::{Mutex, Semaphore},
+    task::{JoinError, JoinHandle},
+    time::Instant,
+};
+use tracing::{debug, error, info, warn};
 
 #[derive(thiserror::Error, Debug)]
 pub enum ProcessEventError {
@@ -495,10 +489,14 @@ async fn live_indexing_for_contract_event_dependencies(
     let reorg_coordinator = reorg_coordinator;
     let writer_barrier = event_writer_barrier(&network);
 
-    let (pg_client, ch_client, event_registry) = events
+    let (config, _) = events
         .first()
-        .map(|(config, _)| (config.postgres(), config.clickhouse(), config.registry()))
         .expect("live_indexing_for_contract_event_dependencies called with no events");
+    #[cfg(feature = "postgres")]
+    let pg_client = config.postgres();
+    #[cfg(feature = "clickhouse")]
+    let ch_client = config.clickhouse();
+    let event_registry = config.registry();
 
     loop {
         if !is_running() {
@@ -537,7 +535,9 @@ async fn live_indexing_for_contract_event_dependencies(
         if let Some(coordinator) = reorg_coordinator.as_ref() {
             let log_prefix = format!("{} - {}", network, IndexingEventProgressStatus::live_log());
             let reorg_ctx = ReorgContext {
+                #[cfg(feature = "postgres")]
                 postgres: pg_client.as_deref(),
+                #[cfg(feature = "clickhouse")]
                 clickhouse: ch_client.as_ref(),
                 registry: Some(&event_registry),
                 trace_registry: trace_registry.as_deref(),

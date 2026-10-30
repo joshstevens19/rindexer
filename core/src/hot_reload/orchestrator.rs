@@ -1,16 +1,15 @@
-use std::path::PathBuf;
-use std::sync::Arc;
-
+#[cfg(feature = "graphql")]
+use crate::api::stop_graphql_server;
+use crate::{
+    hot_reload::diff::{compute_diff, ReloadAction},
+    logger::mark_shutdown_started,
+    manifest::{core::Manifest, yaml::read_manifest},
+    system_state::{initiate_shutdown, set_reload_state, ReloadState},
+};
+use std::{path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
-
-use crate::api::stop_graphql_server;
-use crate::hot_reload::diff::{compute_diff, ReloadAction};
-use crate::logger::mark_shutdown_started;
-use crate::manifest::core::Manifest;
-use crate::manifest::yaml::read_manifest;
-use crate::system_state::{initiate_shutdown, set_reload_state, ReloadState};
 
 /// Exit code used to signal the process manager that a restart is needed.
 /// 75 = EX_TEMPFAIL (sysexits.h), conventionally means "try again later".
@@ -102,6 +101,7 @@ impl ReloadOrchestrator {
 
                 // Graceful shutdown: release ports and stop active tasks before exiting
                 mark_shutdown_started();
+                #[cfg(feature = "graphql")]
                 stop_graphql_server();
                 initiate_shutdown().await;
 

@@ -1419,6 +1419,7 @@ impl CreateNetworkProvider {
             // When hypersync is configured, historical log fetching is served by
             // HyperSync with the RPC provider handling everything else.
             let client: Arc<dyn ChainProvider> = match &network.hypersync {
+                #[cfg(feature = "hypersync")]
                 Some(hypersync_config) => {
                     crate::hypersync::create_hypersync_provider(
                         hypersync_config,
@@ -1428,6 +1429,13 @@ impl CreateNetworkProvider {
                         provider,
                     )
                     .await?
+                }
+                #[cfg(not(feature = "hypersync"))]
+                Some(_) => {
+                    return Err(RetryClientError::HypersyncClientCantBeCreated(
+                        network.name.clone(),
+                        "enable the hypersync Cargo feature".into(),
+                    ))
                 }
                 None => provider,
             };

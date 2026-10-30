@@ -1,16 +1,15 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
-
-use tokio::sync::Mutex;
-
+#[cfg(feature = "postgres")]
+use crate::database::postgres::relationship::Relationship;
 use crate::{
-    database::postgres::relationship::Relationship,
     event::{config::EventProcessingConfig, contract_setup::ContractEventMapping},
     indexer::reorg::ReorgCoordinator,
     manifest::{contract::DependencyEventTree, core::Manifest},
 };
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
+use tokio::sync::Mutex;
 
 #[derive(Debug, Clone)]
 pub struct EventsDependencyTree {
@@ -68,6 +67,7 @@ pub enum ContractEventDependenciesMapFromRelationshipsError {
 }
 
 impl ContractEventDependencies {
+    #[cfg(feature = "postgres")]
     pub fn map_from_relationships(
         relationships: &[Relationship],
     ) -> Result<Vec<ContractEventDependencies>, ContractEventDependenciesMapFromRelationshipsError>
@@ -79,6 +79,7 @@ impl ContractEventDependencies {
         Ok(ContractEventDependencies::map_all_dependencies(relationships))
     }
 
+    #[cfg(feature = "postgres")]
     fn map_all_dependencies(relationships: &[Relationship]) -> Vec<ContractEventDependencies> {
         let relationships_map =
             ContractEventDependencies::generate_relationships_map(relationships);
@@ -111,6 +112,7 @@ impl ContractEventDependencies {
             .collect()
     }
 
+    #[cfg(feature = "postgres")]
     fn merge_trees(
         tree1: &EventsDependencyTree,
         tree2: &EventsDependencyTree,
@@ -139,6 +141,7 @@ impl ContractEventDependencies {
         }
     }
 
+    #[cfg(feature = "postgres")]
     fn build_dependency_tree(
         event: &ContractEventMapping,
         relationships_map: &HashMap<ContractEventMapping, Vec<ContractEventMapping>>,
@@ -180,6 +183,7 @@ impl ContractEventDependencies {
         Arc::new(EventsDependencyTree { contract_events, then: Box::new(next_tree) })
     }
 
+    #[cfg(feature = "postgres")]
     fn generate_relationships_map(
         relationships: &[Relationship],
     ) -> HashMap<ContractEventMapping, Vec<ContractEventMapping>> {
@@ -202,6 +206,7 @@ impl ContractEventDependencies {
         relationships_map
     }
 
+    #[cfg(feature = "postgres")]
     fn collect_dependency_events(tree: &EventsDependencyTree) -> Vec<ContractEventMapping> {
         let mut events = tree.contract_events.clone();
         if let Some(ref then_tree) = *tree.then {

@@ -1,16 +1,3 @@
-use std::{
-    collections::HashSet,
-    env,
-    fs::File,
-    io::{Read, Write},
-    path::{Path, PathBuf},
-};
-
-use alloy::rpc::types::ValueOrArray;
-use regex::{Captures, Regex};
-use serde::{Deserialize, Serialize};
-use tracing::error;
-
 use crate::{
     abi::ABIItem,
     event::{parse_arithmetic_expression, parse_filter_expression},
@@ -21,6 +8,17 @@ use crate::{
     },
     StringOrArray,
 };
+use alloy::rpc::types::ValueOrArray;
+use regex::{Captures, Regex};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashSet,
+    env,
+    fs::File,
+    io::{Read, Write},
+    path::{Path, PathBuf},
+};
+use tracing::error;
 
 pub const YAML_CONFIG_NAME: &str = "rindexer.yaml";
 
@@ -180,6 +178,9 @@ fn substitute_env_variables(contents: &str) -> Result<String, regex::Error> {
 
 #[derive(thiserror::Error, Debug)]
 pub enum ValidateManifestError {
+    #[error("{0}")]
+    MissingFeature(String),
+
     #[error("Contract names {0} must be unique")]
     ContractNameMustBeUnique(String),
 
@@ -270,6 +271,7 @@ fn validate_manifest(
     project_path: &Path,
     manifest: &Manifest,
 ) -> Result<(), ValidateManifestError> {
+    super::features::validate(manifest).map_err(ValidateManifestError::MissingFeature)?;
     let mut seen = HashSet::new();
     let duplicates_contract_names: Vec<String> = manifest
         .contracts
