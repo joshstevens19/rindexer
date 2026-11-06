@@ -257,12 +257,14 @@ impl SharedTipLogs {
         let mut invalidated = false;
         let (scheduled, skipped) = {
             let mut state = self.lock();
-            let cached =
-                state.entries.peek(&number).map(|entry| (entry.hash == hash, entry.parent_hash));
+            let cached = state
+                .entries
+                .peek(&number)
+                .map(|entry| (entry.hash == hash, entry.parent_hash.is_some(), entry.is_pending()));
             match cached {
-                Some((true, Some(_))) => return,
+                Some((true, true, _)) => return,
                 // a block scheduled from its child is now polled as head: take its header from here
-                Some((true, None)) => {
+                Some((true, false, true)) => {
                     let (_, skipped) =
                         self.learn_header(&mut state, number, parent_hash, logs_bloom);
                     drop(state);
@@ -272,7 +274,9 @@ impl SharedTipLogs {
                     }
                     return;
                 }
-                Some((false, _)) => {
+                // a block scheduled from its child whose header read failed: fetch it as a head
+                Some((true, false, false)) => {}
+                Some((false, _, _)) => {
                     self.drop_from(&mut state, number);
                     invalidated = true;
                 }
@@ -1502,6 +1506,28 @@ mod tests {
         assert!(matches!(tip.status_of(11), Some(TipStatus::Failed { .. })));
         assert_eq!(tip.lookup(11, 12, hash(12)), TipLookup::ServePrefixByRpcPlusTip(empty()));
         assert_eq!(counter(&SHARED_TIP_LOGS_BLOCKS_TOTAL, &[net, "error"]), 1.0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_skipped_block_polled_as_head_is_fetched_again() {
+        let net = "tip-logs-skipped-failed-then-polled";
+        let source = ScriptedBlockLogsSource::new();
+        let log_11 = log_at(11, hash(11), Address::repeat_byte(1), vec![topic(1)], 0);
+        source.script(11, vec![Answer::Now(Ok(vec![log_11.clone()]))]);
+        let tip = SharedTipLogs::new(net, source.clone(), settings(true));
+        tip.observe_head(10, hash(10), hash(9), Bloom::ZERO);
+        tip.observe_head(12, hash(12), hash(11), Bloom::ZERO);
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(matches!(tip.status_of(11), Some(TipStatus::Failed { .. })), "no header to read");
+
+        tip.observe_head(11, hash(11), hash(10), bloom_nonzero());
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        assert_eq!(
+            tip.lookup(10, 12, hash(12)),
+            TipLookup::ServeWindow(vec![empty(), Arc::new(vec![log_11]), empty()])
+        );
+        assert_eq!(source.calls(), vec![11]);
     }
 
     #[tokio::test(start_paused = true)]
