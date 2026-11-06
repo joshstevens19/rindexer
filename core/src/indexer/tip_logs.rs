@@ -100,16 +100,21 @@ enum TipStatus {
     Failed { attempts: u32, error: String },
 }
 
+impl TipStatus {
+    /// A block whose header bloom proves it has no logs: served empty with no call.
+    fn empty_by_bloom() -> Self {
+        Self::Ready { logs: Arc::new(Vec::new()), attempts: 0 }
+    }
+}
+
 /// One head block observed by the live streams, or a block a head skipped, keyed by number in
 /// the cache.
 #[derive(Debug, Clone)]
 struct TipBlockEntry {
     number: u64,
     hash: B256,
-    /// Unknown (zero) until the header of a skipped block is read; never served before then.
-    parent_hash: B256,
-    /// `false` for a skipped block until its fetch task reads the header.
-    header_known: bool,
+    /// `None` for a skipped block until its header is read; such an entry is never `Ready`.
+    parent_hash: Option<B256>,
     /// The instant the block was first observed as head, or scheduled from its child for a
     /// skipped block: the fetcher's deadline and the streams' wait budget both run from it.
     first_seen: Instant,
@@ -117,6 +122,10 @@ struct TipBlockEntry {
 }
 
 impl TipBlockEntry {
+    fn new(number: u64, hash: B256, parent_hash: Option<B256>, status: TipStatus) -> Self {
+        Self { number, hash, parent_hash, first_seen: Instant::now(), status }
+    }
+
     fn is_pending(&self) -> bool {
         matches!(self.status, TipStatus::Pending { .. })
     }
@@ -248,9 +257,22 @@ impl SharedTipLogs {
         let mut invalidated = false;
         let (scheduled, skipped) = {
             let mut state = self.lock();
-            match state.entries.peek(&number).map(|entry| entry.hash == hash) {
-                Some(true) => return,
-                Some(false) => {
+            let cached =
+                state.entries.peek(&number).map(|entry| (entry.hash == hash, entry.parent_hash));
+            match cached {
+                Some((true, Some(_))) => return,
+                // a block scheduled from its child is now polled as head: take its header from here
+                Some((true, None)) => {
+                    let (_, skipped) =
+                        self.learn_header(&mut state, number, parent_hash, logs_bloom);
+                    drop(state);
+                    self.changed.notify_waiters();
+                    if let Some(parent) = skipped {
+                        self.spawn_fetch(parent, parent_hash);
+                    }
+                    return;
+                }
+                Some((false, _)) => {
                     self.drop_from(&mut state, number);
                     invalidated = true;
                 }
@@ -266,19 +288,12 @@ impl SharedTipLogs {
                     invalidated = true;
                 }
             }
-            let status = if self.bloom_trusted && logs_bloom == Bloom::ZERO {
-                TipStatus::Ready { logs: Arc::new(Vec::new()), attempts: 0 }
+            let status = if self.proves_no_logs(logs_bloom) {
+                TipStatus::empty_by_bloom()
             } else {
                 TipStatus::Pending { attempts: 0 }
             };
-            let entry = TipBlockEntry {
-                number,
-                hash,
-                parent_hash,
-                header_known: true,
-                first_seen: Instant::now(),
-                status,
-            };
+            let entry = TipBlockEntry::new(number, hash, Some(parent_hash), status);
             let scheduled = entry.is_pending();
             self.insert(&mut state, entry);
             (scheduled, self.schedule_skipped_parent(&mut state, number, parent_hash))
@@ -302,10 +317,17 @@ impl SharedTipLogs {
         }
     }
 
-    /// Schedules the parent of `child` when it is missing but a block within
+    /// Whether a header bloom proves the block has no logs on this network.
+    fn proves_no_logs(&self, logs_bloom: Bloom) -> bool {
+        self.bloom_trusted && logs_bloom == Bloom::ZERO
+    }
+
+    /// Schedules the parent of `child` when it is missing but a block at most
     /// [`MAX_SKIPPED_BLOCKS`] below it is cached, so a head the RPC skipped is read once here.
-    /// Its header is read by its fetch task, which schedules the next missing block the same
-    /// way before the parent settles. Returns the parent's number when it was scheduled.
+    /// The reach is also kept two below the cache size, so the run, its child and the cached
+    /// block below it all stay resident. The parent's header is read by its fetch task, which
+    /// schedules the next missing block the same way before the parent settles. Returns the
+    /// parent's number when it was scheduled.
     fn schedule_skipped_parent(
         &self,
         state: &mut TipState,
@@ -316,26 +338,51 @@ impl SharedTipLogs {
         if state.entries.contains(&number) {
             return None;
         }
-        let below =
-            state.entries.iter().map(|(cached, _)| *cached).filter(|cached| *cached < number);
-        let anchor = below.max()?;
-        if number.saturating_sub(anchor) > MAX_SKIPPED_BLOCKS {
+        let capacity = u64::try_from(state.entries.cap().get()).unwrap_or(u64::MAX);
+        let reach = MAX_SKIPPED_BLOCKS.min(capacity.saturating_sub(2));
+        if !(number.saturating_sub(reach)..number).any(|below| state.entries.contains(&below)) {
             return None;
         }
         debug!(
             "shared tip logs - {} - block {} ({}) was skipped as head; fetching it from its child {}",
             self.network, number, parent_hash, child
         );
-        let entry = TipBlockEntry {
-            number,
-            hash: parent_hash,
-            parent_hash: B256::ZERO,
-            header_known: false,
-            first_seen: Instant::now(),
-            status: TipStatus::Pending { attempts: 0 },
-        };
+        let entry =
+            TipBlockEntry::new(number, parent_hash, None, TipStatus::Pending { attempts: 0 });
         self.insert(state, entry);
         Some(number)
+    }
+
+    /// Stores the header of a block scheduled from its child: its parent hash, then the next
+    /// missing block below scheduled the same way, before this block can settle, so a waiting
+    /// stream never finds the run broken. A zero bloom settles the block empty. Returns whether
+    /// the block still needs its logs, and the block below when it was scheduled.
+    fn learn_header(
+        &self,
+        state: &mut TipState,
+        number: u64,
+        parent_hash: B256,
+        logs_bloom: Bloom,
+    ) -> (bool, Option<u64>) {
+        let Some(entry) = state.entries.get_mut(&number) else {
+            return (false, None);
+        };
+        entry.parent_hash = Some(parent_hash);
+        let first_seen = entry.first_seen;
+        let settled = self.proves_no_logs(logs_bloom) && entry.is_pending();
+        if settled {
+            entry.status = TipStatus::empty_by_bloom();
+        }
+        let needs_logs = entry.is_pending();
+        let skipped = self.schedule_skipped_parent(state, number, parent_hash);
+        if settled {
+            metrics::record_shared_tip_logs_block(&self.network, "empty_bloom_zero");
+            metrics::record_shared_tip_logs_fetch_seconds(
+                &self.network,
+                first_seen.elapsed().as_secs_f64(),
+            );
+        }
+        (needs_logs, skipped)
     }
 
     /// What a stream whose window `[from, to]` ends at the tip it polled (`expected_tip_hash`)
@@ -356,7 +403,9 @@ impl SharedTipLogs {
             TipStatus::Failed { .. } => return TipLookup::Fallback(FallbackReason::Error),
             TipStatus::Ready { logs, .. } => Arc::clone(logs),
         };
-        let tip_parent_hash = tip.parent_hash;
+        let Some(tip_parent_hash) = tip.parent_hash else {
+            return TipLookup::Fallback(FallbackReason::Error);
+        };
         if from >= to {
             self.record_served("tip");
             return TipLookup::ServeTip(tip_logs);
@@ -526,19 +575,18 @@ impl SharedTipLogs {
 
     /// Reads the header of a skipped block: its parent hash links windows through it and its
     /// bloom decides whether an empty answer is re-asked. `true` when the block still needs its
-    /// logs; a head's header is already known.
+    /// logs. A head's header is already known, and so is a skipped block's once a stream polls
+    /// it as head.
     async fn resolve_header(&self, number: u64, hash: B256, first_seen: Instant) -> bool {
         let mut attempt: u32 = 0;
         loop {
-            let header_known = {
+            {
                 let state = self.lock();
                 match state.entries.peek(&number).filter(|entry| entry.hash == hash) {
-                    Some(entry) => entry.header_known,
+                    Some(entry) if entry.parent_hash.is_some() => return entry.is_pending(),
+                    Some(_) => {}
                     None => return false,
                 }
-            };
-            if header_known {
-                return true;
             }
             if !is_running() {
                 let error = "shutdown".to_string();
@@ -550,7 +598,7 @@ impl SharedTipLogs {
                 tokio::time::timeout(PER_CALL_TIMEOUT, self.source.block_header(hash)).await;
             let error = match answer {
                 Ok(Ok(Some(links))) if links.number == number => {
-                    return self.link(number, hash, first_seen, links);
+                    return self.link(number, hash, links);
                 }
                 Ok(Ok(Some(links))) => format!("the header is at height {}", links.number),
                 Ok(Ok(None)) => "header not found".to_string(),
@@ -571,30 +619,22 @@ impl SharedTipLogs {
         }
     }
 
-    /// Stores a skipped block's header and schedules the block below it when that one is
-    /// missing too, before this block can settle: a waiting stream never finds the run broken.
-    /// `false` when the block settled here (a zero bloom) or was dropped.
-    fn link(&self, number: u64, hash: B256, first_seen: Instant, links: BlockLinks) -> bool {
-        let skipped = {
+    /// Stores the header the fetch task read, unless a stream polled the block as head
+    /// meanwhile. `false` when the block settled (a zero bloom) or was dropped.
+    fn link(&self, number: u64, hash: B256, links: BlockLinks) -> bool {
+        let (needs_logs, skipped) = {
             let mut state = self.lock();
-            match state.entries.get_mut(&number) {
-                Some(entry) if entry.hash == hash => {
-                    entry.parent_hash = links.parent_hash;
-                    entry.header_known = true;
-                }
-                _ => return false,
+            match state.entries.peek(&number).filter(|entry| entry.hash == hash) {
+                None => return false,
+                Some(entry) if entry.parent_hash.is_some() => return entry.is_pending(),
+                Some(_) => {}
             }
-            self.schedule_skipped_parent(&mut state, number, links.parent_hash)
+            self.learn_header(&mut state, number, links.parent_hash, links.logs_bloom)
         };
         if let Some(parent) = skipped {
             self.spawn_fetch(parent, links.parent_hash);
         }
-        if self.bloom_trusted && links.logs_bloom == Bloom::ZERO {
-            let status = TipStatus::Ready { logs: Arc::new(Vec::new()), attempts: 0 };
-            self.settle(number, hash, first_seen, status, "empty_bloom_zero");
-            return false;
-        }
-        true
+        needs_logs
     }
 
     /// The logs of `[from, to)` oldest first when every block is cached, `Ready` and linked by
@@ -613,7 +653,7 @@ impl SharedTipLogs {
                 return None;
             };
             prefix.push(Arc::clone(logs));
-            expected_hash = entry.parent_hash;
+            expected_hash = entry.parent_hash?;
         }
         prefix.reverse();
         Some(prefix)
@@ -805,11 +845,11 @@ mod tests {
             self.answers.lock().unwrap().insert(block, answers.into());
         }
 
-        fn script_header(&self, hash: B256, number: u64, parent_hash: B256, logs_bloom: Bloom) {
-            self.headers
-                .lock()
-                .unwrap()
-                .insert(hash, BlockLinks { number, parent_hash, logs_bloom });
+        /// Block `number` as `hash` chains it.
+        fn script_header(&self, number: u8, logs_bloom: Bloom) {
+            let links =
+                BlockLinks { number: u64::from(number), parent_hash: hash(number - 1), logs_bloom };
+            self.headers.lock().unwrap().insert(hash(number), links);
         }
 
         fn header_calls(&self) -> Vec<B256> {
@@ -1276,7 +1316,7 @@ mod tests {
         let log_12 = log_at(12, hash(12), Address::repeat_byte(1), vec![topic(1)], 0);
         source.script(11, vec![Answer::Now(Ok(vec![])), Answer::Now(Ok(vec![log_11.clone()]))]);
         source.script(12, vec![Answer::Now(Ok(vec![log_12.clone()]))]);
-        source.script_header(hash(11), 11, hash(10), bloom_nonzero());
+        source.script_header(11, bloom_nonzero());
         let tip = SharedTipLogs::new(net, source.clone(), settings(true));
         tip.observe_head(10, hash(10), hash(9), Bloom::ZERO);
         let first_seen = Instant::now();
@@ -1320,8 +1360,8 @@ mod tests {
                 log_at(number, hash(number as u8), Address::repeat_byte(1), vec![topic(1)], 0);
             source.script(number, vec![Answer::Now(Ok(vec![log]))]);
         }
-        source.script_header(hash(12), 12, hash(11), bloom_nonzero());
-        source.script_header(hash(11), 11, hash(10), Bloom::ZERO);
+        source.script_header(12, bloom_nonzero());
+        source.script_header(11, Bloom::ZERO);
         let tip = SharedTipLogs::new(net, source.clone(), settings(true));
         tip.observe_head(10, hash(10), hash(9), Bloom::ZERO);
         tip.observe_head(13, hash(13), hash(12), bloom_nonzero());
@@ -1344,6 +1384,61 @@ mod tests {
         assert_eq!(source.header_calls(), vec![hash(12), hash(11)]);
         assert!(!source.calls().contains(&11), "a zero bloom costs no eth_getLogs");
         assert_eq!(counter(&SHARED_TIP_LOGS_SERVED_TOTAL, &[net, "prefix_rpc_plus_tip"]), 0.0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn skipped_block_polled_as_head_later_takes_that_header() {
+        let net = "tip-logs-skipped-then-polled";
+        let source = ScriptedBlockLogsSource::new();
+        let log_11 = log_at(11, hash(11), Address::repeat_byte(1), vec![topic(1)], 0);
+        source.script(11, vec![Answer::Now(Ok(vec![log_11.clone()]))]);
+        source.script(12, vec![Answer::Now(Ok(vec![]))]);
+        let tip = SharedTipLogs::new(net, source.clone(), settings(true));
+        tip.observe_head(10, hash(10), hash(9), Bloom::ZERO);
+        tip.observe_head(12, hash(12), hash(11), Bloom::ZERO);
+        // A lagging node then answers 11 as head; its header is not scripted for a by-hash read.
+        tip.observe_head(11, hash(11), hash(10), bloom_nonzero());
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        assert!(source.header_calls().is_empty(), "the polled header is used, not re-read");
+        assert_eq!(
+            tip.lookup(10, 12, hash(12)),
+            TipLookup::ServeWindow(vec![empty(), Arc::new(vec![log_11]), empty()])
+        );
+
+        // The same with a zero bloom: settled empty on the spot, with no call at all.
+        tip.observe_head(14, hash(14), hash(13), Bloom::ZERO);
+        tip.observe_head(13, hash(13), hash(12), Bloom::ZERO);
+        settle_tasks().await;
+        assert_eq!(tip.status_of(13), Some(TipStatus::empty_by_bloom()));
+        assert!(source.header_calls().is_empty());
+        assert!(!source.calls().contains(&13));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_skipped_run_is_filled_only_while_the_cache_holds_it() {
+        let net = "tip-logs-skipped-small-cache";
+        let source = ScriptedBlockLogsSource::new();
+        let small = SharedTipLogsSettings { cache_blocks: 3, ..settings(true) };
+        let tip = SharedTipLogs::new(net, source.clone(), small);
+        tip.observe_head(10, hash(10), hash(9), Bloom::ZERO);
+        tip.observe_head(13, hash(13), hash(12), Bloom::ZERO);
+        settle_tasks().await;
+        assert_eq!(tip.status_of(12), None, "two skipped blocks need a cache of four");
+
+        let source = ScriptedBlockLogsSource::new();
+        source.script_header(12, Bloom::ZERO);
+        source.script_header(11, Bloom::ZERO);
+        let enough = SharedTipLogsSettings { cache_blocks: 4, ..settings(true) };
+        let tip = SharedTipLogs::new(net, source.clone(), enough);
+        tip.observe_head(10, hash(10), hash(9), Bloom::ZERO);
+        tip.observe_head(13, hash(13), hash(12), Bloom::ZERO);
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(
+            tip.lookup(10, 13, hash(13)),
+            TipLookup::ServeWindow(vec![empty(), empty(), empty(), empty()]),
+            "the cached block below the run is still resident"
+        );
     }
 
     #[tokio::test(start_paused = true)]
