@@ -267,9 +267,19 @@ impl AnvilInstance {
     /// Trigger a chain reorganization of the given depth.
     /// Uses Anvil's `anvil_reorg` RPC method — block hashes change for the
     /// last `depth` blocks, simulating a real chain reorg.
+    ///
+    /// Anvil 1.9 rebuilds the replaced blocks deterministically, so a replaced block with
+    /// unchanged contents keeps its hash and no reorg happens. A one-wei transfer from the
+    /// dev account into the first replaced block forces new hashes; it emits no logs, so no
+    /// indexed event changes.
     pub async fn trigger_reorg(&self, depth: u64) -> Result<()> {
         info!("Triggering anvil_reorg (depth={})", depth);
-        self.rpc_call("anvil_reorg", serde_json::json!([depth, []])).await?;
+        let fork_tx = serde_json::json!({
+            "from": ANVIL_DEPLOYER_ADDRESS,
+            "to": "0x000000000000000000000000000000000000dEaD",
+            "value": "0x1",
+        });
+        self.rpc_call("anvil_reorg", serde_json::json!([depth, [[fork_tx, 0]]])).await?;
         Ok(())
     }
 
