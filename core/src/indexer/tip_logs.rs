@@ -353,10 +353,11 @@ impl SharedTipLogs {
         Some(number)
     }
 
-    /// Stores the header of a block scheduled from its child: its parent hash, then the next
-    /// missing block below scheduled the same way, before this block can settle, so a waiting
-    /// stream never finds the run broken. A zero bloom settles the block empty. Returns whether
-    /// the block still needs its logs, and the block below when it was scheduled.
+    /// Stores the header of a block scheduled from its child: its parent hash (a cached block
+    /// below that it does not name is dropped, as for a head), then the next missing block below
+    /// scheduled the same way, before this block can settle, so a waiting stream never finds the
+    /// run broken. A zero bloom settles the block empty. Returns whether the block still needs
+    /// its logs, and the block below when it was scheduled.
     fn learn_header(
         &self,
         state: &mut TipState,
@@ -364,6 +365,23 @@ impl SharedTipLogs {
         parent_hash: B256,
         logs_bloom: Bloom,
     ) -> (bool, Option<u64>) {
+        if let Some(parent_number) = number.checked_sub(1) {
+            let replaced =
+                state.entries.peek(&parent_number).is_some_and(|parent| parent.hash != parent_hash);
+            if replaced {
+                if let Some(stale) = state.entries.pop(&parent_number) {
+                    debug!(
+                        "shared tip logs - {} - dropping block {} ({}): block {} names another parent",
+                        self.network, parent_number, stale.hash, number
+                    );
+                    if stale.is_pending() {
+                        metrics::record_shared_tip_logs_block(&self.network, "invalidated");
+                    }
+                }
+                self.update_gauge(state);
+                self.changed.notify_waiters();
+            }
+        }
         let Some(entry) = state.entries.get_mut(&number) else {
             return (false, None);
         };
@@ -1413,6 +1431,35 @@ mod tests {
         assert_eq!(tip.status_of(13), Some(TipStatus::empty_by_bloom()));
         assert!(source.header_calls().is_empty());
         assert!(!source.calls().contains(&13));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_skipped_block_naming_another_parent_drops_the_cached_one() {
+        let net = "tip-logs-skipped-reorg";
+        let other_parent = hash(0xa0);
+        let source = ScriptedBlockLogsSource::new();
+        source.script(11, vec![Answer::Now(Ok(vec![]))]);
+        source.headers.lock().unwrap().insert(
+            hash(21),
+            BlockLinks { number: 21, parent_hash: other_parent, logs_bloom: Bloom::ZERO },
+        );
+        let tip = SharedTipLogs::new(net, source.clone(), settings(true));
+
+        // Polled as head: 11 names a 10 that is not the cached one.
+        tip.observe_head(10, hash(10), hash(9), Bloom::ZERO);
+        tip.observe_head(12, hash(12), hash(11), Bloom::ZERO);
+        tip.observe_head(11, hash(11), other_parent, Bloom::ZERO);
+        assert_eq!(tip.status_of(10), None, "the stale 10 is dropped");
+        assert!(tip.status_of(11).is_some() && tip.status_of(12).is_some());
+
+        // Read by hash: 21's header names a 20 that is not the cached one. A cache of its own,
+        // so nothing below 20 schedules the 20 that header names.
+        let tip = SharedTipLogs::new(net, source.clone(), settings(true));
+        tip.observe_head(20, hash(20), hash(19), Bloom::ZERO);
+        tip.observe_head(22, hash(22), hash(21), Bloom::ZERO);
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(tip.status_of(20), None, "the stale 20 is dropped");
+        assert_eq!(tip.status_of(21), Some(TipStatus::empty_by_bloom()));
     }
 
     #[tokio::test(start_paused = true)]
