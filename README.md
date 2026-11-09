@@ -241,7 +241,7 @@ cargo install cargo-nextest --locked
 cargo nextest run --exclude rindexer_rust_playground --workspace
 ```
 
-The integration tests in `core/tests/` need Docker running and start several containers per test. On machines with limited memory, if they fail with container startup timeouts or connection errors, run fewer tests at once with `-j 2`.
+The integration tests in `core/tests/` need Docker running. On slower machines they can fail intermittently with container startup timeouts or connection errors; add `--retries 2` to retry failed tests.
 
 ## Formatting
 
