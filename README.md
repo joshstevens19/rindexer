@@ -70,7 +70,7 @@ To use it with an existing project and a running postgres instance you can simpl
 export PROJECT_PATH=/path/to/your/project
 export DATABASE_URL="postgresql://user:pass@postgres/db"
 
-docker-compose up -d
+docker compose up -d
 ```
 
 This will start all local indexing and if you have enabled the graphql endpoint, it will become exposed under:
@@ -231,6 +231,17 @@ Subsequent builds use smart caching and will only rebuild components that have c
 ### Prod
 
 To build for prod you can run `make prod_build` this will build everything for you and optimise it for production.
+
+## Testing
+
+Run tests with [`cargo-nextest`](https://nexte.st) instead of `cargo test`. Some tests change environment variables, so each test needs its own process.
+
+```bash
+cargo install cargo-nextest --locked
+cargo nextest run --exclude rindexer_rust_playground --workspace
+```
+
+The integration tests in `core/tests/` need Docker running and start several containers per test. On machines with limited memory, if they fail with container startup timeouts or connection errors, run fewer tests at once with `-j 2`.
 
 ## Formatting
 
