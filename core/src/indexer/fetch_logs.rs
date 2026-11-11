@@ -2137,7 +2137,9 @@ mod tests {
     use crate::blockclock::BlockClock;
     use crate::event::contract_setup::AddressDetails;
     use crate::event::RindexerEventFilter;
-    use crate::indexer::tip_logs::{BlockLogsSource, FallbackReason, SharedTipLogsSettings};
+    use crate::indexer::tip_logs::{
+        BlockLinks, BlockLogsSource, FallbackReason, SharedTipLogsSettings,
+    };
     use crate::metrics::definitions::{
         SHARED_TIP_LOGS_BLOCKS_TOTAL, SHARED_TIP_LOGS_FALLBACKS_TOTAL, SHARED_TIP_LOGS_SERVED_TOTAL,
     };
@@ -2692,11 +2694,12 @@ mod tests {
 
     /// Scripted unfiltered answers per block for the shared fetcher. An exhausted queue repeats
     /// its last answer; a block with no script never answers, so the fetcher's per-call timeout
-    /// is what ends each of its attempts.
+    /// is what ends each of its attempts. An unscripted header is not found.
     #[derive(Debug, Default)]
     struct ScriptedTipSource {
         answers: StdMutex<HashMap<u64, VecDeque<TipAnswer>>>,
         calls: StdMutex<Vec<u64>>,
+        headers: StdMutex<HashMap<B256, BlockLinks>>,
     }
 
     impl ScriptedTipSource {
@@ -2710,6 +2713,16 @@ mod tests {
 
         fn calls(&self) -> Vec<u64> {
             self.calls.lock().expect("calls mutex").clone()
+        }
+
+        /// Block `number` as `hash_of` chains it, with a busy bloom.
+        fn script_header(&self, number: u64) {
+            let links = BlockLinks {
+                number,
+                parent_hash: hash_of(number - 1),
+                logs_bloom: Bloom::repeat_byte(0xff),
+            };
+            self.headers.lock().expect("headers mutex").insert(hash_of(number), links);
         }
 
         fn next_answer(&self, block: u64) -> Option<TipAnswer> {
@@ -2734,6 +2747,10 @@ mod tests {
                 tokio::time::sleep(delay).await;
             }
             answer.map_err(ProviderError::CustomError)
+        }
+
+        async fn block_header(&self, hash: B256) -> Result<Option<BlockLinks>, ProviderError> {
+            Ok(self.headers.lock().expect("headers mutex").get(&hash).copied())
         }
     }
 
@@ -3100,6 +3117,38 @@ mod tests {
         );
         assert_eq!(source.calls(), vec![TIP]);
         assert_eq!(counter(&SHARED_TIP_LOGS_SERVED_TOTAL, &[net, "prefix_rpc_plus_tip"]), 1.0);
+    }
+
+    /// The RPC's head goes from `TIP - 2` straight to `TIP`, so `TIP - 1` is never polled as
+    /// head, and the stream's own filtered `eth_getLogs` answers that block empty. The shared
+    /// unfiltered fetch has the block's logs; the stream must get them from it.
+    #[tokio::test(start_paused = true)]
+    async fn live_window_over_a_skipped_head_is_served_from_shared_cache() {
+        let net = "live-tip-skipped-head";
+        let source = ScriptedTipSource::new();
+        let skipped = log_at(TIP - 1, hash_of(TIP - 1), stream_address(), stream_topic(), 0);
+        source.script(TIP - 1, vec![(Duration::ZERO, Ok(vec![skipped.clone()]))]);
+        source.script(TIP, vec![(Duration::ZERO, Ok(vec![tip_log(0)]))]);
+        source.script_header(TIP - 1);
+        let tip_logs = SharedTipLogs::new(net, source.clone(), settings());
+        // The stream already delivered TIP - 2, read through the shared cache as head.
+        tip_logs.observe_head(TIP - 2, hash_of(TIP - 2), hash_of(TIP - 3), Bloom::ZERO);
+        // No `with_logs`: the stream's own eth_getLogs answers every window empty.
+        let provider = Arc::new(RecordingLiveProvider::recording(
+            MockChainProvider::new(1).with_blocks(vec![busy_tip()]).with_shared_tip_logs(tip_logs),
+        ));
+
+        let (batch, _) =
+            first_live_batch(&provider, stream_filter(TIP - 1), TIP - 2, false, "test").await;
+
+        assert_eq!((batch.from_block, batch.to_block), (U64::from(TIP - 1), U64::from(TIP)));
+        assert_eq!(
+            block_and_index(&batch.logs),
+            vec![(Some(TIP - 1), Some(0)), (Some(TIP), Some(0))],
+            "the skipped block's log is delivered"
+        );
+        assert!(provider.ranges().is_empty(), "no per-stream eth_getLogs");
+        assert_eq!(counter(&SHARED_TIP_LOGS_SERVED_TOTAL, &[net, "prefix_rpc_plus_tip"]), 0.0);
     }
 
     #[tokio::test(start_paused = true)]

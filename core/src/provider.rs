@@ -6,7 +6,7 @@ use alloy::rpc::types::{Filter, ValueOrArray};
 use alloy::transports::mock::Asserter;
 use alloy::{
     eips::{BlockId, BlockNumberOrTag},
-    primitives::{Address, Bytes, TxHash, U256, U64},
+    primitives::{Address, Bytes, TxHash, B256, U256, U64},
     providers::{
         ext::TraceApi,
         fillers::{BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller},
@@ -50,7 +50,7 @@ use url::Url;
 use async_trait::async_trait;
 
 use crate::helpers::chunk_hashset;
-use crate::indexer::tip_logs::{BlockLogsSource, SharedTipLogs, SharedTipLogsSettings};
+use crate::indexer::tip_logs::{BlockLinks, BlockLogsSource, SharedTipLogs, SharedTipLogsSettings};
 use crate::layer_extensions::RpcLoggingLayer;
 use crate::manifest::network::{AddressFiltering, BlockPollFrequency};
 use crate::metrics::rpc as rpc_metrics;
@@ -783,6 +783,22 @@ impl BlockLogsSource for RpcBlockLogsSource {
             start.elapsed().as_secs_f64(),
         );
         logs
+    }
+
+    async fn block_header(&self, hash: B256) -> Result<Option<BlockLinks>, ProviderError> {
+        let start = Instant::now();
+        let block = self.provider.get_block_by_hash(hash).await.map_err(ProviderError::from);
+        rpc_metrics::record_rpc_request(
+            &self.network,
+            "eth_getBlockByHash",
+            block.is_ok(),
+            start.elapsed().as_secs_f64(),
+        );
+        Ok(block?.map(|block| BlockLinks {
+            number: block.header.number,
+            parent_hash: block.header.parent_hash,
+            logs_bloom: block.header.logs_bloom,
+        }))
     }
 }
 
