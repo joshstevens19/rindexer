@@ -6,7 +6,7 @@
 
 ### Bug fixes
 -------------------------------------------------
-
+- fix: the reorg journal (`rindexer_internal.derived_op_log`) no longer drops `set`/`max`/`min` operations on `uint256`/`int256` columns with "invalid input syntax for type numeric"; their values were written as `'I256Numeric(..)'` instead of a number
 - fix: update the HTTP client and Solidity compiler dependencies used by rindexer.
 - fix: verify PostgreSQL certificates with trailing-dot DNS names, including Cloud SQL shared-CA certificates, without disabling certificate or hostname checks; required TLS never falls back to plaintext.
 - fix: respect `block_poll_frequency` in live-indexing stall warnings, waiting at least five minutes or twice the polling interval while keeping five-minute heartbeats; warning text now reports the effective timeout in seconds instead of a fixed "5 minutes".

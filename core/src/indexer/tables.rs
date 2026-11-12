@@ -4878,6 +4878,17 @@ fn format_wrapper_for_sql(w: &EthereumSqlTypeWrapper) -> String {
         EthereumSqlTypeWrapper::I64(n) => format!("{}", n),
         EthereumSqlTypeWrapper::I128(n) => format!("{}", n),
         EthereumSqlTypeWrapper::I256(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::U64Nullable(n) => format!("{}", n),
+        EthereumSqlTypeWrapper::U256Numeric(n) | EthereumSqlTypeWrapper::U256Nullable(n) => {
+            format!("{}", n)
+        }
+        EthereumSqlTypeWrapper::U256NumericNullable(n) => match n {
+            Some(n) => format!("{}", n),
+            None => "NULL".to_string(),
+        },
+        EthereumSqlTypeWrapper::I256Numeric(n) | EthereumSqlTypeWrapper::I256Nullable(n) => {
+            format!("{}", n)
+        }
         EthereumSqlTypeWrapper::Bytes(b) => format!("'\\x{}'", hex::encode(b)),
         // Fallback: use Debug formatting (safe for SQL numerics)
         other => format!("'{:?}'", other),
@@ -4887,6 +4898,38 @@ fn format_wrapper_for_sql(w: &EthereumSqlTypeWrapper) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn format_wrapper_for_sql_renders_numeric_wrappers_as_numbers() {
+        let negative = I256::try_from(-568538358510333668745i128).unwrap();
+        assert_eq!(
+            format_wrapper_for_sql(&EthereumSqlTypeWrapper::I256Numeric(negative)),
+            "-568538358510333668745"
+        );
+        assert_eq!(
+            format_wrapper_for_sql(&EthereumSqlTypeWrapper::I256Nullable(negative)),
+            "-568538358510333668745"
+        );
+        assert_eq!(
+            format_wrapper_for_sql(&EthereumSqlTypeWrapper::U256Numeric(U256::from(42u64))),
+            "42"
+        );
+        assert_eq!(
+            format_wrapper_for_sql(&EthereumSqlTypeWrapper::U256Nullable(U256::from(42u64))),
+            "42"
+        );
+        assert_eq!(
+            format_wrapper_for_sql(&EthereumSqlTypeWrapper::U256NumericNullable(Some(U256::from(
+                42u64
+            )))),
+            "42"
+        );
+        assert_eq!(
+            format_wrapper_for_sql(&EthereumSqlTypeWrapper::U256NumericNullable(None)),
+            "NULL"
+        );
+        assert_eq!(format_wrapper_for_sql(&EthereumSqlTypeWrapper::U64Nullable(7)), "7");
+    }
 
     #[test]
     fn test_evaluate_filter_equals() {
