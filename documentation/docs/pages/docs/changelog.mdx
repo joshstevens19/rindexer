@@ -6,6 +6,7 @@
 
 ### Bug fixes
 -------------------------------------------------
+- fix: use the live polling head snapshot for historical targets, preventing false "RPC has gone back" logs at startup with a long `block_poll_frequency`.
 - fix: `dependency_events` on a contract without `address` (filter contract) no longer panics at startup with "Contract events config not found"; its events were treated as a cross-contract dependency because the runtime name carries a `Filter` suffix
 - fix: the reorg journal (`rindexer_internal.derived_op_log`) no longer drops `set`/`max`/`min` operations on `uint256`/`int256` columns with "invalid input syntax for type numeric"; their values were written as `'I256Numeric(..)'` instead of a number
 - fix: update the HTTP client and Solidity compiler dependencies used by rindexer.
