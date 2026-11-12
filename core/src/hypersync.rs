@@ -322,6 +322,10 @@ impl ChainProvider for HypersyncProvider {
         self.rpc.get_chain_state_notification()
     }
 
+    fn block_poll_frequency(&self) -> Duration {
+        ChainProvider::block_poll_frequency(self.rpc.as_ref())
+    }
+
     fn shared_tip_logs(&self) -> Option<Arc<SharedTipLogs>> {
         self.rpc.shared_tip_logs()
     }
