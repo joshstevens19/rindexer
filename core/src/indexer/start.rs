@@ -120,7 +120,12 @@ async fn get_start_end_block(
     network: &str,
     reorg_safe_distance: Option<ReorgSafeDistance>,
 ) -> Result<(U64, U64, U64), StartIndexingError> {
-    let latest_block = provider.get_block_number().await?;
+    // Share the live poller's head snapshot: a fresh block-number read can get
+    // ahead of a cached header when block_poll_frequency is long.
+    let latest_block = provider.get_latest_block().await?.ok_or_else(|| {
+        ProviderError::CustomError(format!("Latest block not found for network {network}"))
+    })?;
+    let latest_block = U64::from(latest_block.header.number);
 
     if let Some(start_block) = manifest_start_block {
         if start_block > latest_block {
@@ -523,7 +528,7 @@ fn find_manifest_contract(
 }
 
 /// `FPMMFilterFilter` -> `FPMM`; names without the suffix are returned unchanged.
-fn strip_filter_suffixes(name: &str) -> &str {
+pub(crate) fn strip_filter_suffixes(name: &str) -> &str {
     let mut stripped = name;
     while let Some(base) = stripped.strip_suffix("Filter") {
         if base.is_empty() {
@@ -1644,6 +1649,9 @@ mod tests {
     use crate::indexer::last_synced::SyncConfig;
     use crate::manifest::contract::ReorgSafeDistance;
     use crate::provider::mock::MockChainProvider;
+    use alloy::network::{AnyHeader, AnyRpcBlock, AnyRpcHeader};
+    use alloy::primitives::B256;
+    use alloy::rpc::types::{Block, BlockTransactions};
     use std::path::Path;
 
     const FILTER_TABLES_MANIFEST: &str = r#"
@@ -1839,9 +1847,60 @@ contracts:
         assert!(end < U64::from(10000));
     }
 
+    fn provider_at_block(number: u64) -> MockChainProvider {
+        let block = AnyRpcBlock::new(
+            Block::new(
+                AnyRpcHeader::from_sealed(
+                    AnyHeader { number, ..Default::default() }.seal(B256::ZERO),
+                ),
+                BlockTransactions::Full(vec![]),
+            )
+            .into(),
+        );
+        MockChainProvider::new(1).with_block_number(number).with_blocks(vec![block])
+    }
+
+    #[tokio::test]
+    async fn historical_target_uses_live_head_snapshot() {
+        // A long block_poll_frequency can leave the cached header behind a fresh
+        // eth_blockNumber response. Startup must use the same snapshot as live polling.
+        let provider = provider_at_block(28_488_976).with_block_number(28_488_978);
+        let (_, end, _) = get_start_end_block(
+            &provider,
+            Some(U64::from(28_488_000)),
+            None,
+            empty_sync_config(),
+            "Test",
+            "ethereum",
+            None,
+        )
+        .await
+        .unwrap();
+
+        let live_head = provider.get_latest_block().await.unwrap().unwrap();
+        assert_eq!(end, U64::from(live_head.header.number));
+        assert_eq!(end, U64::from(28_488_976));
+    }
+
+    #[tokio::test]
+    async fn missing_latest_block_returns_error() {
+        let result = get_start_end_block(
+            &MockChainProvider::new(1).with_block_number(100),
+            None,
+            None,
+            empty_sync_config(),
+            "Test",
+            "ethereum",
+            None,
+        )
+        .await;
+
+        assert!(matches!(result, Err(StartIndexingError::GetBlockNumberError(_))));
+    }
+
     #[tokio::test]
     async fn start_block_higher_than_latest_errors() {
-        let mock = MockChainProvider::new(1).with_block_number(100);
+        let mock = provider_at_block(100);
         let result = get_start_end_block(
             &mock,
             Some(U64::from(200)), // start > latest
@@ -1861,7 +1920,7 @@ contracts:
 
     #[tokio::test]
     async fn end_block_higher_than_latest_errors() {
-        let mock = MockChainProvider::new(1).with_block_number(100);
+        let mock = provider_at_block(100);
         let result = get_start_end_block(
             &mock,
             Some(U64::from(50)),
@@ -1881,7 +1940,7 @@ contracts:
 
     #[tokio::test]
     async fn normal_range_returns_start_and_end() {
-        let mock = MockChainProvider::new(1).with_block_number(1000);
+        let mock = provider_at_block(1000);
         let (start, end, distance) = get_start_end_block(
             &mock,
             Some(U64::from(100)),
@@ -1901,7 +1960,7 @@ contracts:
 
     #[tokio::test]
     async fn end_block_clamped_to_latest() {
-        let mock = MockChainProvider::new(1).with_block_number(1000);
+        let mock = provider_at_block(1000);
         let (_, end, _) = get_start_end_block(
             &mock,
             Some(U64::from(100)),
@@ -1919,7 +1978,7 @@ contracts:
 
     #[tokio::test]
     async fn reorg_safe_distance_applied() {
-        let mock = MockChainProvider::new(1).with_block_number(1000);
+        let mock = provider_at_block(1000);
         let (start, end, distance) = get_start_end_block(
             &mock,
             Some(U64::from(100)),
@@ -1939,7 +1998,7 @@ contracts:
 
     #[tokio::test]
     async fn no_start_block_defaults_to_latest() {
-        let mock = MockChainProvider::new(1).with_block_number(500);
+        let mock = provider_at_block(500);
         let (start, end, _) = get_start_end_block(
             &mock,
             None, // no manifest start → defaults to latest
@@ -1958,7 +2017,7 @@ contracts:
 
     #[tokio::test]
     async fn start_block_equals_end_block_single_block_range() {
-        let mock = MockChainProvider::new(1).with_block_number(1000);
+        let mock = provider_at_block(1000);
         let (start, end, distance) = get_start_end_block(
             &mock,
             Some(U64::from(500)),
@@ -1978,7 +2037,7 @@ contracts:
 
     #[tokio::test]
     async fn start_block_zero_genesis() {
-        let mock = MockChainProvider::new(1).with_block_number(1000);
+        let mock = provider_at_block(1000);
         let (start, end, _) = get_start_end_block(
             &mock,
             Some(U64::ZERO),
@@ -1998,7 +2057,7 @@ contracts:
     #[tokio::test]
     async fn very_large_block_numbers() {
         let large = 18_000_000u64;
-        let mock = MockChainProvider::new(1).with_block_number(large);
+        let mock = provider_at_block(large);
         let (start, end, distance) = get_start_end_block(
             &mock,
             Some(U64::from(17_000_000u64)),
@@ -2020,7 +2079,7 @@ contracts:
     async fn reorg_safe_distance_larger_than_range_clamps_to_zero() {
         // latest=100, distance=200 → safe_block = saturating_sub → 0
         // end (100) > safe_block (0) so end is clamped to 0
-        let mock = MockChainProvider::new(1).with_block_number(100);
+        let mock = provider_at_block(100);
         let (start, end, distance) = get_start_end_block(
             &mock,
             Some(U64::from(10)),
