@@ -515,7 +515,7 @@ fn find_manifest_contract(
 }
 
 /// `FPMMFilterFilter` -> `FPMM`; names without the suffix are returned unchanged.
-fn strip_filter_suffixes(name: &str) -> &str {
+pub(crate) fn strip_filter_suffixes(name: &str) -> &str {
     let mut stripped = name;
     while let Some(base) = stripped.strip_suffix("Filter") {
         if base.is_empty() {
