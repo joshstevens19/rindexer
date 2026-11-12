@@ -6,7 +6,7 @@ use alloy::rpc::types::{Filter, ValueOrArray};
 use alloy::transports::mock::Asserter;
 use alloy::{
     eips::{BlockId, BlockNumberOrTag},
-    primitives::{Address, Bytes, TxHash, U256, U64},
+    primitives::{Address, Bytes, TxHash, B256, U256, U64},
     providers::{
         ext::TraceApi,
         fillers::{BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller},
@@ -50,7 +50,7 @@ use url::Url;
 use async_trait::async_trait;
 
 use crate::helpers::chunk_hashset;
-use crate::indexer::tip_logs::{BlockLogsSource, SharedTipLogs, SharedTipLogsSettings};
+use crate::indexer::tip_logs::{BlockLinks, BlockLogsSource, SharedTipLogs, SharedTipLogsSettings};
 use crate::layer_extensions::RpcLoggingLayer;
 use crate::manifest::network::{AddressFiltering, BlockPollFrequency};
 use crate::metrics::rpc as rpc_metrics;
@@ -69,6 +69,11 @@ pub trait ChainProvider: Send + Sync + Debug {
     fn chain(&self) -> Chain;
     fn max_block_range(&self) -> Option<U64>;
     fn chain_state_notification(&self) -> Option<Sender<ChainStateNotification>>;
+
+    /// How long the provider may cache the latest block; zero means no caching.
+    fn block_poll_frequency(&self) -> Duration {
+        Duration::ZERO
+    }
 
     /// The network's shared tip-block log cache; `None` keeps the per-stream tip `eth_getLogs`.
     fn shared_tip_logs(&self) -> Option<Arc<SharedTipLogs>> {
@@ -784,6 +789,22 @@ impl BlockLogsSource for RpcBlockLogsSource {
         );
         logs
     }
+
+    async fn block_header(&self, hash: B256) -> Result<Option<BlockLinks>, ProviderError> {
+        let start = Instant::now();
+        let block = self.provider.get_block_by_hash(hash).await.map_err(ProviderError::from);
+        rpc_metrics::record_rpc_request(
+            &self.network,
+            "eth_getBlockByHash",
+            block.is_ok(),
+            start.elapsed().as_secs_f64(),
+        );
+        Ok(block?.map(|block| BlockLinks {
+            number: block.header.number,
+            parent_hash: block.header.parent_hash,
+            logs_bloom: block.header.logs_bloom,
+        }))
+    }
 }
 
 #[async_trait]
@@ -798,6 +819,10 @@ impl ChainProvider for JsonRpcCachedProvider {
 
     fn chain_state_notification(&self) -> Option<Sender<ChainStateNotification>> {
         self.chain_state_notification.clone()
+    }
+
+    fn block_poll_frequency(&self) -> Duration {
+        JsonRpcCachedProvider::block_poll_frequency(self)
     }
 
     fn shared_tip_logs(&self) -> Option<Arc<SharedTipLogs>> {
@@ -888,6 +913,10 @@ impl<T: ChainProvider + ?Sized> ChainProvider for Arc<T> {
 
     fn chain_state_notification(&self) -> Option<Sender<ChainStateNotification>> {
         (**self).chain_state_notification()
+    }
+
+    fn block_poll_frequency(&self) -> Duration {
+        (**self).block_poll_frequency()
     }
 
     fn shared_tip_logs(&self) -> Option<Arc<SharedTipLogs>> {
@@ -1460,6 +1489,17 @@ pub fn get_network_provider<'a>(
 mod tests {
     use super::mock::MockChainProvider;
     use super::*;
+
+    #[test]
+    fn block_poll_frequency_survives_provider_wrapping() {
+        let (mut provider, _) = JsonRpcCachedProvider::mock_with_asserter(1);
+        Arc::get_mut(&mut provider).unwrap().block_poll_frequency =
+            Some(BlockPollFrequency::PollRateMs { millis: 600_000 });
+        assert_eq!(ChainProvider::block_poll_frequency(&provider), Duration::from_secs(600));
+        let provider: Arc<dyn ChainProvider> = provider;
+        assert_eq!(provider.block_poll_frequency(), Duration::from_secs(600));
+        assert_eq!(MockChainProvider::new(1).block_poll_frequency(), Duration::ZERO);
+    }
 
     #[test]
     fn mock_chain_provider_defaults() {
