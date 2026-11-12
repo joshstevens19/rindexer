@@ -1175,7 +1175,7 @@ async fn live_indexing_stream(
     let mut last_seen_block_number = last_seen_block_number;
     let mut log_response_to_large_to_block: Option<U64> = None;
     let tip_logs = cached_provider.shared_tip_logs();
-    let mut heartbeat = HeartbeatTracker::new(Duration::from_secs(300));
+    let mut heartbeat = HeartbeatTracker::new(cached_provider.block_poll_frequency());
     let target_iteration_duration = Duration::from_millis(200);
 
     // Channel for reth-provided reorg signals (feature-gated, None for HTTP RPC).
@@ -1301,10 +1301,11 @@ async fn live_indexing_stream(
                         }
                         HeartbeatAction::Stalled => {
                             warn!(
-                                "{} - {} - RPC tip has not advanced past block {} in the last 5 minutes",
+                                "{} - {} - RPC tip has not advanced past block {} in the last {} seconds",
                                 info_log_name,
                                 IndexingEventProgressStatus::live_log(),
-                                latest_tip
+                                latest_tip,
+                                heartbeat.stall_timeout().as_secs()
                             );
                         }
                     }
