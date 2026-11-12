@@ -79,7 +79,7 @@ See [a complete config example](https://docs.erpc.cloud/config/example) for insp
 docker run -v $(pwd)/erpc.yaml:/root/erpc.yaml -p 4000:4000 -p 4001:4001 ghcr.io/erpc/erpc:latest
 ```
 
-or add the below configs to the rindexer's [docker-compose.yaml](https://github.com/joshstevens19/rindexer/blob/master/docker-compose.yml) as a service and run `docker-compose up -d`:
+or add the below configs to the rindexer's [docker-compose.yaml](https://github.com/joshstevens19/rindexer/blob/master/docker-compose.yml) as a service and run `docker compose up -d`:
 
 ```yaml [rindexer.yaml]
   services:
