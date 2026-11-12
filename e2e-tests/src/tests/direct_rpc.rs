@@ -104,6 +104,7 @@ fn build_direct_rpc_config(
             chain_id: 1,
             rpc: rpc_url.to_string(),
             reorg_handling: None,
+            shared_tip_logs: None,
         }],
         global: GlobalConfig { health_port },
         storage: StorageConfig {

@@ -2,18 +2,38 @@
 
 ### Breaking changes
 -------------------------------------------------
+- breaking: PostgreSQL TLS now uses OpenSSL CA locations (`SSL_CERT_FILE` / `SSL_CERT_DIR`) instead of bundled and native Rustls roots. Custom Rust pools passed to `PostgresClient::from_connection` must use `postgres_openssl::MakeTlsConnector`; explicitly typed `raw_connection` results must use the same connector.
 
 ### Bug fixes
 -------------------------------------------------
+
 - fix: update the HTTP client and Solidity compiler dependencies used by rindexer.
+- fix: verify PostgreSQL certificates with trailing-dot DNS names, including Cloud SQL shared-CA certificates, without disabling certificate or hostname checks; required TLS never falls back to plaintext.
+- fix: respect `block_poll_frequency` in live-indexing stall warnings, waiting at least five minutes or twice the polling interval while keeping five-minute heartbeats; warning text now reports the effective timeout in seconds instead of a fixed "5 minutes".
+- fix: **Shared tip logs cover a head the RPC skipped** - when the polled head jumps from N to N+2, block N+1 is now read through the shared tip fetch (its header by hash, then its logs with the empty-answer re-ask) instead of by every live stream with its own filtered `eth_getLogs`, whose empty answer nothing re-checked. Applies to runs of at most 8 skipped blocks (fewer when `cache_blocks` is below 10) whose block below is cached.
 
 ### Features
 -------------------------------------------------
+- feat: **Shared tip-block log fetch** - live indexing reads each new tip block once per network with an unfiltered `eth_getLogs` shared by every live stream, which filters it locally, instead of one filtered call per stream per block; a block whose header has a non-zero logs bloom is re-asked while the upstream still answers empty, and a zero-bloom block costs no call. New `networks[].shared_tip_logs` knob (`enabled` default `true`, `empty_retry_deadline_ms` default `7000`, `cache_blocks` default `32`) and the `rindexer_shared_tip_logs_*` metrics. Supersedes the per-stream tip re-ask of 0.43.4; `rindexer_live_tip_empty_logs_total` is removed. Rust-mode projects pick it up after `rindexer codegen typings` (the regenerated `networks.rs` calls `create_client_with_shared_tip_logs`); an existing `networks.rs` keeps compiling, since `create_client` keeps its signature, and keeps the per-stream tip calls.
 
 ## Releases
 -------------------------------------------------
 
 all release branches are deployed through `release/VERSION_NUMBER` branches
+
+# 0.43.4-beta - 5th October 2026
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.43.4
+
+- linux binary - https://github.com/joshstevens19/rindexer/releases/download/v0.43.4/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://github.com/joshstevens19/rindexer/releases/download/v0.43.4/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://github.com/joshstevens19/rindexer/releases/download/v0.43.4/rindexer_darwin-amd64.tar.gz
+- windows binary - https://github.com/joshstevens19/rindexer/releases/download/v0.43.4/rindexer_win32-amd64.zip
+
+### Bug fixes
+-------------------------------------------------
+- fix: live indexing no longer marks a window synced when `eth_getLogs` returns no log for a tip block whose logs bloom says the stream can have events there; the window is held at that block and re-asked up to four times (about one block) first, and blocks arriving meanwhile wait for their own check. Upstreams that serve a block header before its logs, or a lagging upstream behind a load balancer, used to drop every event of one stream for that block with no error. New metric `rindexer_live_tip_empty_logs_total{network, outcome}`.
+- fix: `cargo clippy -D warnings` is green again on Rust 1.99 (the deprecated `fetch_update` in the task tracker and the `async_trait` double `must_use` on `ChainProvider` are allowed with a note).
 
 # 0.43.3-beta - 15th September 2026
 

@@ -133,6 +133,46 @@ fn default_reorg_enabled() -> bool {
     true
 }
 
+/// Shared per-network tip-block log fetch: every live stream whose window ends at the chain tip
+/// takes its logs from one unfiltered `eth_getLogs` per block instead of issuing its own call.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SharedTipLogsConfig {
+    /// `false` keeps the per-stream tip `eth_getLogs` path on this network.
+    #[serde(default = "default_shared_tip_logs_enabled")]
+    pub enabled: bool,
+
+    /// Budget, from the first observation of a head block, for a block whose header has a
+    /// non-zero logs bloom but answers empty.
+    #[serde(default = "default_shared_tip_logs_empty_retry_deadline_ms")]
+    pub empty_retry_deadline_ms: u64,
+
+    /// Recent tip blocks kept resident per network.
+    #[serde(default = "default_shared_tip_logs_cache_blocks")]
+    pub cache_blocks: usize,
+}
+
+impl Default for SharedTipLogsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_shared_tip_logs_enabled(),
+            empty_retry_deadline_ms: default_shared_tip_logs_empty_retry_deadline_ms(),
+            cache_blocks: default_shared_tip_logs_cache_blocks(),
+        }
+    }
+}
+
+fn default_shared_tip_logs_enabled() -> bool {
+    true
+}
+
+fn default_shared_tip_logs_empty_retry_deadline_ms() -> u64 {
+    7000
+}
+
+fn default_shared_tip_logs_cache_blocks() -> usize {
+    32
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Network {
     pub name: String,
@@ -195,6 +235,11 @@ pub struct Network {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reorg_handling: Option<ReorgHandlingConfig>,
+
+    /// Shared per-network tip-block log fetch. Omitted means enabled with the defaults of
+    /// [`SharedTipLogsConfig`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_tip_logs: Option<SharedTipLogsConfig>,
 }
 
 #[cfg(feature = "reth")]
@@ -494,6 +539,61 @@ mod tests {
         assert_eq!(hypersync.url.as_deref(), Some("https://eth.hypersync.xyz"));
         assert_eq!(hypersync.api_token.as_deref(), Some("test-token"));
         assert_eq!(hypersync.max_block_range, Some(U64::from(100000)));
+    }
+
+    #[test]
+    fn test_network_shared_tip_logs_defaults() {
+        let network: Network = serde_yaml::from_str(
+            r#"
+            name: ethereum
+            chain_id: 1
+            rpc: https://mainnet.gateway.tenderly.co
+            "#,
+        )
+        .unwrap();
+
+        assert!(network.shared_tip_logs.is_none());
+        let yaml = serde_yaml::to_string(&network).unwrap();
+        assert!(!yaml.contains("shared_tip_logs"));
+
+        assert_eq!(
+            SharedTipLogsConfig::default(),
+            SharedTipLogsConfig { enabled: true, empty_retry_deadline_ms: 7000, cache_blocks: 32 }
+        );
+
+        let network: Network = serde_yaml::from_str(
+            r#"
+            name: ethereum
+            chain_id: 1
+            rpc: https://mainnet.gateway.tenderly.co
+            shared_tip_logs:
+                cache_blocks: 8
+            "#,
+        )
+        .unwrap();
+
+        let config = network.shared_tip_logs.expect("the stanza is parsed");
+        assert_eq!(
+            config,
+            SharedTipLogsConfig { enabled: true, empty_retry_deadline_ms: 7000, cache_blocks: 8 }
+        );
+
+        let network: Network = serde_yaml::from_str(
+            r#"
+            name: ethereum
+            chain_id: 1
+            rpc: https://mainnet.gateway.tenderly.co
+            shared_tip_logs:
+                enabled: false
+            "#,
+        )
+        .unwrap();
+
+        let config = network.shared_tip_logs.expect("the stanza is parsed");
+        assert_eq!(
+            config,
+            SharedTipLogsConfig { enabled: false, empty_retry_deadline_ms: 7000, cache_blocks: 32 }
+        );
     }
 
     #[test]

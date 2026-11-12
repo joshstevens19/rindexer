@@ -8,6 +8,7 @@ mod docker;
 mod health_client;
 mod live_feeder;
 mod rindexer_client;
+mod rpc_proxy;
 mod test_suite;
 mod tests;
 

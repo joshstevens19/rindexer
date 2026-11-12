@@ -21,6 +21,8 @@ pub struct RindexerInstance {
     pub reorg_recovery_complete: Arc<AtomicBool>,
     pub env: HashMap<String, String>,
     pub graphql_url: Arc<Mutex<Option<String>>>,
+    /// Every stdout and stderr line of the process, for assertions on what rindexer logged.
+    pub log_lines: Arc<Mutex<Vec<String>>>,
 }
 
 impl Clone for RindexerInstance {
@@ -34,6 +36,7 @@ impl Clone for RindexerInstance {
             reorg_recovery_complete: self.reorg_recovery_complete.clone(),
             env: self.env.clone(),
             graphql_url: self.graphql_url.clone(),
+            log_lines: self.log_lines.clone(),
         }
     }
 }
@@ -49,7 +52,19 @@ impl RindexerInstance {
             reorg_recovery_complete: Arc::new(AtomicBool::new(false)),
             env: HashMap::new(),
             graphql_url: Arc::new(Mutex::new(None)),
+            log_lines: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// The captured rindexer log lines that contain `needle`.
+    pub fn log_lines_containing(&self, needle: &str) -> Vec<String> {
+        self.log_lines
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|line| line.contains(needle))
+            .cloned()
+            .collect()
     }
 
     pub fn with_env(mut self, key: &str, value: &str) -> Self {
@@ -94,6 +109,7 @@ impl RindexerInstance {
             self.reorg_detected.clone(),
             self.reorg_recovery_complete.clone(),
             self.graphql_url.clone(),
+            self.log_lines.clone(),
         )
         .await;
 
@@ -142,6 +158,7 @@ impl RindexerInstance {
             self.reorg_detected.clone(),
             self.reorg_recovery_complete.clone(),
             self.graphql_url.clone(),
+            self.log_lines.clone(),
         )
         .await;
 
@@ -282,6 +299,7 @@ impl RindexerInstance {
         reorg_detected: Arc<AtomicBool>,
         reorg_recovery_complete: Arc<AtomicBool>,
         graphql_url: Arc<Mutex<Option<String>>>,
+        log_lines: Arc<Mutex<Vec<String>>>,
     ) {
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
@@ -290,12 +308,17 @@ impl RindexerInstance {
             let reorg_detected_clone = reorg_detected.clone();
             let reorg_recovery_clone = reorg_recovery_complete.clone();
             let graphql_url_clone = graphql_url.clone();
+            let log_lines_clone = log_lines.clone();
             let url_regex = Regex::new(r"https?://[^\s]+").ok();
 
             tokio::spawn(async move {
                 while let Ok(Some(line)) = lines.next_line().await {
                     println!("{}", line);
                     debug!("[RINDEXER] {}", line);
+                    log_lines_clone
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push(line.clone());
 
                     if line.contains("COMPLETED - Finished indexing historic events")
                         || line.contains("100.00% progress")
@@ -344,6 +367,7 @@ impl RindexerInstance {
                 while let Ok(Some(line)) = lines.next_line().await {
                     eprintln!("{}", line);
                     error!("[RINDEXER ERROR] {}", line);
+                    log_lines.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(line);
                 }
             });
         }
@@ -415,6 +439,7 @@ impl RindexerInstance {
                 chain_id: 31337,
                 rpc: anvil_rpc_url.to_string(),
                 reorg_handling: None,
+                shared_tip_logs: None,
             }],
             global: crate::test_suite::GlobalConfig { health_port },
             storage: crate::test_suite::StorageConfig {

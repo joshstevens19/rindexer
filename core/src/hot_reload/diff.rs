@@ -179,7 +179,8 @@ fn diff_networks(
                 || old_net.compute_units_per_second != new_net.compute_units_per_second
                 || format!("{:?}", old_net.max_block_range)
                     != format!("{:?}", new_net.max_block_range)
-                || format!("{:?}", old_net.hypersync) != format!("{:?}", new_net.hypersync);
+                || format!("{:?}", old_net.hypersync) != format!("{:?}", new_net.hypersync)
+                || old_net.shared_tip_logs != new_net.shared_tip_logs;
 
             if other_changed {
                 changes.push(ManifestChange::NetworkConfigChanged(name.to_string()));
@@ -462,6 +463,28 @@ storage:
         ));
 
         // And disabling it again must be detected symmetrically.
+        let diff = compute_diff(&new, &old);
+        assert!(diff.changes.iter().any(
+            |c| matches!(c, ManifestChange::NetworkConfigChanged(name) if name == "ethereum")
+        ));
+    }
+
+    #[test]
+    fn test_network_shared_tip_logs_changed() {
+        let old = manifest_from_yaml(BASE_MANIFEST);
+        let new_yaml = BASE_MANIFEST.replace(
+            "rpc: https://eth.rpc.example.com",
+            "rpc: https://eth.rpc.example.com\n    shared_tip_logs:\n      enabled: false",
+        );
+        let new = manifest_from_yaml(&new_yaml);
+
+        // The stanza changes how the network's live streams read the tip, so it is a network
+        // config change in both directions.
+        let diff = compute_diff(&old, &new);
+        assert!(diff.changes.iter().any(
+            |c| matches!(c, ManifestChange::NetworkConfigChanged(name) if name == "ethereum")
+        ));
+
         let diff = compute_diff(&new, &old);
         assert!(diff.changes.iter().any(
             |c| matches!(c, ManifestChange::NetworkConfigChanged(name) if name == "ethereum")

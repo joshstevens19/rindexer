@@ -19,6 +19,7 @@ pub mod no_code;
 pub mod reorg;
 pub mod start;
 pub mod task_tracker;
+pub mod tip_logs;
 
 pub use dependency::{ContractEventDependencies, EventDependencies, EventsDependencyTree};
 

@@ -7,6 +7,7 @@ use crate::indexer::heartbeat::{HeartbeatAction, HeartbeatTracker};
 use crate::indexer::reorg::{
     detect_and_handle_reorg, reorg_safe_distance_for_chain, ReorgContext, ReorgCoordinator,
 };
+use crate::indexer::tip_logs::{filter_logs_for_stream, SharedTipLogs, TipLookup};
 use crate::metrics::indexing as metrics;
 use crate::PostgresClient;
 use crate::{
@@ -16,13 +17,13 @@ use crate::{
     provider::{ChainProvider, ProviderError},
 };
 use alloy::{
-    primitives::{B256, U64},
+    primitives::{Address, B256, U64},
     rpc::types::Log,
 };
 use lru::LruCache;
 use rand::{random_bool, random_ratio};
 use regex::Regex;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
@@ -1080,6 +1081,74 @@ async fn fetch_logs_once<P: ChainProvider + ?Sized>(
     (None, None, None)
 }
 
+/// What the shared tip-block cache did for a live window that ends at the tip.
+enum TipWindowFetch {
+    /// The window's logs: filtered from the cache, or the stream's own `eth_getLogs` when the
+    /// cache could not serve the window.
+    Fetched(Result<Vec<Log>, ProviderError>),
+    /// A block of the window is still being fetched; wake on the cache's `notified` future.
+    Wait,
+}
+
+/// Serves the live window of `current_filter`, which ends at the tip the stream polled
+/// (`tip_hash`), from the shared cache. `contract_address` is the snapshot this window would
+/// have sent to `eth_getLogs`; the stream's own call is the fallback, counted by reason.
+async fn fetch_tip_window(
+    tip_logs: &SharedTipLogs,
+    cached_provider: &dyn ChainProvider,
+    current_filter: &RindexerEventFilter,
+    contract_address: &Option<HashSet<Address>>,
+    tip_hash: B256,
+    info_log_name: &str,
+) -> TipWindowFetch {
+    let from_block = current_filter.from_block();
+    let to_block = current_filter.to_block();
+    let fetched: Result<Vec<Log>, ProviderError> =
+        match tip_logs.lookup(from_block.to::<u64>(), to_block.to::<u64>(), tip_hash) {
+            TipLookup::ServeTip(logs) => {
+                Ok(filter_logs_for_stream(&logs, contract_address, current_filter))
+            }
+            TipLookup::ServeWindow(blocks) => Ok(blocks
+                .iter()
+                .flat_map(|logs| filter_logs_for_stream(logs, contract_address, current_filter))
+                .collect()),
+            TipLookup::ServePrefixByRpcPlusTip(tip) => {
+                let prefix = if from_block < to_block {
+                    let prefix_filter =
+                        current_filter.clone().set_to_block(to_block - U64::from(1));
+                    cached_provider.get_logs(&prefix_filter).await
+                } else {
+                    Ok(Vec::new())
+                };
+                prefix.map(|mut logs| {
+                    logs.extend(filter_logs_for_stream(&tip, contract_address, current_filter));
+                    logs.sort_by_key(|log| (log.block_number, log.log_index));
+                    logs
+                })
+            }
+            TipLookup::Wait { oldest_pending, first_seen } => {
+                let waited = first_seen.elapsed();
+                if waited < tip_logs.stream_wait_budget() {
+                    return TipWindowFetch::Wait;
+                }
+                metrics::record_shared_tip_logs_fallback(tip_logs.network(), "wait_timeout");
+                warn!(
+                    "{} - {} - waited {} ms for the shared logs of block {}; fetching it directly",
+                    info_log_name,
+                    IndexingEventProgressStatus::live_log(),
+                    waited.as_millis(),
+                    oldest_pending
+                );
+                cached_provider.get_logs(current_filter).await
+            }
+            TipLookup::Fallback(reason) => {
+                metrics::record_shared_tip_logs_fallback(tip_logs.network(), reason.as_label());
+                cached_provider.get_logs(current_filter).await
+            }
+        };
+    TipWindowFetch::Fetched(fetched)
+}
+
 /// Handles live indexing mode, continuously checking for new blocks, ensuring they are
 /// within a safe range, updating the filter, and sending the logs to the provided channel.
 #[allow(clippy::too_many_arguments)]
@@ -1105,7 +1174,8 @@ async fn live_indexing_stream(
 ) {
     let mut last_seen_block_number = last_seen_block_number;
     let mut log_response_to_large_to_block: Option<U64> = None;
-    let mut heartbeat = HeartbeatTracker::new(Duration::from_secs(300));
+    let tip_logs = cached_provider.shared_tip_logs();
+    let mut heartbeat = HeartbeatTracker::new(cached_provider.block_poll_frequency());
     let target_iteration_duration = Duration::from_millis(200);
 
     // Channel for reth-provided reorg signals (feature-gated, None for HTTP RPC).
@@ -1155,6 +1225,9 @@ async fn live_indexing_stream(
             // degenerates to a no-op when depth == 0.
             for b in fork_block..(fork_block + reth_reorg.depth) {
                 block_cache.pop(&b);
+            }
+            if let Some(tip_logs) = tip_logs.as_deref() {
+                tip_logs.invalidate_from(fork_block);
             }
 
             // Route through coordinator for full recovery (event deletion, checkpoint
@@ -1228,10 +1301,11 @@ async fn live_indexing_stream(
                         }
                         HeartbeatAction::Stalled => {
                             warn!(
-                                "{} - {} - RPC tip has not advanced past block {} in the last 5 minutes",
+                                "{} - {} - RPC tip has not advanced past block {} in the last {} seconds",
                                 info_log_name,
                                 IndexingEventProgressStatus::live_log(),
-                                latest_tip
+                                latest_tip,
+                                heartbeat.stall_timeout().as_secs()
                             );
                         }
                     }
@@ -1268,6 +1342,9 @@ async fn live_indexing_stream(
                         .await
                         {
                             Ok(Some(fork_point)) => {
+                                if let Some(tip_logs) = tip_logs.as_deref() {
+                                    tip_logs.invalidate_from(fork_point);
+                                }
                                 current_filter =
                                     current_filter.set_from_block(U64::from(fork_point));
                                 last_seen_block_number = U64::from(fork_point.saturating_sub(1));
@@ -1283,6 +1360,22 @@ async fn live_indexing_stream(
                                 continue;
                             }
                         }
+                    }
+
+                    // Every stream that can read the cache records the header it polled: the
+                    // first to see a block starts its shared fetch, the others compare a hash.
+                    // Networks without a coordinator observe heads too. A stream held behind
+                    // the tip by `reorg_safe_distance` never reads the cache, so it never
+                    // starts a fetch either.
+                    if let Some(tip_logs) =
+                        tip_logs.as_deref().filter(|_| reorg_safe_distance.is_zero())
+                    {
+                        tip_logs.observe_head(
+                            latest_block.header.number,
+                            latest_block.header.hash,
+                            latest_block.header.parent_hash,
+                            latest_block.header.logs_bloom,
+                        );
                     }
 
                     let latest_block_number = log_response_to_large_to_block
@@ -1409,7 +1502,45 @@ async fn live_indexing_stream(
                                     current_filter
                                 );
 
-                                match cached_provider.get_logs(&current_filter).await {
+                                // A window that ends at the header this stream polled takes
+                                // its logs from the shared cache; any other window (a reduced
+                                // retry ceiling, a safe distance) keeps its own call.
+                                let fetched = match tip_logs
+                                    .as_deref()
+                                    .filter(|_| to_block == U64::from(latest_block.header.number))
+                                {
+                                    Some(tip_logs) => {
+                                        // Register, then look up, then await: no wake-up is lost.
+                                        let notified = tip_logs.notified();
+                                        tokio::pin!(notified);
+                                        notified.as_mut().enable();
+                                        match fetch_tip_window(
+                                            tip_logs,
+                                            cached_provider.as_ref(),
+                                            &current_filter,
+                                            &contract_address,
+                                            latest_block.header.hash,
+                                            info_log_name,
+                                        )
+                                        .await
+                                        {
+                                            TipWindowFetch::Fetched(fetched) => fetched,
+                                            TipWindowFetch::Wait => {
+                                                let pacing = target_iteration_duration
+                                                    .saturating_sub(iteration_start.elapsed())
+                                                    .max(Duration::from_millis(50));
+                                                tokio::select! {
+                                                    _ = &mut notified => {}
+                                                    _ = tokio::time::sleep(pacing) => {}
+                                                }
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                    None => cached_provider.get_logs(&current_filter).await,
+                                };
+
+                                match fetched {
                                     Ok(logs) => {
                                         debug!(
                                             "{} - {} - Live topic_id {}, Logs: {} from {} to {}",
@@ -1452,6 +1583,9 @@ async fn live_indexing_stream(
                                             // Invalidate cache for affected blocks
                                             for b in min_removed_block..=to_block.to::<u64>() {
                                                 block_cache.pop(&b);
+                                            }
+                                            if let Some(tip_logs) = tip_logs.as_deref() {
+                                                tip_logs.invalidate_from(min_removed_block);
                                             }
 
                                             // Route through coordinator for full recovery when available
@@ -2002,18 +2136,28 @@ fn calculate_process_historic_log_to_block(
 mod tests {
     use super::*;
     use crate::blockclock::BlockClock;
+    use crate::event::contract_setup::AddressDetails;
     use crate::event::RindexerEventFilter;
+    use crate::indexer::tip_logs::{
+        BlockLinks, BlockLogsSource, FallbackReason, SharedTipLogsSettings,
+    };
+    use crate::metrics::definitions::{
+        SHARED_TIP_LOGS_BLOCKS_TOTAL, SHARED_TIP_LOGS_FALLBACKS_TOTAL, SHARED_TIP_LOGS_SERVED_TOTAL,
+    };
     use crate::provider::mock::MockChainProvider;
     use crate::provider::ChainProvider;
     use alloy::network::{AnyHeader, AnyRpcBlock, AnyRpcHeader, AnyTransactionReceipt};
     use alloy::primitives::Log as PrimitiveLog;
-    use alloy::primitives::{Address, Bytes, TxHash};
+    use alloy::primitives::{Address, Bloom, Bytes, LogData, TxHash};
     use alloy::rpc::types::trace::parity::LocalizedTransactionTrace;
-    use alloy::rpc::types::BlockTransactions;
     use alloy::rpc::types::Log;
+    use alloy::rpc::types::{BlockTransactions, ValueOrArray};
+    use prometheus::CounterVec;
+    use std::collections::{HashMap, VecDeque};
     use std::sync::{Arc, Mutex as StdMutex};
     use tokio::sync::mpsc;
     use tokio_util::sync::CancellationToken;
+    use tracing_subscriber::fmt::MakeWriter;
 
     #[derive(Debug)]
     struct RecordingLiveProvider {
@@ -2026,6 +2170,9 @@ mod tests {
         fail_first_logs_request: bool,
         cancel_after_requests: usize,
         request_count: AtomicUsize,
+        // Head polls answered before `get_latest_block` fails and cancels; `None` never fails.
+        head_polls_before_failure: Option<usize>,
+        head_polls: AtomicUsize,
     }
 
     impl RecordingLiveProvider {
@@ -2041,13 +2188,29 @@ mod tests {
                 fail_first_logs_request: false,
                 cancel_after_requests: 1,
                 request_count: AtomicUsize::new(0),
+                head_polls_before_failure: None,
+                head_polls: AtomicUsize::new(0),
             }
+        }
+
+        /// A provider over `inner` with its own range recorder and cancellation token.
+        fn recording(inner: MockChainProvider) -> Self {
+            Self::new(inner, Arc::new(StdMutex::new(Vec::new())), CancellationToken::new())
         }
 
         fn with_transient_first_logs_error(mut self) -> Self {
             self.fail_first_logs_request = true;
             self.cancel_after_requests = 2;
             self
+        }
+
+        fn with_head_polls(mut self, answered: usize) -> Self {
+            self.head_polls_before_failure = Some(answered);
+            self
+        }
+
+        fn ranges(&self) -> Vec<(u64, u64)> {
+            self.queried_ranges.lock().expect("recorded ranges mutex poisoned").clone()
         }
     }
 
@@ -2068,7 +2231,16 @@ mod tests {
             self.inner.chain_state_notification()
         }
 
+        fn shared_tip_logs(&self) -> Option<Arc<SharedTipLogs>> {
+            self.inner.shared_tip_logs()
+        }
+
         async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
+            let polls = self.head_polls.fetch_add(1, Ordering::SeqCst) + 1;
+            if self.head_polls_before_failure.is_some_and(|answered| polls > answered) {
+                self.cancel_token.cancel();
+                return Err(ProviderError::CustomError("head unavailable".to_string()));
+            }
             self.inner.get_latest_block().await
         }
 
@@ -2515,6 +2687,624 @@ mod tests {
             &[(600, 603), (600, 601)],
             "the transient head error should retry the reduced range even when its cap equals last_seen_block_number",
         );
+    }
+
+    // --- shared tip logs: live-loop tests ---
+
+    type TipAnswer = (Duration, Result<Vec<Log>, String>);
+
+    /// Scripted unfiltered answers per block for the shared fetcher. An exhausted queue repeats
+    /// its last answer; a block with no script never answers, so the fetcher's per-call timeout
+    /// is what ends each of its attempts. An unscripted header is not found.
+    #[derive(Debug, Default)]
+    struct ScriptedTipSource {
+        answers: StdMutex<HashMap<u64, VecDeque<TipAnswer>>>,
+        calls: StdMutex<Vec<u64>>,
+        headers: StdMutex<HashMap<B256, BlockLinks>>,
+    }
+
+    impl ScriptedTipSource {
+        fn new() -> Arc<Self> {
+            Arc::new(Self::default())
+        }
+
+        fn script(&self, block: u64, answers: Vec<TipAnswer>) {
+            self.answers.lock().expect("script mutex").insert(block, answers.into());
+        }
+
+        fn calls(&self) -> Vec<u64> {
+            self.calls.lock().expect("calls mutex").clone()
+        }
+
+        /// Block `number` as `hash_of` chains it, with a busy bloom.
+        fn script_header(&self, number: u64) {
+            let links = BlockLinks {
+                number,
+                parent_hash: hash_of(number - 1),
+                logs_bloom: Bloom::repeat_byte(0xff),
+            };
+            self.headers.lock().expect("headers mutex").insert(hash_of(number), links);
+        }
+
+        fn next_answer(&self, block: u64) -> Option<TipAnswer> {
+            let mut answers = self.answers.lock().expect("script mutex");
+            let queue = answers.get_mut(&block)?;
+            if queue.len() > 1 {
+                queue.pop_front()
+            } else {
+                queue.front().cloned()
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl BlockLogsSource for ScriptedTipSource {
+        async fn block_logs(&self, block: u64) -> Result<Vec<Log>, ProviderError> {
+            self.calls.lock().expect("calls mutex").push(block);
+            let Some((delay, answer)) = self.next_answer(block) else {
+                return std::future::pending().await;
+            };
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+            answer.map_err(ProviderError::CustomError)
+        }
+
+        async fn block_header(&self, hash: B256) -> Result<Option<BlockLinks>, ProviderError> {
+            Ok(self.headers.lock().expect("headers mutex").get(&hash).copied())
+        }
+    }
+
+    /// Captures WARN lines; the test runtime is current-thread, so the live loop logs through it.
+    #[derive(Clone, Default)]
+    struct CapturedLogs(Arc<StdMutex<Vec<u8>>>);
+
+    impl CapturedLogs {
+        fn install() -> (Self, tracing::subscriber::DefaultGuard) {
+            let captured = Self::default();
+            let subscriber = tracing_subscriber::fmt()
+                .with_writer(captured.clone())
+                .with_ansi(false)
+                .with_max_level(tracing::Level::WARN)
+                .finish();
+            (captured, tracing::subscriber::set_default(subscriber))
+        }
+
+        fn text(&self) -> String {
+            String::from_utf8_lossy(&self.0.lock().expect("log mutex")).into_owned()
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for CapturedLogs {
+        type Writer = CapturedLogs;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    impl std::io::Write for CapturedLogs {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("log mutex").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    const TIP: u64 = 603;
+
+    /// Block hashes chained by number: block `n` names `hash_of(n - 1)` as its parent.
+    fn hash_of(number: u64) -> B256 {
+        B256::repeat_byte(number as u8)
+    }
+
+    fn tip_hash() -> B256 {
+        hash_of(TIP)
+    }
+
+    fn stream_address() -> Address {
+        Address::repeat_byte(0xaa)
+    }
+
+    fn stream_topic() -> B256 {
+        B256::repeat_byte(0x70)
+    }
+
+    fn tip_block(number: u64, hash: B256, logs_bloom: Bloom) -> AnyRpcBlock {
+        let parent_hash = hash_of(number - 1);
+        AnyRpcBlock::new(
+            alloy::rpc::types::Block::new(
+                AnyRpcHeader::from_sealed(
+                    AnyHeader { number, parent_hash, logs_bloom, ..Default::default() }.seal(hash),
+                ),
+                BlockTransactions::Full(vec![]),
+            )
+            .into(),
+        )
+    }
+
+    /// The tip as a busy chain serves it: a saturated bloom, positive for every stream.
+    fn busy_tip() -> AnyRpcBlock {
+        tip_block(TIP, tip_hash(), Bloom::repeat_byte(0xff))
+    }
+
+    fn log_at(block: u64, block_hash: B256, address: Address, topic0: B256, index: u64) -> Log {
+        Log {
+            inner: PrimitiveLog {
+                address,
+                data: LogData::new_unchecked(vec![topic0], Bytes::new()),
+            },
+            block_hash: Some(block_hash),
+            block_number: Some(block),
+            block_timestamp: None,
+            transaction_hash: None,
+            transaction_index: None,
+            log_index: Some(index),
+            removed: false,
+        }
+    }
+
+    /// A log of the stream's address and topic in the tip block.
+    fn tip_log(index: u64) -> Log {
+        log_at(TIP, tip_hash(), stream_address(), stream_topic(), index)
+    }
+
+    /// The live loop stamps served logs with the cached header timestamp (0 for test headers).
+    fn stamped(mut log: Log) -> Log {
+        log.block_timestamp = Some(0);
+        log
+    }
+
+    fn block_and_index(logs: &[Log]) -> Vec<(Option<u64>, Option<u64>)> {
+        logs.iter().map(|log| (log.block_number, log.log_index)).collect()
+    }
+
+    fn stream_filter(from_block: u64) -> RindexerEventFilter {
+        RindexerEventFilter::new_address_filter(
+            &stream_topic(),
+            "Ev",
+            &AddressDetails {
+                address: ValueOrArray::Value(stream_address()),
+                indexed_filters: None,
+            },
+            U64::from(from_block),
+            U64::from(from_block),
+        )
+        .expect("an address filter")
+    }
+
+    fn settings() -> SharedTipLogsSettings {
+        SharedTipLogsSettings {
+            empty_retry_deadline_ms: 7000,
+            cache_blocks: 32,
+            bloom_trusted: true,
+        }
+    }
+
+    fn counter(series: &CounterVec, labels: &[&str]) -> f64 {
+        series.with_label_values(labels).get()
+    }
+
+    const SERVED_MODES: [&str; 3] = ["tip", "window", "prefix_rpc_plus_tip"];
+    const FALLBACK_REASONS: [&str; 5] =
+        ["gave_up", "error", "hash_mismatch", "wait_timeout", "not_scheduled"];
+
+    /// Runs `live_indexing_stream` without a reorg coordinator until its first batch, which is
+    /// returned with the instant it arrived; the batch cancels the loop.
+    async fn first_live_batch(
+        provider: &Arc<RecordingLiveProvider>,
+        filter: RindexerEventFilter,
+        last_seen_block: u64,
+        disable_logs_bloom_checks: bool,
+        network: &str,
+    ) -> (FetchLogsResult, Instant) {
+        first_live_batch_at(
+            provider,
+            filter,
+            last_seen_block,
+            disable_logs_bloom_checks,
+            network,
+            0,
+        )
+        .await
+    }
+
+    /// `first_live_batch` with an explicit `reorg_safe_distance`.
+    async fn first_live_batch_at(
+        provider: &Arc<RecordingLiveProvider>,
+        filter: RindexerEventFilter,
+        last_seen_block: u64,
+        disable_logs_bloom_checks: bool,
+        network: &str,
+        reorg_safe_distance: u64,
+    ) -> (FetchLogsResult, Instant) {
+        let reorg_safe_distance = U64::from(reorg_safe_distance);
+        let block_clock = BlockClock::new(None, None, provider.clone());
+        let cancel_token = provider.cancel_token.clone();
+        let (tx, mut rx) = mpsc::channel(4);
+        let topic_id = filter.event_signature();
+        let registry = EventCallbackRegistry::default();
+        let stream = live_indexing_stream(
+            false,
+            block_clock,
+            provider.clone(),
+            &tx,
+            U64::from(last_seen_block),
+            &topic_id,
+            &reorg_safe_distance,
+            filter,
+            "test",
+            network,
+            disable_logs_bloom_checks,
+            None,
+            cancel_token.clone(),
+            None,
+            None,
+            None,
+            &registry,
+            None,
+        );
+        let first_batch = async {
+            let batch = rx.recv().await.expect("the live loop sends a batch");
+            let batch = batch.expect("a batch rather than an error");
+            cancel_token.cancel();
+            (batch, Instant::now())
+        };
+        let (_, batch) = tokio::time::timeout(Duration::from_secs(60), async {
+            tokio::join!(stream, first_batch)
+        })
+        .await
+        .expect("the live loop stops after its first batch");
+        batch
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn live_tip_window_is_served_from_shared_cache() {
+        let net = "live-tip-served";
+        let source = ScriptedTipSource::new();
+        let wanted = tip_log(0);
+        let other_address = log_at(TIP, tip_hash(), Address::repeat_byte(0xbb), stream_topic(), 1);
+        let other_topic = log_at(TIP, tip_hash(), stream_address(), B256::repeat_byte(0x71), 2);
+        source.script(
+            TIP,
+            vec![(Duration::ZERO, Ok(vec![wanted.clone(), other_address, other_topic]))],
+        );
+        let tip_logs = SharedTipLogs::new(net, source.clone(), settings());
+        let provider = Arc::new(RecordingLiveProvider::recording(
+            MockChainProvider::new(1).with_blocks(vec![busy_tip()]).with_shared_tip_logs(tip_logs),
+        ));
+
+        let (batch, _) =
+            first_live_batch(&provider, stream_filter(TIP), TIP - 1, false, "test").await;
+
+        assert_eq!((batch.from_block, batch.to_block), (U64::from(TIP), U64::from(TIP)));
+        assert_eq!(batch.logs, vec![stamped(wanted)], "exactly the stream's logs");
+        assert!(provider.ranges().is_empty(), "no per-stream eth_getLogs");
+        assert_eq!(source.calls(), vec![TIP], "one unfiltered call for the block");
+        assert_eq!(counter(&SHARED_TIP_LOGS_SERVED_TOTAL, &[net, "tip"]), 1.0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn live_tip_window_wakes_on_ready_not_on_pacing() {
+        let net = "live-tip-wakes";
+        let source = ScriptedTipSource::new();
+        source.script(
+            TIP,
+            vec![(Duration::ZERO, Ok(vec![])), (Duration::ZERO, Ok(vec![tip_log(0)]))],
+        );
+        let tip_logs = SharedTipLogs::new(net, source.clone(), settings());
+        let provider = Arc::new(RecordingLiveProvider::recording(
+            MockChainProvider::new(1).with_blocks(vec![busy_tip()]).with_shared_tip_logs(tip_logs),
+        ));
+        let start = Instant::now();
+
+        let (batch, sent_at) =
+            first_live_batch(&provider, stream_filter(TIP), TIP - 1, false, "test").await;
+
+        assert_eq!(
+            sent_at - start,
+            Duration::from_millis(250),
+            "sent at the Ready transition (one 250 ms empty retry), not at a 200 ms pacing tick"
+        );
+        assert_eq!(batch.logs, vec![stamped(tip_log(0))]);
+        assert!(provider.ranges().is_empty());
+        assert_eq!(source.calls(), vec![TIP, TIP]);
+        assert_eq!(counter(&SHARED_TIP_LOGS_BLOCKS_TOTAL, &[net, "ready"]), 1.0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn live_tip_window_falls_back_after_gave_up() {
+        let net = "live-tip-gave-up";
+        let source = ScriptedTipSource::new();
+        source.script(TIP, vec![(Duration::ZERO, Ok(vec![]))]);
+        let tip_logs = SharedTipLogs::new(net, source.clone(), settings());
+        let provider = Arc::new(RecordingLiveProvider::recording(
+            MockChainProvider::new(1)
+                .with_blocks(vec![busy_tip()])
+                .with_logs(vec![tip_log(0)])
+                .with_shared_tip_logs(tip_logs),
+        ));
+        let start = Instant::now();
+
+        let (batch, sent_at) =
+            first_live_batch(&provider, stream_filter(TIP), TIP - 1, false, "test").await;
+
+        assert_eq!(sent_at - start, Duration::from_secs(7), "after the fetcher's budget");
+        assert_eq!(provider.ranges(), vec![(TIP, TIP)], "exactly one own eth_getLogs");
+        assert_eq!(batch.logs, vec![stamped(tip_log(0))], "the own call served the stream");
+        assert_eq!(source.calls().len(), 8);
+        assert_eq!(counter(&SHARED_TIP_LOGS_BLOCKS_TOTAL, &[net, "gave_up"]), 1.0);
+        assert_eq!(counter(&SHARED_TIP_LOGS_FALLBACKS_TOTAL, &[net, "gave_up"]), 1.0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn live_wait_budget_expires_when_fetcher_is_stuck() {
+        let net = "live-tip-wait-timeout";
+        let (logs, _guard) = CapturedLogs::install();
+        let source = ScriptedTipSource::new();
+        let tip_logs = SharedTipLogs::new(net, source.clone(), settings());
+        // Nothing is scripted, so no block ever answers. Four earlier heads hold every fetch
+        // permit until their budgets end at 10.25 s, the tip's own task starts only then, and
+        // the stream's 13 s wait budget, which runs from the tip's first observation, ends first.
+        for number in TIP - 4..TIP {
+            tip_logs.observe_head(
+                number,
+                hash_of(number),
+                hash_of(number - 1),
+                Bloom::repeat_byte(0xff),
+            );
+        }
+        let provider = Arc::new(RecordingLiveProvider::recording(
+            MockChainProvider::new(1)
+                .with_blocks(vec![busy_tip()])
+                .with_logs(vec![tip_log(0)])
+                .with_shared_tip_logs(tip_logs),
+        ));
+        let start = Instant::now();
+
+        let (batch, sent_at) =
+            first_live_batch(&provider, stream_filter(TIP), TIP - 1, false, "test").await;
+
+        let waited = sent_at - start;
+        assert!(
+            waited >= Duration::from_secs(13) && waited < Duration::from_millis(13_250),
+            "fell back at first_seen + 13 s, within one pacing tick: {waited:?}"
+        );
+        assert_eq!(provider.ranges(), vec![(TIP, TIP)]);
+        assert_eq!(batch.logs, vec![stamped(tip_log(0))]);
+        assert_eq!(counter(&SHARED_TIP_LOGS_FALLBACKS_TOTAL, &[net, "wait_timeout"]), 1.0);
+        let text = logs.text();
+        assert_eq!(text.matches("waited").count(), 1, "one WARN: {text}");
+        assert!(
+            text.contains("WARN") && text.contains("block 603"),
+            "the WARN names the block: {text}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn live_multi_block_window_uses_rpc_prefix_plus_cached_tip() {
+        let net = "live-tip-prefix";
+        let source = ScriptedTipSource::new();
+        // The fetcher sorts a block's logs by index; the stream sorts the merged window.
+        source.script(TIP, vec![(Duration::ZERO, Ok(vec![tip_log(1), tip_log(0)]))]);
+        let tip_logs = SharedTipLogs::new(net, source.clone(), settings());
+        let prefix = vec![
+            log_at(TIP - 3, hash_of(TIP - 3), stream_address(), stream_topic(), 0),
+            log_at(TIP - 1, hash_of(TIP - 1), stream_address(), stream_topic(), 0),
+        ];
+        let provider = Arc::new(RecordingLiveProvider::recording(
+            MockChainProvider::new(1)
+                .with_blocks(vec![busy_tip()])
+                .with_logs(prefix)
+                .with_shared_tip_logs(tip_logs),
+        ));
+
+        let (batch, _) =
+            first_live_batch(&provider, stream_filter(TIP - 3), TIP - 4, false, "test").await;
+
+        assert_eq!((batch.from_block, batch.to_block), (U64::from(TIP - 3), U64::from(TIP)));
+        assert_eq!(provider.ranges(), vec![(TIP - 3, TIP - 1)], "own eth_getLogs for the prefix");
+        assert_eq!(
+            block_and_index(&batch.logs),
+            vec![
+                (Some(TIP - 3), Some(0)),
+                (Some(TIP - 1), Some(0)),
+                (Some(TIP), Some(0)),
+                (Some(TIP), Some(1)),
+            ]
+        );
+        assert_eq!(source.calls(), vec![TIP]);
+        assert_eq!(counter(&SHARED_TIP_LOGS_SERVED_TOTAL, &[net, "prefix_rpc_plus_tip"]), 1.0);
+    }
+
+    /// The RPC's head goes from `TIP - 2` straight to `TIP`, so `TIP - 1` is never polled as
+    /// head, and the stream's own filtered `eth_getLogs` answers that block empty. The shared
+    /// unfiltered fetch has the block's logs; the stream must get them from it.
+    #[tokio::test(start_paused = true)]
+    async fn live_window_over_a_skipped_head_is_served_from_shared_cache() {
+        let net = "live-tip-skipped-head";
+        let source = ScriptedTipSource::new();
+        let skipped = log_at(TIP - 1, hash_of(TIP - 1), stream_address(), stream_topic(), 0);
+        source.script(TIP - 1, vec![(Duration::ZERO, Ok(vec![skipped.clone()]))]);
+        source.script(TIP, vec![(Duration::ZERO, Ok(vec![tip_log(0)]))]);
+        source.script_header(TIP - 1);
+        let tip_logs = SharedTipLogs::new(net, source.clone(), settings());
+        // The stream already delivered TIP - 2, read through the shared cache as head.
+        tip_logs.observe_head(TIP - 2, hash_of(TIP - 2), hash_of(TIP - 3), Bloom::ZERO);
+        // No `with_logs`: the stream's own eth_getLogs answers every window empty.
+        let provider = Arc::new(RecordingLiveProvider::recording(
+            MockChainProvider::new(1).with_blocks(vec![busy_tip()]).with_shared_tip_logs(tip_logs),
+        ));
+
+        let (batch, _) =
+            first_live_batch(&provider, stream_filter(TIP - 1), TIP - 2, false, "test").await;
+
+        assert_eq!((batch.from_block, batch.to_block), (U64::from(TIP - 1), U64::from(TIP)));
+        assert_eq!(
+            block_and_index(&batch.logs),
+            vec![(Some(TIP - 1), Some(0)), (Some(TIP), Some(0))],
+            "the skipped block's log is delivered"
+        );
+        assert!(provider.ranges().is_empty(), "no per-stream eth_getLogs");
+        assert_eq!(counter(&SHARED_TIP_LOGS_SERVED_TOTAL, &[net, "prefix_rpc_plus_tip"]), 0.0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn live_reorg_arms_invalidate_shared_cache() {
+        let net = "live-tip-reorg";
+        let source = ScriptedTipSource::new();
+        let mut removed = tip_log(0);
+        removed.removed = true;
+        source.script(TIP, vec![(Duration::from_millis(100), Ok(vec![removed]))]);
+        let tip_logs = SharedTipLogs::new(net, source.clone(), settings());
+        // Two head polls: the one that schedules the block and the one that serves the removed
+        // log; the third fails and stops the loop before it observes the head again.
+        let provider = Arc::new(
+            RecordingLiveProvider::recording(
+                MockChainProvider::new(1)
+                    .with_blocks(vec![busy_tip()])
+                    .with_shared_tip_logs(tip_logs.clone()),
+            )
+            .with_head_polls(2),
+        );
+
+        let (batch, _) =
+            first_live_batch(&provider, stream_filter(TIP), TIP - 1, false, "test").await;
+
+        assert_eq!(
+            batch.reorg.as_ref().map(|reorg| reorg.fork_block),
+            Some(U64::from(TIP)),
+            "the removed log is a reorg signal"
+        );
+        assert!(provider.ranges().is_empty());
+        assert_eq!(
+            tip_logs.lookup(TIP, TIP, tip_hash()),
+            TipLookup::Fallback(FallbackReason::NotScheduled),
+            "the reorg arm dropped the block from the cache"
+        );
+
+        // The next observation of the head schedules the block again.
+        let notified = tip_logs.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        tip_logs.observe_head(TIP, tip_hash(), hash_of(TIP - 1), Bloom::repeat_byte(0xff));
+        notified.await;
+        assert!(matches!(tip_logs.lookup(TIP, TIP, tip_hash()), TipLookup::ServeTip(_)));
+        assert_eq!(source.calls(), vec![TIP, TIP]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn disabled_knob_keeps_per_stream_path() {
+        let net = "live-tip-disabled";
+        let provider = Arc::new(RecordingLiveProvider::recording(
+            MockChainProvider::new(1).with_blocks(vec![busy_tip()]).with_logs(vec![tip_log(0)]),
+        ));
+        assert!(provider.shared_tip_logs().is_none(), "the knob is off: no handle");
+
+        let (batch, _) = first_live_batch(&provider, stream_filter(TIP), TIP - 1, false, net).await;
+
+        assert_eq!(provider.ranges(), vec![(TIP, TIP)], "the stream's own tip eth_getLogs");
+        assert_eq!(batch.logs, vec![stamped(tip_log(0))]);
+        for mode in SERVED_MODES {
+            assert_eq!(counter(&SHARED_TIP_LOGS_SERVED_TOTAL, &[net, mode]), 0.0);
+        }
+        for reason in FALLBACK_REASONS {
+            assert_eq!(counter(&SHARED_TIP_LOGS_FALLBACKS_TOTAL, &[net, reason]), 0.0);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn safe_distance_stream_does_not_observe_heads() {
+        let net = "live-tip-safe-distance";
+        let source = ScriptedTipSource::new();
+        source.script(TIP, vec![(Duration::ZERO, Ok(vec![tip_log(0)]))]);
+        let tip_logs = SharedTipLogs::new(net, source.clone(), settings());
+        let provider = Arc::new(RecordingLiveProvider::recording(
+            MockChainProvider::new(1)
+                .with_blocks(vec![busy_tip()])
+                .with_logs(vec![tip_log(0)])
+                .with_shared_tip_logs(tip_logs.clone()),
+        ));
+
+        let (batch, _) =
+            first_live_batch_at(&provider, stream_filter(TIP - 1), TIP - 2, false, net, 1).await;
+
+        assert_eq!(
+            (batch.from_block, batch.to_block),
+            (U64::from(TIP - 1), U64::from(TIP - 1)),
+            "the window stops one block behind the tip"
+        );
+        assert_eq!(provider.ranges(), vec![(TIP - 1, TIP - 1)], "the stream's own eth_getLogs");
+        assert!(source.calls().is_empty(), "a stream that cannot read the cache starts no fetch");
+        assert!(
+            matches!(
+                tip_logs.lookup(TIP, TIP, tip_hash()),
+                TipLookup::Fallback(FallbackReason::NotScheduled)
+            ),
+            "the tip was never observed"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn bloom_negative_skip_still_wins() {
+        let net = "live-tip-bloom-skip";
+        let source = ScriptedTipSource::new();
+        source.script(TIP, vec![(Duration::ZERO, Ok(vec![tip_log(0)]))]);
+        let tip_logs = SharedTipLogs::new(net, source.clone(), settings());
+        let quiet_tip = tip_block(TIP, tip_hash(), Bloom::repeat_byte(0x01));
+        assert!(
+            !is_relevant_block(
+                &Some(HashSet::from([stream_address()])),
+                &stream_topic(),
+                &quiet_tip
+            ),
+            "the bloom is negative for the stream"
+        );
+        let provider = Arc::new(RecordingLiveProvider::recording(
+            MockChainProvider::new(1).with_blocks(vec![quiet_tip]).with_shared_tip_logs(tip_logs),
+        ));
+
+        let (batch, _) =
+            first_live_batch(&provider, stream_filter(TIP), TIP - 1, false, "test").await;
+
+        assert_eq!((batch.from_block, batch.to_block), (U64::from(TIP), U64::from(TIP)));
+        assert!(batch.logs.is_empty(), "the bloom skip answers the window empty");
+        assert!(provider.ranges().is_empty(), "no own eth_getLogs");
+        for mode in SERVED_MODES {
+            assert_eq!(counter(&SHARED_TIP_LOGS_SERVED_TOTAL, &[net, mode]), 0.0, "no lookup");
+        }
+        for reason in FALLBACK_REASONS {
+            assert_eq!(counter(&SHARED_TIP_LOGS_FALLBACKS_TOTAL, &[net, reason]), 0.0);
+        }
+        // The block's shared fetch belongs to the network, not to this stream: it still ran.
+        assert_eq!(source.calls(), vec![TIP]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn observe_head_runs_without_a_coordinator() {
+        // `first_live_batch` passes `reorg_coordinator = None`: the head is observed, fetched
+        // once and served without one.
+        let net = "live-tip-no-coordinator";
+        let source = ScriptedTipSource::new();
+        source.script(TIP, vec![(Duration::ZERO, Ok(vec![tip_log(0)]))]);
+        let tip_logs = SharedTipLogs::new(net, source.clone(), settings());
+        let provider = Arc::new(RecordingLiveProvider::recording(
+            MockChainProvider::new(1)
+                .with_blocks(vec![busy_tip()])
+                .with_shared_tip_logs(tip_logs.clone()),
+        ));
+
+        let (batch, _) =
+            first_live_batch(&provider, stream_filter(TIP), TIP - 1, false, "test").await;
+
+        assert_eq!(batch.logs, vec![stamped(tip_log(0))]);
+        assert_eq!(source.calls(), vec![TIP]);
+        assert_eq!(counter(&SHARED_TIP_LOGS_BLOCKS_TOTAL, &[net, "ready"]), 1.0);
+        assert!(matches!(tip_logs.lookup(TIP, TIP, tip_hash()), TipLookup::ServeTip(_)));
+        assert!(provider.ranges().is_empty());
     }
 
     // --- retry_with_block_range tests ---

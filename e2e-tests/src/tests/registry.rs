@@ -87,6 +87,9 @@ impl TestRegistry {
         // Health assertions
         tests.extend(crate::tests::health_assertions::HealthAssertionsTests::get_tests());
 
+        // Shared tip-block log fetch (rpc proxy injecting empty eth_getLogs answers)
+        tests.extend(crate::tests::shared_tip_logs::SharedTipLogsTests::get_tests());
+
         tests
     }
 

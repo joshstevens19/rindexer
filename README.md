@@ -70,7 +70,7 @@ To use it with an existing project and a running postgres instance you can simpl
 export PROJECT_PATH=/path/to/your/project
 export DATABASE_URL="postgresql://user:pass@postgres/db"
 
-docker-compose up -d
+docker compose up -d
 ```
 
 This will start all local indexing and if you have enabled the graphql endpoint, it will become exposed under:
@@ -109,6 +109,9 @@ https://crates.io/crates/rindexer
 
 rindexer supports any EVM chain out of the box. If you have a custom chain, you can easily add support for it by
 adding the chain's RPC URL to the YAML configuration file and defining the chain ID. No code changes are required.
+
+For faster historical backfills, a network can also fetch event logs from [HyperSync](https://rindexer.xyz/docs/references/rpc-node-providers#hypersync)
+by adding `hypersync: true`. The RPC URL is still used for everything else.
 
 ## Code structure
 
@@ -228,6 +231,17 @@ Subsequent builds use smart caching and will only rebuild components that have c
 ### Prod
 
 To build for prod you can run `make prod_build` this will build everything for you and optimise it for production.
+
+## Testing
+
+Run tests with [`cargo-nextest`](https://nexte.st) instead of `cargo test`. Some tests change environment variables, so each test needs its own process.
+
+```bash
+cargo install cargo-nextest --locked
+cargo nextest run --exclude rindexer_rust_playground --workspace
+```
+
+The integration tests in `core/tests/` need Docker running. On slower machines they can fail intermittently with container startup timeouts or connection errors; add `--retries 2` to retry failed tests.
 
 ## Formatting
 
