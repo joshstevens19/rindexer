@@ -44,16 +44,32 @@ rindexer should work with any local nodes you run including [Anvil](https://book
 1. Create your [`erpc.yaml`](https://docs.erpc.cloud/config/example) configuration file:
 
 ```yaml filename="erpc.yaml"
-logLevel: debug
+logLevel: warn
+database:
+  evmJsonRpcCache:
+    connectors:
+      - id: memory-cache
+        driver: memory
+    policies:
+      # Finalized data never changes, so keep it with no expiry.
+      # `empty: allow` also caches empty eth_getLogs results.
+      - network: "*"
+        method: "*"
+        finality: finalized
+        empty: allow
+        connector: memory-cache
+        ttl: 0
 projects:
   - id: main
     upstreams:
       # You don't need to define architecture (e.g. evm) or chain id (e.g. 137)
       # as they will be detected automatically by eRPC.
-      - endpoint: https://eth-mainnet.blastapi.io/xxxx
-      - endpoint: https://polygon-mainnet.blastapi.io/xxxx
+      - endpoint: https://ethereum-rpc.publicnode.com
+      - endpoint: https://mainnet.gateway.tenderly.co
       - endpoint: evm+alchemy://xxxx-my-alchemy-api-key-xxxx
 ```
+
+Without the `database` block eRPC does not cache responses. The memory cache is lost on restart; see the [cache docs](https://docs.erpc.cloud/config/database/evm-json-rpc-cache) for Redis or Postgres.
 
 See [a complete config example](https://docs.erpc.cloud/config/example) for inspiration.
 
@@ -71,7 +87,6 @@ or add the below configs to the rindexer's [docker-compose.yaml](https://github.
 
     erpc: // [!code focus]
       image: ghcr.io/erpc/erpc:latest // [!code focus]
-      platform: linux/amd64 // [!code focus]
       volumes: // [!code focus]
         - ${PROJECT_PATH}/erpc.yaml:/root/erpc.yaml // [!code focus]
       ports: // [!code focus]
@@ -92,6 +107,8 @@ networks:
   chain_id: 1
   rpc: http://erpc:4000/main/evm/1 // [!code focus]
 ```
+
+`erpc` is the compose service name. If rindexer runs on the host instead, use `http://localhost:4000/main/evm/1`. The URL format is `http://<host>:4000/<project-id>/evm/<chain-id>`.
 
 and you are set to go. the rpc requests now will be redirected toward erpc and it will handle caching, failover, auto-batching, rate-limiting, auto-discovery of node providers, etc. behind the scenes.
 
