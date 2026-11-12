@@ -2,10 +2,11 @@
 
 ### Breaking changes
 -------------------------------------------------
+- breaking: PostgreSQL TLS now uses OpenSSL CA locations (`SSL_CERT_FILE` / `SSL_CERT_DIR`) instead of bundled and native Rustls roots. Custom Rust pools passed to `PostgresClient::from_connection` must use `postgres_openssl::MakeTlsConnector`; explicitly typed `raw_connection` results must use the same connector.
 
 ### Bug fixes
 -------------------------------------------------
-
+- fix: verify PostgreSQL certificates with trailing-dot DNS names, including Cloud SQL shared-CA certificates, without disabling certificate or hostname checks; required TLS never falls back to plaintext.
 - fix: respect `block_poll_frequency` in live-indexing stall warnings, waiting at least five minutes or twice the polling interval while keeping five-minute heartbeats; warning text now reports the effective timeout in seconds instead of a fixed "5 minutes".
 - fix: **Shared tip logs cover a head the RPC skipped** - when the polled head jumps from N to N+2, block N+1 is now read through the shared tip fetch (its header by hash, then its logs with the empty-answer re-ask) instead of by every live stream with its own filtered `eth_getLogs`, whose empty answer nothing re-checked. Applies to runs of at most 8 skipped blocks (fewer when `cache_blocks` is below 10) whose block below is cached.
 
