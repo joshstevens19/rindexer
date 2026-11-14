@@ -42,7 +42,7 @@ pub struct NetworkConfig {
     pub reorg_handling: Option<ReorgHandlingConfig>,
     /// The `networks[].shared_tip_logs` stanza as written to the manifest (`enabled`,
     /// `empty_retry_deadline_ms`, `cache_blocks`); omitted means enabled with the defaults.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", serialize_with = "serialize_manifest_json")]
     pub shared_tip_logs: Option<serde_json::Value>,
 }
 
@@ -81,10 +81,7 @@ pub struct NativeTransfersConfig {
     pub streams: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generate_csv: Option<bool>,
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "serialize_reorg_safe_distance"
-    )]
+    #[serde(skip_serializing_if = "Option::is_none", serialize_with = "serialize_manifest_json")]
     pub reorg_safe_distance: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tables: Option<Vec<serde_json::Value>>,
@@ -106,10 +103,7 @@ pub struct ContractConfig {
     pub name: String,
     pub details: Vec<ContractDetail>,
     pub abi: Option<String>,
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "serialize_reorg_safe_distance"
-    )]
+    #[serde(skip_serializing_if = "Option::is_none", serialize_with = "serialize_manifest_json")]
     pub reorg_safe_distance: Option<serde_json::Value>,
     pub include_events: Option<Vec<EventConfig>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -118,9 +112,14 @@ pub struct ContractConfig {
     pub streams: Option<serde_json::Value>,
 }
 
-/// Emit the manifest's bool-or-u64 setting as a YAML scalar even when serde_json
-/// has its `arbitrary_precision` feature enabled by another workspace crate.
-fn serialize_reorg_safe_distance<S>(
+/// Emit manifest JSON as ordinary YAML scalars and mappings.
+///
+/// `foundry-compilers` 0.21 enables `serde_json/arbitrary_precision`, and
+/// `cargo build --bin e2e-tests` (how CI builds this harness) feature-unifies that
+/// into this crate. A `serde_json` number then serializes to YAML as a one-field
+/// map, `$serde_json::private::Number`, which the manifest rejects for `u64`
+/// fields such as `networks[].shared_tip_logs.empty_retry_deadline_ms`.
+fn serialize_manifest_json<S>(
     value: &Option<serde_json::Value>,
     serializer: S,
 ) -> Result<S::Ok, S::Error>
@@ -129,12 +128,49 @@ where
 {
     match value {
         None => serializer.serialize_none(),
-        Some(serde_json::Value::Bool(value)) => serializer.serialize_bool(*value),
-        Some(serde_json::Value::Number(value)) => match value.as_u64() {
-            Some(number) => serializer.serialize_u64(number),
-            None => serde::Serialize::serialize(value, serializer),
-        },
-        Some(value) => serde::Serialize::serialize(value, serializer),
+        Some(value) => serde::Serialize::serialize(&YamlJson(value), serializer),
+    }
+}
+
+struct YamlJson<'a>(&'a serde_json::Value);
+
+impl serde::Serialize for YamlJson<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self.0 {
+            serde_json::Value::Null => serializer.serialize_unit(),
+            serde_json::Value::Bool(value) => serializer.serialize_bool(*value),
+            serde_json::Value::Number(value) => {
+                if let Some(number) = value.as_u64() {
+                    serializer.serialize_u64(number)
+                } else if let Some(number) = value.as_i64() {
+                    serializer.serialize_i64(number)
+                } else if let Some(number) = value.as_f64() {
+                    serializer.serialize_f64(number)
+                } else {
+                    serializer.serialize_str(&value.to_string())
+                }
+            }
+            serde_json::Value::String(value) => serializer.serialize_str(value),
+            serde_json::Value::Array(values) => {
+                use serde::ser::SerializeSeq;
+                let mut seq = serializer.serialize_seq(Some(values.len()))?;
+                for value in values {
+                    seq.serialize_element(&YamlJson(value))?;
+                }
+                seq.end()
+            }
+            serde_json::Value::Object(values) => {
+                use serde::ser::SerializeMap;
+                let mut map = serializer.serialize_map(Some(values.len()))?;
+                for (key, value) in values {
+                    map.serialize_entry(key, &YamlJson(value))?;
+                }
+                map.end()
+            }
+        }
     }
 }
 
@@ -365,5 +401,63 @@ impl TestContext {
         let content = std::fs::read_to_string(&csv_path)?;
         let lines: Vec<&str> = content.lines().collect();
         Ok(if lines.len() > 1 { lines.len() - 1 } else { 0 })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(serde::Deserialize)]
+    struct ParsedTipLogs {
+        enabled: bool,
+        empty_retry_deadline_ms: u64,
+        cache_blocks: usize,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ParsedNetwork {
+        shared_tip_logs: ParsedTipLogs,
+    }
+
+    #[test]
+    fn manifest_json_numbers_stay_yaml_scalars() {
+        let network = NetworkConfig {
+            name: "anvil".to_string(),
+            chain_id: 31337,
+            rpc: "http://127.0.0.1:8545".to_string(),
+            reorg_handling: None,
+            shared_tip_logs: Some(serde_json::json!({
+                "enabled": true,
+                "empty_retry_deadline_ms": 1500,
+                "cache_blocks": 8
+            })),
+        };
+        let yaml = serde_yaml::to_string(&network).expect("network yaml");
+        assert!(
+            !yaml.contains("$serde_json::private::Number"),
+            "numbers must stay YAML scalars so the manifest can parse them:\n{yaml}"
+        );
+
+        let parsed: ParsedNetwork = serde_yaml::from_str(&yaml).expect("parse emitted yaml");
+        assert!(parsed.shared_tip_logs.enabled);
+        assert_eq!(parsed.shared_tip_logs.empty_retry_deadline_ms, 1500);
+        assert_eq!(parsed.shared_tip_logs.cache_blocks, 8);
+
+        #[derive(serde::Serialize)]
+        struct Distance {
+            #[serde(serialize_with = "serialize_manifest_json")]
+            reorg_safe_distance: Option<serde_json::Value>,
+        }
+        #[derive(serde::Deserialize)]
+        struct ParsedDistance {
+            reorg_safe_distance: u64,
+        }
+        let yaml =
+            serde_yaml::to_string(&Distance { reorg_safe_distance: Some(serde_json::json!(2)) })
+                .expect("distance yaml");
+        assert!(!yaml.contains("$serde_json::private::Number"), "{yaml}");
+        let parsed: ParsedDistance = serde_yaml::from_str(&yaml).expect("parse distance yaml");
+        assert_eq!(parsed.reorg_safe_distance, 2);
     }
 }

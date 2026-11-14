@@ -594,6 +594,23 @@ mod tests {
             config,
             SharedTipLogsConfig { enabled: false, empty_retry_deadline_ms: 7000, cache_blocks: 32 }
         );
+
+        let network: Network = serde_yaml::from_str(
+            r#"
+            name: ethereum
+            chain_id: 1
+            rpc: https://mainnet.gateway.tenderly.co
+            shared_tip_logs:
+                empty_retry_deadline_ms: 1500
+            "#,
+        )
+        .unwrap();
+
+        let config = network.shared_tip_logs.expect("the stanza is parsed");
+        assert_eq!(
+            config,
+            SharedTipLogsConfig { enabled: true, empty_retry_deadline_ms: 1500, cache_blocks: 32 }
+        );
     }
 
     #[test]
