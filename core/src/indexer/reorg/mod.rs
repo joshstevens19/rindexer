@@ -3,29 +3,31 @@ pub mod persistence;
 pub mod task;
 pub mod window;
 
+#[cfg(feature = "clickhouse")]
+use crate::database::clickhouse::client::ClickhouseClient;
+#[cfg(feature = "postgres")]
+use crate::database::postgres::client::PostgresClient;
+use crate::{
+    event::callback_registry::{EventCallbackRegistry, TraceCallbackRegistry},
+    indexer::fetch_logs::ReorgInfo,
+    metrics::indexing as metrics,
+    notifications::ChainStateNotification,
+};
 use alloy::primitives::{B256, U64};
 use anyhow::Context;
+pub use coordinator::ReorgCoordinator;
+pub use persistence::ReorgBlockHashPersistence;
 use serde::Serialize;
 use std::{
     collections::HashMap,
     sync::{Arc, LazyLock, Mutex as StdMutex},
 };
-use tokio::sync::RwLock;
-use tracing::{debug, warn};
-
-use crate::database::clickhouse::client::ClickhouseClient;
-use crate::database::postgres::client::PostgresClient;
-use crate::event::callback_registry::{EventCallbackRegistry, TraceCallbackRegistry};
-use crate::indexer::fetch_logs::ReorgInfo;
-use crate::metrics::indexing as metrics;
-use crate::notifications::ChainStateNotification;
-
-pub use coordinator::ReorgCoordinator;
-pub use persistence::ReorgBlockHashPersistence;
 pub use task::{
     AffectedTable, DerivedColumnJournal, DerivedColumnRollback, DerivedTableInfo,
     DerivedTableRollbackOp, DerivedTableRollbackPlan, EventTableInfo,
 };
+use tokio::sync::RwLock;
+use tracing::{debug, warn};
 pub use window::BlockChainWindow;
 
 static EVENT_WRITER_BARRIERS: LazyLock<StdMutex<HashMap<String, Arc<RwLock<()>>>>> =
@@ -94,7 +96,9 @@ pub fn validate_sql_value(value: &str, kind: &str) -> anyhow::Result<()> {
 /// `ReorgCoordinator` itself so a single detection covers every pipeline on
 /// the network.
 pub struct ReorgContext<'a> {
+    #[cfg(feature = "postgres")]
     pub postgres: Option<&'a PostgresClient>,
+    #[cfg(feature = "clickhouse")]
     pub clickhouse: Option<&'a Arc<ClickhouseClient>>,
     pub registry: Option<&'a EventCallbackRegistry>,
     pub trace_registry: Option<&'a TraceCallbackRegistry>,

@@ -1,25 +1,42 @@
-use crate::database::clickhouse::client::ClickhouseError;
-use crate::database::clickhouse::types::ClickhouseAddress;
-use crate::database::generate::generate_internal_factory_event_table_name_no_shorten;
-use crate::database::postgres::client::PostgresError;
-use crate::database::{
-    generate::generate_internal_factory_event_table_name,
-    postgres::generate::GenerateInternalFactoryEventTableNameParams,
+#[cfg(any(feature = "postgres", feature = "clickhouse"))]
+use crate::{
+    database::postgres::generate::GenerateInternalFactoryEventTableNameParams,
+    EthereumSqlTypeWrapper,
 };
-use crate::event::callback_registry::EventResult;
-use crate::event::config::FactoryEventProcessingConfig;
-use crate::helpers::{get_full_path, parse_log};
-use crate::manifest::storage::CsvDetails;
-use crate::simple_file_formatters::csv::AsyncCsvReader;
-use crate::{AsyncCsvAppender, ClickhouseClient, EthereumSqlTypeWrapper, PostgresClient};
+#[cfg(feature = "clickhouse")]
+use crate::{
+    database::{
+        clickhouse::{client::ClickhouseError, types::ClickhouseAddress},
+        generate::generate_internal_factory_event_table_name_no_shorten,
+    },
+    ClickhouseClient,
+};
+#[cfg(feature = "postgres")]
+use crate::{
+    database::{
+        generate::generate_internal_factory_event_table_name, postgres::client::PostgresError,
+    },
+    PostgresClient,
+};
+use crate::{
+    event::{callback_registry::EventResult, config::FactoryEventProcessingConfig},
+    helpers::{get_full_path, parse_log},
+    manifest::storage::CsvDetails,
+    simple_file_formatters::csv::AsyncCsvReader,
+    AsyncCsvAppender,
+};
 use alloy::primitives::Address;
 use mini_moka::sync::Cache;
+#[cfg(feature = "clickhouse")]
 use serde::Deserialize;
-use std::collections::HashSet;
-use std::hash::Hash;
-use std::path::{Path, PathBuf};
+#[cfg(feature = "postgres")]
 use std::str::FromStr;
-use std::sync::{Arc, OnceLock};
+use std::{
+    collections::HashSet,
+    hash::Hash,
+    path::{Path, PathBuf},
+    sync::{Arc, OnceLock},
+};
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct KnownFactoryDeployedAddress {
@@ -39,6 +56,7 @@ pub enum UpdateKnownFactoryDeployedAddressesError {
     PostgresWrite(String),
 
     #[error("Could not write addresses to clickhouse: {0}")]
+    #[cfg(feature = "clickhouse")]
     ClickhouseWrite(#[from] ClickhouseError),
 
     #[error("Could not parse logs")]
@@ -143,6 +161,7 @@ pub async fn update_known_factory_deployed_addresses(
     };
     invalidate_known_factory_deployed_addresses_cache(&key);
 
+    #[cfg(feature = "postgres")]
     if let Some(postgres) = &config.postgres {
         let params = GenerateInternalFactoryEventTableNameParams {
             indexer_name: config.indexer_name.clone(),
@@ -178,6 +197,7 @@ pub async fn update_known_factory_deployed_addresses(
         return Ok(());
     }
 
+    #[cfg(feature = "clickhouse")]
     if let Some(clickhouse) = &config.clickhouse {
         let params = GenerateInternalFactoryEventTableNameParams {
             indexer_name: config.indexer_name.clone(),
@@ -257,9 +277,11 @@ pub enum GetKnownFactoryDeployedAddressesError {
     CsvRead(#[from] csv::Error),
 
     #[error("Could not read addresses from postgres: {0}")]
+    #[cfg(feature = "postgres")]
     PostgresRead(#[from] PostgresError),
 
     #[error("Could not read addresses from clickhouse: {0}")]
+    #[cfg(feature = "clickhouse")]
     ClickhouseRead(#[from] clickhouse::error::Error),
 }
 
@@ -271,7 +293,9 @@ pub struct GetKnownFactoryDeployedAddressesParams {
     pub event_name: String,
     pub input_names: Vec<String>,
     pub network: String,
+    #[cfg(feature = "postgres")]
     pub postgres: Option<Arc<PostgresClient>>,
+    #[cfg(feature = "clickhouse")]
     pub clickhouse: Option<Arc<ClickhouseClient>>,
     pub csv_details: Option<CsvDetails>,
 }
@@ -291,6 +315,7 @@ pub async fn get_known_factory_deployed_addresses(
         return Ok(Some(cache));
     }
 
+    #[cfg(feature = "postgres")]
     if let Some(database) = &params.postgres {
         let table_params = GenerateInternalFactoryEventTableNameParams {
             indexer_name: params.indexer_name.clone(),
@@ -319,6 +344,7 @@ pub async fn get_known_factory_deployed_addresses(
         return Ok(Some(values));
     }
 
+    #[cfg(feature = "clickhouse")]
     if let Some(database) = &params.clickhouse {
         let table_params = GenerateInternalFactoryEventTableNameParams {
             indexer_name: params.indexer_name.clone(),
@@ -397,7 +423,9 @@ pub struct GetFactoryAddressesWithBirthBlocksParams {
     pub event_name: String,
     pub input_names: Vec<String>,
     pub network: String,
+    #[cfg(feature = "postgres")]
     pub postgres: Option<Arc<PostgresClient>>,
+    #[cfg(feature = "clickhouse")]
     pub clickhouse: Option<Arc<ClickhouseClient>>,
 }
 
@@ -419,6 +447,7 @@ pub async fn get_factory_addresses_with_birth_blocks(
     let address_column =
         params.input_names.first().map(|n| camel_to_snake(n)).unwrap_or_else(|| "pool".to_string());
 
+    #[cfg(feature = "postgres")]
     if let Some(database) = &params.postgres {
         let query = format!(
             r#"SELECT "{address_column}", block_number FROM {schema_name}.{table_name} WHERE network = $1"#
@@ -452,6 +481,7 @@ pub async fn get_factory_addresses_with_birth_blocks(
         return Ok(values);
     }
 
+    #[cfg(feature = "clickhouse")]
     if let Some(database) = &params.clickhouse {
         #[derive(Debug, clickhouse::Row, Deserialize)]
         struct AddressWithBlock {

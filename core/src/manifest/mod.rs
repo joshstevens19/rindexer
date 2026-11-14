@@ -2,6 +2,7 @@ pub mod chat;
 pub mod config;
 pub mod contract;
 pub mod core;
+mod features;
 pub mod global;
 pub mod graphql;
 pub mod native_transfer;

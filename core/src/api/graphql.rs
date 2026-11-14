@@ -59,11 +59,6 @@ fn has_table_name_conflicts(indexer: &Indexer) -> bool {
     false
 }
 
-pub struct GraphqlOverrideSettings {
-    pub enabled: bool,
-    pub override_port: Option<u16>,
-}
-
 fn get_graphql_exe() -> Result<PathBuf, Box<dyn std::error::Error>> {
     // Try the build-time path first (for development)
     let build_path = PathBuf::from(env!("RINDEXER_GRAPHQL_EXE"));

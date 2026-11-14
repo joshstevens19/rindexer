@@ -1,3 +1,4 @@
+#![cfg(all(feature = "postgres", feature = "clickhouse"))]
 //! End-to-end integration test for rindexer's reorg handling system.
 //!
 //! Requires Docker. Run via nextest so each test gets its own process — the

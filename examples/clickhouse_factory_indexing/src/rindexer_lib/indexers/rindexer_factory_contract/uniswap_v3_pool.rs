@@ -9,7 +9,7 @@ use super::super::super::typings::rindexer_factory_contract::events::uniswap_v3_
 use alloy::primitives::{I256, U256, U64};
 use rindexer::{
     event::callback_registry::EventCallbackRegistry, rindexer_error, rindexer_info,
-    EthereumSqlTypeWrapper, PgType,
+    EthereumSqlTypeWrapper,
 };
 use std::path::PathBuf;
 use std::sync::Arc;

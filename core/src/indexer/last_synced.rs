@@ -1,32 +1,38 @@
-use alloy::primitives::U64;
-use clickhouse::Row;
-use rust_decimal::Decimal;
-use serde::Deserialize;
-use std::time::Duration;
-use std::{path::Path, str::FromStr, sync::Arc};
-use tokio::{
-    fs,
-    fs::File,
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+#[cfg(any(feature = "postgres", feature = "clickhouse"))]
+use crate::database::generate::generate_indexer_contract_schema_name;
+#[cfg(feature = "clickhouse")]
+use crate::database::{
+    clickhouse::client::ClickhouseClient,
+    postgres::generate::{
+        generate_internal_cron_table_name_no_shorten, generate_internal_event_table_name_no_shorten,
+    },
 };
-use tracing::{debug, error};
-
-use crate::database::clickhouse::client::ClickhouseClient;
-use crate::database::postgres::generate::{
-    generate_internal_cron_table_name, generate_internal_cron_table_name_no_shorten,
-    generate_internal_event_table_name_no_shorten,
+#[cfg(feature = "postgres")]
+use crate::{
+    database::postgres::generate::{
+        generate_internal_cron_table_name, generate_internal_event_table_name,
+    },
+    EthereumSqlTypeWrapper, PostgresClient,
 };
 use crate::{
-    database::{
-        generate::generate_indexer_contract_schema_name,
-        postgres::generate::generate_internal_event_table_name,
-    },
     event::config::{EventProcessingConfig, TraceProcessingConfig},
     helpers::get_full_path,
     manifest::{storage::CsvDetails, stream::StreamsConfig},
     metrics::indexing as metrics,
-    EthereumSqlTypeWrapper, PostgresClient,
 };
+use alloy::primitives::U64;
+#[cfg(feature = "clickhouse")]
+use clickhouse::Row;
+#[cfg(feature = "postgres")]
+use rust_decimal::Decimal;
+#[cfg(feature = "clickhouse")]
+use serde::Deserialize;
+use std::{path::Path, str::FromStr, sync::Arc, time::Duration};
+use tokio::{
+    fs::{self, File},
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+};
+use tracing::{debug, error};
 
 async fn get_last_synced_block_number_file(
     full_path: &Path,
@@ -79,7 +85,9 @@ fn build_last_synced_block_number_file(
 
 pub struct SyncConfig<'a> {
     pub project_path: &'a Path,
+    #[cfg(feature = "postgres")]
     pub postgres: &'a Option<Arc<PostgresClient>>,
+    #[cfg(feature = "clickhouse")]
     pub clickhouse: &'a Option<Arc<ClickhouseClient>>,
     pub csv_details: &'a Option<CsvDetails>,
     pub stream_details: &'a Option<&'a StreamsConfig>,
@@ -95,6 +103,7 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
     //    update_progress_and_last_synced_task which uses postgres > clickhouse > csv > stream)
 
     // Query Postgres for last synced block
+    #[cfg(feature = "postgres")]
     if let Some(postgres) = config.postgres {
         let schema =
             generate_indexer_contract_schema_name(config.indexer_name, config.contract_name);
@@ -122,6 +131,7 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
     }
 
     // Query ClickHouse for last synced block
+    #[cfg(feature = "clickhouse")]
     if let Some(clickhouse) = config.clickhouse {
         #[derive(Row, Deserialize)]
         struct LastBlock {
@@ -310,6 +320,7 @@ pub async fn update_progress_and_last_synced_task(
         metrics::set_blocks_behind(network, contract, event, to_block_u64, latest);
     }
 
+    #[cfg(feature = "postgres")]
     if let Some(postgres) = &config.postgres() {
         let schema =
             generate_indexer_contract_schema_name(&config.indexer_name(), &config.contract_name());
@@ -325,7 +336,11 @@ pub async fn update_progress_and_last_synced_task(
         if let Err(e) = result {
             error!("Error updating db last synced block: {:?}", e);
         }
-    } else if let Some(clickhouse) = &config.clickhouse() {
+        on_complete();
+        return;
+    }
+    #[cfg(feature = "clickhouse")]
+    if let Some(clickhouse) = &config.clickhouse() {
         let schema =
             generate_indexer_contract_schema_name(&config.indexer_name(), &config.contract_name());
         let table_name =
@@ -343,7 +358,10 @@ pub async fn update_progress_and_last_synced_task(
         if let Err(e) = result {
             error!("Error updating clickhouse last synced block: {:?}", e);
         }
-    } else if let Some(csv_details) = &config.csv_details() {
+        on_complete();
+        return;
+    }
+    if let Some(csv_details) = &config.csv_details() {
         if let Err(e) = update_last_synced_block_number_for_file(
             &config.contract_name(),
             &config.network_contract().network,
@@ -403,6 +421,7 @@ pub async fn evm_trace_update_progress_and_last_synced_task(
         _ => {}
     }
 
+    #[cfg(feature = "postgres")]
     if let Some(postgres) = &config.postgres {
         // Use the native_transfer table for all trace events since they share the same pipeline
         let schema =
@@ -467,7 +486,9 @@ pub async fn evm_trace_update_progress_and_last_synced_task(
 
 /// Configuration for cron sync state operations.
 pub struct CronSyncConfig<'a> {
+    #[cfg(feature = "postgres")]
     pub postgres: &'a Option<Arc<PostgresClient>>,
+    #[cfg(feature = "clickhouse")]
     pub clickhouse: &'a Option<Arc<ClickhouseClient>>,
     pub indexer_name: &'a str,
     pub contract_name: &'a str,
@@ -481,6 +502,7 @@ pub struct CronSyncConfig<'a> {
 /// Returns `None` if the block is 0 (never synced) or on error.
 pub async fn get_last_synced_cron_block(config: CronSyncConfig<'_>) -> Option<U64> {
     // Query PostgreSQL for last synced block
+    #[cfg(feature = "postgres")]
     if let Some(postgres) = config.postgres {
         let schema =
             generate_indexer_contract_schema_name(config.indexer_name, config.contract_name);
@@ -509,6 +531,7 @@ pub async fn get_last_synced_cron_block(config: CronSyncConfig<'_>) -> Option<U6
     }
 
     // Query ClickHouse for last synced block
+    #[cfg(feature = "clickhouse")]
     if let Some(clickhouse) = config.clickhouse {
         #[derive(Row, Deserialize)]
         struct LastBlock {
@@ -551,8 +574,8 @@ pub async fn get_last_synced_cron_block(config: CronSyncConfig<'_>) -> Option<U6
 /// Update the last synced block for a cron entry in the database.
 #[allow(clippy::too_many_arguments)]
 pub async fn update_last_synced_cron_block(
-    postgres: &Option<Arc<PostgresClient>>,
-    clickhouse: &Option<Arc<ClickhouseClient>>,
+    #[cfg(feature = "postgres")] postgres: &Option<Arc<PostgresClient>>,
+    #[cfg(feature = "clickhouse")] clickhouse: &Option<Arc<ClickhouseClient>>,
     indexer_name: &str,
     contract_name: &str,
     table_name: &str,
@@ -565,6 +588,7 @@ pub async fn update_last_synced_cron_block(
         indexer_name, contract_name, table_name, cron_index, network, to_block
     );
 
+    #[cfg(feature = "postgres")]
     if let Some(postgres) = postgres {
         let schema = generate_indexer_contract_schema_name(indexer_name, contract_name);
         let internal_table_name =
@@ -585,6 +609,7 @@ pub async fn update_last_synced_cron_block(
         debug!("update_last_synced_cron_block: postgres is None");
     }
 
+    #[cfg(feature = "clickhouse")]
     if let Some(clickhouse) = clickhouse {
         let schema = generate_indexer_contract_schema_name(indexer_name, contract_name);
         let internal_table_name =

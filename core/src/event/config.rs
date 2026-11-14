@@ -1,35 +1,34 @@
-use alloy::json_abi::Event;
-use alloy::primitives::{keccak256, Address, B256, U64};
-use alloy::rpc::types::ValueOrArray;
-use std::collections::HashMap;
-use std::{path::PathBuf, sync::Arc};
-use tokio::sync::broadcast::Sender;
-use tokio_util::sync::CancellationToken;
-
+#[cfg(feature = "clickhouse")]
 use crate::database::clickhouse::client::ClickhouseClient;
-use crate::event::contract_setup::{AddressDetails, IndexingContractSetup};
-use crate::event::factory_event_filter_sync::update_known_factory_deployed_addresses;
-use crate::event::rindexer_event_filter::FactoryFilter;
-use crate::indexer::reorg::ReorgEvent;
-use crate::indexer::tables::TableRuntime;
-use crate::manifest::config::Config;
-use crate::manifest::contract::EventInputIndexedFilters;
-use crate::manifest::core::Constants;
-use crate::provider::ChainProvider;
-use crate::streams::StreamsClients;
-use crate::types::single_or_array::StringOrArray;
+#[cfg(feature = "postgres")]
+use crate::PostgresClient;
 use crate::{
     event::{
         callback_registry::{
             EventCallbackRegistry, EventResult, TraceCallbackRegistry, TraceResult,
         },
-        contract_setup::NetworkContract,
+        contract_setup::{AddressDetails, IndexingContractSetup, NetworkContract},
+        factory_event_filter_sync::update_known_factory_deployed_addresses,
+        rindexer_event_filter::FactoryFilter,
         BuildRindexerFilterError, RindexerEventFilter,
     },
-    indexer::IndexingEventsProgressState,
-    manifest::{native_transfer::TraceProcessingMethod, storage::CsvDetails},
-    PostgresClient,
+    indexer::{reorg::ReorgEvent, tables::TableRuntime, IndexingEventsProgressState},
+    manifest::{
+        config::Config, contract::EventInputIndexedFilters, core::Constants,
+        native_transfer::TraceProcessingMethod, storage::CsvDetails,
+    },
+    provider::ChainProvider,
+    streams::StreamsClients,
+    types::single_or_array::StringOrArray,
 };
+use alloy::{
+    json_abi::Event,
+    primitives::{keccak256, Address, B256, U64},
+    rpc::types::ValueOrArray,
+};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use tokio::sync::broadcast::Sender;
+use tokio_util::sync::CancellationToken;
 
 pub struct ContractEventProcessingConfig {
     pub id: String,
@@ -45,7 +44,9 @@ pub struct ContractEventProcessingConfig {
     pub end_block: U64,
     pub registry: Arc<EventCallbackRegistry>,
     pub progress: Arc<IndexingEventsProgressState>,
+    #[cfg(feature = "postgres")]
     pub postgres: Option<Arc<PostgresClient>>,
+    #[cfg(feature = "clickhouse")]
     pub clickhouse: Option<Arc<ClickhouseClient>>,
     pub csv_details: Option<CsvDetails>,
     pub stream_last_synced_block_file_path: Option<String>,
@@ -106,7 +107,9 @@ impl ContractEventProcessingConfig {
                     network: self.network_contract.network.clone(),
                     topic_id: self.topic_id,
                     topics: index_filter.cloned().map(Into::into).unwrap_or_default(),
+                    #[cfg(feature = "clickhouse")]
                     clickhouse: self.clickhouse.clone(),
+                    #[cfg(feature = "postgres")]
                     postgres: self.postgres.clone(),
                     csv_details: self.csv_details.clone(),
 
@@ -137,7 +140,9 @@ pub struct FactoryEventProcessingConfig {
     pub end_block: U64,
     pub registry: Arc<EventCallbackRegistry>,
     pub progress: Arc<IndexingEventsProgressState>,
+    #[cfg(feature = "postgres")]
     pub postgres: Option<Arc<PostgresClient>>,
+    #[cfg(feature = "clickhouse")]
     pub clickhouse: Option<Arc<ClickhouseClient>>,
     pub csv_details: Option<CsvDetails>,
     pub stream_last_synced_block_file_path: Option<String>,
@@ -336,6 +341,7 @@ impl EventProcessingConfig {
         }
     }
 
+    #[cfg(feature = "postgres")]
     pub fn postgres(&self) -> Option<Arc<PostgresClient>> {
         match self {
             Self::ContractEventProcessing(config) => config.postgres.clone(),
@@ -343,6 +349,7 @@ impl EventProcessingConfig {
         }
     }
 
+    #[cfg(feature = "clickhouse")]
     pub fn clickhouse(&self) -> Option<Arc<ClickhouseClient>> {
         match self {
             Self::ContractEventProcessing(config) => config.clickhouse.clone(),
@@ -458,6 +465,7 @@ pub struct TraceProcessingConfig {
     pub event_name: String,
     pub network: String,
     pub progress: Arc<IndexingEventsProgressState>,
+    #[cfg(feature = "postgres")]
     pub postgres: Option<Arc<PostgresClient>>,
     pub csv_details: Option<CsvDetails>,
     pub registry: Arc<TraceCallbackRegistry>,

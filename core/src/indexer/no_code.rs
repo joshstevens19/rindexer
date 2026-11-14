@@ -1,72 +1,78 @@
-use alloy::{
-    dyn_abi::DynSolValue,
-    json_abi::{Event, JsonAbi},
+#[cfg(feature = "postgres")]
+use super::tables::{apply_table_operations, prepare_table_operations, PreparedTableOps};
+use super::{
+    cron_scheduler::{manifest_has_cron_tables, CronScheduler},
+    native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME},
+    tables::{process_table_operations, ProgressCheckpointConfig, TableRuntime, TxMetadata},
 };
-use serde_json::Value;
-use std::collections::HashMap;
-use std::{
-    io,
-    path::{Path, PathBuf},
-    sync::Arc,
+#[cfg(feature = "clickhouse")]
+use crate::database::clickhouse::{
+    client::ClickhouseClient,
+    setup::{setup_clickhouse, SetupClickhouseError},
 };
-use tokio_postgres::types::Type as PgType;
-use tracing::{debug, error, info, warn};
-
-use super::cron_scheduler::{manifest_has_cron_tables, CronScheduler};
-use super::native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME};
-use super::tables::{
-    apply_table_operations, prepare_table_operations, process_table_operations, PreparedTableOps,
-    ProgressCheckpointConfig, TableRuntime, TxMetadata,
-};
-use crate::database::clickhouse::client::ClickhouseClient;
-use crate::database::clickhouse::setup::{setup_clickhouse, SetupClickhouseError};
-use crate::database::generate::{
-    generate_event_table_full_name, generate_indexer_contract_schema_name,
-};
-use crate::database::postgres::client::{pg_error_to_string, BulkCursorUpdate, CursorAdvance};
-use crate::database::postgres::generate::generate_internal_event_table_name;
-use crate::database::postgres::write_mode::PgWriteMode;
-use crate::database::sql_type_wrapper::{
-    map_ethereum_wrapper_to_json, map_log_params_to_ethereum_wrapper, EthereumSqlTypeWrapper,
-};
-use crate::manifest::contract::{Contract, Table};
-use crate::manifest::core::Constants;
-use crate::metrics::database as db_metrics;
-use crate::provider::ChainProvider;
-use crate::system_state::is_running;
 use crate::{
     abi::{ABIItem, CreateCsvFileForEvent, EventInfo, ParamTypeError, ReadAbiError},
     chat::ChatClients,
-    database::postgres::{
-        client::PostgresClient,
-        generate::generate_column_names_only_with_base_properties,
-        setup::{setup_postgres, SetupPostgresError},
+    database::{
+        generate::generate_event_table_full_name,
+        postgres::generate::generate_column_names_only_with_base_properties,
+        sql_type_wrapper::{
+            map_ethereum_wrapper_to_json, map_log_params_to_ethereum_wrapper,
+            EthereumSqlTypeWrapper,
+        },
     },
     event::{
         callback_registry::{
             noop_decoder, CallbackResult, EventCallbackRegistry, EventCallbackRegistryInformation,
             EventCallbackType, TraceCallbackRegistry, TraceCallbackRegistryInformation,
-            TraceCallbackType, TxInformation,
+            TraceCallbackType, TraceResult, TxInformation,
         },
         contract_setup::{ContractInformation, CreateContractInformationError, TraceInformation},
         EventMessage,
     },
     generate_random_id,
+    helpers::{map_log_params_to_raw_values, parse_log},
     manifest::{
-        contract::ParseAbiError,
-        core::Manifest,
+        contract::{Contract, ParseAbiError, Table},
+        core::{Constants, Manifest},
         yaml::{read_manifest, ReadManifestError},
     },
-    provider::{validate_manifest_network_rpc_urls, CreateNetworkProvider, RetryClientError},
+    provider::{
+        validate_manifest_network_rpc_urls, ChainProvider, CreateNetworkProvider, RetryClientError,
+    },
     setup_info_logger,
     streams::StreamsClients,
     types::core::LogParam,
     AsyncCsvAppender, FutureExt, IndexingDetails, StartDetails, StartNoCodeDetails,
 };
+#[cfg(feature = "postgres")]
 use crate::{
-    event::callback_registry::TraceResult,
-    helpers::{map_log_params_to_raw_values, parse_log},
+    database::{
+        generate::generate_indexer_contract_schema_name,
+        postgres::{
+            client::{pg_error_to_string, BulkCursorUpdate, CursorAdvance, PostgresClient},
+            generate::generate_internal_event_table_name,
+            setup::{setup_postgres, SetupPostgresError},
+            write_mode::PgWriteMode,
+        },
+    },
+    metrics::database as db_metrics,
+    system_state::is_running,
 };
+use alloy::{
+    dyn_abi::DynSolValue,
+    json_abi::{Event, JsonAbi},
+};
+use serde_json::Value;
+use std::{
+    collections::HashMap,
+    io,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+#[cfg(feature = "postgres")]
+use tokio_postgres::types::Type as PgType;
+use tracing::{debug, error, info, warn};
 
 #[derive(thiserror::Error, Debug)]
 pub enum SetupNoCodeError {
@@ -77,6 +83,7 @@ pub enum SetupNoCodeError {
     CouldNotReadManifest(#[from] ReadManifestError),
 
     #[error("Could not setup postgres: {0}")]
+    #[cfg(feature = "postgres")]
     SetupPostgresError(#[from] SetupPostgresError),
 
     #[error("{0}")]
@@ -86,6 +93,7 @@ pub enum SetupNoCodeError {
     ProcessIndexersError(#[from] ProcessIndexersError),
 
     #[error("Could not setup clickhouse: {0}")]
+    #[cfg(feature = "clickhouse")]
     SetupClickhouseError(#[from] SetupClickhouseError),
 
     #[error("You have graphql disabled as well as indexer so nothing can startup")]
@@ -208,12 +216,16 @@ pub async fn setup_no_code(
             // Resolve table column types from ABI before database setup
             resolve_table_column_types(project_path, &mut manifest)?;
 
+            #[cfg(feature = "postgres")]
             let mut postgres: Option<Arc<PostgresClient>> = None;
+            #[cfg(feature = "postgres")]
             if manifest.storage.postgres_enabled() {
                 postgres = Some(Arc::new(setup_postgres(project_path, &manifest).await?));
             }
 
+            #[cfg(feature = "clickhouse")]
             let mut clickhouse: Option<Arc<ClickhouseClient>> = None;
+            #[cfg(feature = "clickhouse")]
             if manifest.storage.clickhouse_enabled() {
                 clickhouse = Some(Arc::new(setup_clickhouse(project_path, &manifest).await?));
             }
@@ -241,7 +253,9 @@ pub async fn setup_no_code(
             let events = process_events(
                 project_path,
                 &manifest,
+                #[cfg(feature = "postgres")]
                 postgres.clone(),
+                #[cfg(feature = "clickhouse")]
                 clickhouse.clone(),
                 &network_providers,
             )
@@ -261,7 +275,9 @@ pub async fn setup_no_code(
             let trace_events = process_trace_events(
                 project_path,
                 &mut manifest,
+                #[cfg(feature = "postgres")]
                 postgres.clone(),
+                #[cfg(feature = "clickhouse")]
                 clickhouse.clone(),
                 &network_providers,
             )
@@ -294,7 +310,9 @@ pub async fn setup_no_code(
 
                 let scheduler = CronScheduler::new(
                     &manifest,
+                    #[cfg(feature = "postgres")]
                     postgres.clone(),
+                    #[cfg(feature = "clickhouse")]
                     clickhouse.clone(),
                     providers_map,
                 );
@@ -348,9 +366,11 @@ struct NoCodeCallbackParams {
     event: Event,
     index_event_in_order: bool,
     csv: Option<Arc<AsyncCsvAppender>>,
+    #[cfg(feature = "postgres")]
     postgres: Option<Arc<PostgresClient>>,
     sql_event_table_name: String,
     sql_column_names: Vec<String>,
+    #[cfg(feature = "clickhouse")]
     clickhouse: Option<Arc<ClickhouseClient>>,
     streams_clients: Arc<Option<StreamsClients>>,
     chat_clients: Arc<Option<ChatClients>>,
@@ -445,7 +465,17 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
             };
 
             let mut indexed_count = 0;
+            #[cfg(feature = "clickhouse")]
+            let has_clickhouse = params.clickhouse.is_some();
+            #[cfg(not(feature = "clickhouse"))]
+            let has_clickhouse = false;
+            let has_database = [
+                #[cfg(feature = "postgres")]
+                params.postgres.is_some(),
+                has_clickhouse,
+            ].into_iter().any(|enabled| enabled);
             let mut sql_bulk_data: Vec<Vec<EthereumSqlTypeWrapper>> = Vec::new();
+            #[cfg(feature = "postgres")]
             let mut sql_bulk_column_types: Vec<PgType> = Vec::new();
             let mut csv_bulk_data: Vec<Vec<String>> = Vec::new();
 
@@ -617,12 +647,13 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                 all_params.extend(end_global_parameters);
 
                 // Set column types dynamically based on first result
+                #[cfg(feature = "postgres")]
                 if sql_bulk_column_types.is_empty() {
                     sql_bulk_column_types =
                         all_params.iter().map(|param| param.to_type()).collect();
                 }
 
-                if params.postgres.is_some() || params.clickhouse.is_some() {
+                if has_database {
                     sql_bulk_data.push(all_params);
                 }
 
@@ -669,9 +700,10 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
             // the whole callback succeeds). The exactly-once contract additionally
             // requires a SINGLE writer process and effective callback concurrency 1
             // (the default; see trigger_event in process.rs).
+            #[cfg(feature = "postgres")]
             let atomic_pg_cursor = params.store_raw_events
                 && params.postgres.is_some()
-                && params.clickhouse.is_none()
+                && !has_clickhouse
                 && params.csv.is_none()
                 // streams/chat dispatch AFTER the storage write — with the
                 // cursor already committed, a crash in that window would skip
@@ -715,7 +747,11 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
             // errors (see the stream error arm below).
             let run_table_ops = !params.tables.is_empty() && !table_events_data.is_empty();
 
-            if atomic_pg_cursor {
+            #[cfg(not(feature = "postgres"))]
+            let atomic_pg_cursor = false;
+            match atomic_pg_cursor {
+            #[cfg(feature = "postgres")]
+            true => {
                 // Prepare (RPC, fan-out, value resolution); nothing is written yet.
                 let prepared = if run_table_ops {
                     match prepare_table_operations(
@@ -785,7 +821,9 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                     let staged: Result<Option<CursorAdvance>, String> = async {
                         if let Err(e) = apply_table_operations(
                             &prepared,
-                            Some(PgWriteMode::Tx(&tx)),
+                            #[cfg(feature = "postgres")]
+Some(PgWriteMode::Tx(&tx)),
+                            #[cfg(feature = "clickhouse")]
                             None,
                             None,
                         )
@@ -856,10 +894,12 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                         None => {}
                     }
                 }
-            } else {
+            }
+            _ => {
                 // LEGACY arm — original ordering + original semantics.
                 if params.store_raw_events {
-                    if let Some(postgres) = &params.postgres {
+                    #[cfg(feature = "postgres")]
+if let Some(postgres) = &params.postgres {
                         if !sql_bulk_data.is_empty() {
                             if let Err(e) = postgres
                                 .insert_bulk(
@@ -878,7 +918,8 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                         }
                     }
 
-                    if let Some(clickhouse) = &params.clickhouse {
+                    #[cfg(feature = "clickhouse")]
+if let Some(clickhouse) = &params.clickhouse {
                         if !sql_bulk_data.is_empty() {
                             if let Err(e) = clickhouse
                                 .insert_bulk(
@@ -912,14 +953,17 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                         params.indexer_name.clone(),
                         params.contract_name.clone(),
                         params.event_info.name.clone(),
-                        params.postgres.clone(),
+                        #[cfg(feature = "postgres")]
+params.postgres.clone(),
                     );
                     if let Err(e) = process_table_operations(
                         &params.tables,
                         &params.event_info.name,
                         &table_events_data,
-                        params.postgres.clone(),
-                        params.clickhouse.clone(),
+                        #[cfg(feature = "postgres")]
+params.postgres.clone(),
+                        #[cfg(feature = "clickhouse")]
+params.clickhouse.clone(),
                         params.providers.clone(),
                         &params.constants,
                         &params.multicall_addresses,
@@ -942,6 +986,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                         return Err(e);
                     }
                 }
+            }
             }
             // Build the cross-block chat payload first (one clone per event)
             // so the streams path can consume `event_message_data` into
@@ -1149,8 +1194,8 @@ pub enum ProcessIndexersError {
 pub async fn process_events(
     project_path: &Path,
     manifest: &Manifest,
-    postgres: Option<Arc<PostgresClient>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    #[cfg(feature = "postgres")] postgres: Option<Arc<PostgresClient>>,
+    #[cfg(feature = "clickhouse")] clickhouse: Option<Arc<ClickhouseClient>>,
     network_providers: &[CreateNetworkProvider],
 ) -> Result<Vec<EventCallbackRegistryInformation>, ProcessIndexersError> {
     let mut events: Vec<EventCallbackRegistryInformation> = vec![];
@@ -1159,7 +1204,9 @@ pub async fn process_events(
         let contract_events = process_contract(
             project_path,
             manifest,
+            #[cfg(feature = "postgres")]
             postgres.clone(),
+            #[cfg(feature = "clickhouse")]
             clickhouse.clone(),
             network_providers,
             &mut contract,
@@ -1175,8 +1222,8 @@ pub async fn process_events(
 async fn process_contract(
     project_path: &Path,
     manifest: &Manifest,
-    postgres: Option<Arc<PostgresClient>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    #[cfg(feature = "postgres")] postgres: Option<Arc<PostgresClient>>,
+    #[cfg(feature = "clickhouse")] clickhouse: Option<Arc<ClickhouseClient>>,
     network_providers: &[CreateNetworkProvider],
     contract: &mut Contract,
 ) -> Result<Vec<EventCallbackRegistryInformation>, ProcessIndexersError> {
@@ -1305,7 +1352,9 @@ async fn process_contract(
                 event: event.clone(),
                 index_event_in_order,
                 csv,
+                #[cfg(feature = "postgres")]
                 postgres: postgres.clone(),
+                #[cfg(feature = "clickhouse")]
                 clickhouse: clickhouse.clone(),
                 sql_event_table_name,
                 sql_column_names,
@@ -1337,8 +1386,8 @@ async fn process_contract(
 pub async fn process_trace_events(
     project_path: &Path,
     manifest: &mut Manifest,
-    postgres: Option<Arc<PostgresClient>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    #[cfg(feature = "postgres")] postgres: Option<Arc<PostgresClient>>,
+    #[cfg(feature = "clickhouse")] clickhouse: Option<Arc<ClickhouseClient>>,
     network_providers: &[CreateNetworkProvider],
 ) -> Result<Vec<TraceCallbackRegistryInformation>, ProcessIndexersError> {
     let mut events: Vec<TraceCallbackRegistryInformation> = vec![];
@@ -1455,7 +1504,9 @@ pub async fn process_trace_events(
             event: event.clone(),
             index_event_in_order: false,
             csv,
+            #[cfg(feature = "postgres")]
             postgres: postgres.clone(),
+            #[cfg(feature = "clickhouse")]
             clickhouse: clickhouse.clone(),
             sql_event_table_name,
             sql_column_names,

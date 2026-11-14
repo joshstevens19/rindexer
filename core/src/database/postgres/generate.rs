@@ -1,8 +1,8 @@
-use crate::database::generate::compact_table_name_if_needed;
-use crate::helpers::parse_solidity_integer_type;
+#![cfg_attr(not(feature = "postgres"), allow(dead_code))]
 use crate::{
     abi::{ABIInput, GenerateAbiPropertiesType},
-    helpers::camel_to_snake,
+    database::generate::compact_table_name_if_needed,
+    helpers::{camel_to_snake, parse_solidity_integer_type},
 };
 
 fn generate_columns(inputs: &[ABIInput], property_type: &GenerateAbiPropertiesType) -> Vec<String> {
@@ -88,6 +88,7 @@ pub fn generate_internal_cron_table_name(
 }
 
 /// Generate internal table name for tracking cron sync state (without shortening).
+#[cfg(feature = "clickhouse")]
 pub fn generate_internal_cron_table_name_no_shorten(
     schema_name: &str,
     table_name: &str,

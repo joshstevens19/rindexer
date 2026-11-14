@@ -1,57 +1,58 @@
-use std::{collections::HashMap, path::Path, sync::Arc};
-
-use alloy::primitives::U64;
-use futures::future::try_join_all;
-use futures::stream::FuturesUnordered;
-use futures::StreamExt;
-use tokio::sync::Mutex;
-use tokio::{
-    task::{JoinError, JoinHandle},
-    time::Instant,
-};
-use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
-
-use crate::abi::{ABIInput, ABIItem};
+#[cfg(feature = "clickhouse")]
 use crate::database::clickhouse::client::{ClickhouseClient, ClickhouseConnectionError};
-use crate::database::generate::generate_indexer_contract_schema_name;
-use crate::database::postgres::generate::generate_internal_event_table_name;
-use crate::event::config::{ContractEventProcessingConfig, FactoryEventProcessingConfig};
-use crate::helpers::{camel_to_snake, format_duration};
-use crate::indexer::native_transfer::native_transfer_block_processor;
-use crate::indexer::reorg::{
-    reorg_safe_distance_for_chain, BlockChainWindow, DerivedColumnJournal, DerivedColumnRollback,
-    DerivedTableInfo, DerivedTableRollbackOp, DerivedTableRollbackPlan, EventTableInfo,
-    ReorgBlockHashPersistence, ReorgContext, ReorgCoordinator,
-};
-use crate::indexer::Indexer;
-use crate::manifest::network::ReorgHandlingConfig;
 use crate::{
-    database::postgres::client::PostgresConnectionError,
+    abi::{ABIInput, ABIItem},
+    database::{
+        generate::generate_indexer_contract_schema_name,
+        postgres::generate::generate_internal_event_table_name,
+    },
     event::{
         callback_registry::{EventCallbackRegistry, TraceCallbackRegistry},
-        config::{EventProcessingConfig, TraceProcessingConfig},
+        config::{
+            ContractEventProcessingConfig, EventProcessingConfig, FactoryEventProcessingConfig,
+            TraceProcessingConfig,
+        },
     },
+    helpers::{camel_to_snake, format_duration},
     indexer::{
         dependency::ContractEventsDependenciesConfig,
         last_synced::{get_last_synced_block_number, SyncConfig},
         native_transfer::{
-            native_transfer_block_fetch, NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME,
+            native_transfer_block_fetch, native_transfer_block_processor, NATIVE_TRANSFER_ABI,
+            NATIVE_TRANSFER_CONTRACT_NAME,
         },
         process::{
             process_contracts_events_with_dependencies, process_non_blocking_event,
             ProcessContractsEventsWithDependenciesError, ProcessEventError,
         },
         progress::IndexingEventsProgressState,
-        ContractEventDependencies,
+        reorg::{
+            reorg_safe_distance_for_chain, BlockChainWindow, DerivedColumnJournal,
+            DerivedColumnRollback, DerivedTableInfo, DerivedTableRollbackOp,
+            DerivedTableRollbackPlan, EventTableInfo, ReorgBlockHashPersistence, ReorgContext,
+            ReorgCoordinator,
+        },
+        ContractEventDependencies, Indexer,
     },
     manifest::{
         contract::{ColumnType, ReorgSafeDistance},
         core::Manifest,
+        network::ReorgHandlingConfig,
     },
     provider::{ChainProvider, ProviderError},
-    PostgresClient,
 };
+#[cfg(feature = "postgres")]
+use crate::{database::postgres::client::PostgresConnectionError, PostgresClient};
+use alloy::primitives::U64;
+use futures::{future::try_join_all, stream::FuturesUnordered, StreamExt};
+use std::{collections::HashMap, path::Path, sync::Arc};
+use tokio::{
+    sync::Mutex,
+    task::{JoinError, JoinHandle},
+    time::Instant,
+};
+use tokio_util::sync::CancellationToken;
+use tracing::{error, info, warn};
 
 #[derive(thiserror::Error, Debug)]
 pub enum CombinedLogEventProcessingError {
@@ -72,9 +73,11 @@ pub enum StartIndexingError {
     CouldNotRunAllIndexHandlers(#[from] ProcessEventError),
 
     #[error("{0}")]
+    #[cfg(feature = "postgres")]
     PostgresConnectionError(#[from] PostgresConnectionError),
 
     #[error("{0}")]
+    #[cfg(feature = "clickhouse")]
     ClickhouseConnectionError(#[from] ClickhouseConnectionError),
 
     #[error("Could not get block number from provider: {0}")]
@@ -195,8 +198,8 @@ async fn get_start_end_block(
 async fn start_indexing_traces(
     manifest: &Manifest,
     project_path: &Path,
-    postgres: Option<Arc<PostgresClient>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    #[cfg(feature = "postgres")] postgres: Option<Arc<PostgresClient>>,
+    #[cfg(feature = "clickhouse")] clickhouse: Option<Arc<ClickhouseClient>>,
     indexer: &Indexer,
     trace_registry: Arc<TraceCallbackRegistry>,
     cancel_token: CancellationToken,
@@ -251,7 +254,9 @@ async fn start_indexing_traces(
 
         let sync_config = SyncConfig {
             project_path,
+            #[cfg(feature = "postgres")]
             postgres: &postgres,
+            #[cfg(feature = "clickhouse")]
             clickhouse: &clickhouse,
             csv_details: &manifest.storage.csv,
             contract_csv_enabled: manifest.contract_csv_enabled(&first_event.contract_name),
@@ -291,6 +296,7 @@ async fn start_indexing_traces(
             event_name: "TraceEvents".to_string(),
             network: network_name.clone(),
             progress: progress.clone(),
+            #[cfg(feature = "postgres")]
             postgres: postgres.clone(),
             csv_details: None,
             registry: network_registry,
@@ -309,9 +315,11 @@ async fn start_indexing_traces(
             indexing_distance_from_head,
             network_name.clone(),
             cancel_token.clone(),
+            #[cfg(feature = "postgres")]
             postgres.clone(),
             first_event.indexer_name.clone(),
             reorg_coordinator,
+            #[cfg(feature = "clickhouse")]
             clickhouse.clone(),
             trace_registry.clone(),
         ));
@@ -726,8 +734,8 @@ fn build_derived_tables_for_event(
 async fn start_indexing_contract_events(
     manifest: &Manifest,
     project_path: &Path,
-    postgres: Option<Arc<PostgresClient>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    #[cfg(feature = "postgres")] postgres: Option<Arc<PostgresClient>>,
+    #[cfg(feature = "clickhouse")] clickhouse: Option<Arc<ClickhouseClient>>,
     indexer: &Indexer,
     registry: Arc<EventCallbackRegistry>,
     trace_registry: Arc<TraceCallbackRegistry>,
@@ -767,7 +775,9 @@ async fn start_indexing_contract_events(
             let event = event.clone();
             let network_contract = network_contract.clone();
             let project_path = project_path.to_path_buf();
+            #[cfg(feature = "postgres")]
             let postgres = postgres.clone();
+            #[cfg(feature = "clickhouse")]
             let clickhouse = clickhouse.clone();
             let manifest_csv_details = manifest.storage.csv.clone();
             let registry = Arc::clone(&registry);
@@ -777,7 +787,9 @@ async fn start_indexing_contract_events(
             block_tasks.push(async move {
                 let config = SyncConfig {
                     project_path: &project_path,
+                    #[cfg(feature = "postgres")]
                     postgres: &postgres,
+                    #[cfg(feature = "clickhouse")]
                     clickhouse: &clickhouse,
                     csv_details: &manifest_csv_details,
                     contract_csv_enabled: manifest.contract_csv_enabled(&event.contract.name),
@@ -806,8 +818,6 @@ async fn start_indexing_contract_events(
                         stream_details,
                         blocks,
                         project_path,
-                        postgres,
-                        clickhouse,
                         manifest_csv_details,
                         registry,
                         progress,
@@ -932,8 +942,12 @@ async fn start_indexing_contract_events(
     }
 
     // Shared persistence per invocation (shared across all coordinators)
-    let reorg_persistence =
-        Arc::new(ReorgBlockHashPersistence::new(postgres.clone(), clickhouse.clone()));
+    let reorg_persistence = Arc::new(ReorgBlockHashPersistence::new(
+        #[cfg(feature = "postgres")]
+        postgres.clone(),
+        #[cfg(feature = "clickhouse")]
+        clickhouse.clone(),
+    ));
 
     // Build one ReorgCoordinator per network (shared across all events on that network).
     // The first non-blocking event on each network takes ownership; subsequent events get None.
@@ -1013,7 +1027,9 @@ async fn start_indexing_contract_events(
                         startup_task.detection_point.saturating_sub(startup_task.fork_point) + 1,
                     );
                     let reorg_ctx = ReorgContext {
+                        #[cfg(feature = "postgres")]
                         postgres: postgres.as_deref(),
+                        #[cfg(feature = "clickhouse")]
                         clickhouse: clickhouse.as_ref(),
                         registry: Some(&registry),
                         trace_registry: Some(&trace_registry),
@@ -1052,8 +1068,6 @@ async fn start_indexing_contract_events(
             stream_details,
             (start_block, end_block, indexing_distance_from_head),
             project_path,
-            postgres,
-            clickhouse,
             manifest_csv_details,
             registry,
             progress,
@@ -1061,6 +1075,10 @@ async fn start_indexing_contract_events(
             dependencies,
         ) = res?;
 
+        #[cfg(feature = "postgres")]
+        let postgres = postgres.clone();
+        #[cfg(feature = "clickhouse")]
+        let clickhouse = clickhouse.clone();
         processed_network_contracts.push(ProcessedNetworkContract {
             id: network_contract.id.clone(),
             processed_up_to: end_block,
@@ -1109,7 +1127,9 @@ async fn start_indexing_contract_events(
                     end_block,
                     registry: Arc::clone(&registry),
                     progress: Arc::clone(&progress),
+                    #[cfg(feature = "clickhouse")]
                     clickhouse: clickhouse.clone(),
+                    #[cfg(feature = "postgres")]
                     postgres: postgres.clone(),
                     config: manifest.config.clone(),
                     csv_details: manifest_csv_details.clone(),
@@ -1149,7 +1169,9 @@ async fn start_indexing_contract_events(
                 end_block,
                 registry: Arc::clone(&registry),
                 progress: Arc::clone(&progress),
+                #[cfg(feature = "postgres")]
                 postgres: postgres.clone(),
+                #[cfg(feature = "clickhouse")]
                 clickhouse: clickhouse.clone(),
                 csv_details: manifest_csv_details.clone(),
                 config: manifest.config.clone(),
@@ -1324,7 +1346,9 @@ async fn start_indexing_contract_events(
                                 startup_task.detection_point.saturating_sub(startup_task.fork_point) + 1,
                             );
                             let reorg_ctx = ReorgContext {
+                                #[cfg(feature = "postgres")]
                                 postgres: postgres.as_deref(),
+                                #[cfg(feature = "clickhouse")]
                                 clickhouse: clickhouse.as_ref(),
                                 registry: Some(&registry),
                                 trace_registry: Some(&trace_registry),
@@ -1448,7 +1472,9 @@ async fn start_indexing(
     cancel_token: CancellationToken,
     progress: Arc<IndexingEventsProgressState>,
 ) -> Result<Vec<ProcessedNetworkContract>, StartIndexingError> {
+    #[cfg(feature = "postgres")]
     let database = initialize_database(manifest).await?;
+    #[cfg(feature = "clickhouse")]
     let clickhouse = initialize_clickhouse(manifest).await?;
 
     // any events which are non-blocking and can be fired in parallel
@@ -1463,7 +1489,9 @@ async fn start_indexing(
     let contract_events_indexer = start_indexing_contract_events(
         manifest,
         project_path,
+        #[cfg(feature = "postgres")]
         database.clone(),
+        #[cfg(feature = "clickhouse")]
         clickhouse.clone(),
         &indexer,
         registry.clone(),
@@ -1499,7 +1527,9 @@ async fn start_indexing(
     let trace_indexer_handles = start_indexing_traces(
         manifest,
         project_path,
+        #[cfg(feature = "postgres")]
         database.clone(),
+        #[cfg(feature = "clickhouse")]
         clickhouse.clone(),
         &indexer,
         trace_registry.clone(),
@@ -1559,6 +1589,7 @@ async fn start_indexing(
     Ok(processed_network_contracts)
 }
 
+#[cfg(feature = "postgres")]
 pub async fn initialize_database(
     manifest: &Manifest,
 ) -> Result<Option<Arc<PostgresClient>>, StartIndexingError> {
@@ -1575,6 +1606,7 @@ pub async fn initialize_database(
     }
 }
 
+#[cfg(feature = "clickhouse")]
 pub async fn initialize_clickhouse(
     manifest: &Manifest,
 ) -> Result<Option<Arc<ClickhouseClient>>, StartIndexingError> {
@@ -1742,7 +1774,9 @@ contracts:
     fn empty_sync_config() -> SyncConfig<'static> {
         SyncConfig {
             project_path: Path::new("/tmp/test"),
+            #[cfg(feature = "postgres")]
             postgres: &None,
+            #[cfg(feature = "clickhouse")]
             clickhouse: &None,
             csv_details: &None,
             stream_details: &None,

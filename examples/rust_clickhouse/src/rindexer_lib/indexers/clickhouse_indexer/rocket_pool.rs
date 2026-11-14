@@ -8,8 +8,8 @@ use super::super::super::typings::clickhouse_indexer::events::rocket_pool::{
 };
 use alloy::primitives::{I256, U64, U256};
 use rindexer::{
-    EthereumSqlTypeWrapper, PgType, event::callback_registry::EventCallbackRegistry,
-    rindexer_error, rindexer_info,
+    EthereumSqlTypeWrapper, event::callback_registry::EventCallbackRegistry, rindexer_error,
+    rindexer_info,
 };
 use std::path::PathBuf;
 use std::sync::Arc;

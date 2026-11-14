@@ -29,37 +29,41 @@
 //! cargo nextest run -p rindexer tables_atomic_tests
 //! ```
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
-
-use alloy::dyn_abi::DynSolValue;
-use alloy::primitives::{Address, B256, U256};
-use testcontainers::runners::AsyncRunner;
-use testcontainers::ContainerAsync;
-use testcontainers_modules::postgres::Postgres;
-use tokio_postgres::Transaction as PgTransaction;
-
 use super::tables::{
     apply_table_operations, prepare_table_operations, process_table_operations, PreparedTableOps,
     TableRuntime, TxMetadata,
 };
-use crate::database::generate::generate_indexer_contract_schema_name;
-use crate::database::postgres::client::{
-    BulkCursorUpdate, CursorAdvance, PostgresClient, TEST_DATABASE_URL_LOCK,
+#[cfg(feature = "postgres")]
+use crate::database::postgres::{
+    client::{BulkCursorUpdate, CursorAdvance, PostgresClient, TEST_DATABASE_URL_LOCK},
+    write_mode::PgWriteMode,
 };
-use crate::database::postgres::generate::{
-    generate_derived_op_log_table_sql, generate_internal_event_table_name,
+use crate::{
+    database::{
+        generate::generate_indexer_contract_schema_name,
+        postgres::generate::{
+            generate_derived_op_log_table_sql, generate_internal_event_table_name,
+        },
+        sql_type_wrapper::EthereumSqlTypeWrapper,
+    },
+    manifest::{
+        contract::{injected_columns, Table},
+        core::Constants,
+    },
+    metrics::{database::record_atomic_batch, definitions::ATOMIC_BATCHES_TOTAL},
+    provider::ChainProvider,
+    system_state::{_test_reset_shutdown_flag, initiate_shutdown, is_running},
+    types::core::LogParam,
 };
-use crate::database::postgres::write_mode::PgWriteMode;
-use crate::database::sql_type_wrapper::EthereumSqlTypeWrapper;
-use crate::manifest::contract::{injected_columns, Table};
-use crate::manifest::core::Constants;
-use crate::metrics::database::record_atomic_batch;
-use crate::metrics::definitions::ATOMIC_BATCHES_TOTAL;
-use crate::provider::ChainProvider;
-use crate::system_state::{_test_reset_shutdown_flag, initiate_shutdown, is_running};
-use crate::types::core::LogParam;
+use alloy::{
+    dyn_abi::DynSolValue,
+    primitives::{Address, B256, U256},
+};
+use std::{collections::HashMap, sync::Arc, time::Duration};
+use testcontainers::{runners::AsyncRunner, ContainerAsync};
+use testcontainers_modules::postgres::Postgres;
+#[cfg(feature = "postgres")]
+use tokio_postgres::Transaction as PgTransaction;
 
 const NETWORK: &str = "ethereum";
 const INDEXER: &str = "atomic_tests";
@@ -500,13 +504,21 @@ async fn prepare<'t>(
 /// Everything the arm stages between BEGIN and COMMIT: table operations with their
 /// journal savepoints, then the raw rows and the cursor.
 async fn stage_in_tx(
-    tx: &PgTransaction<'_>,
+    #[cfg(feature = "postgres")] tx: &PgTransaction<'_>,
     prepared: &PreparedTableOps<'_>,
     events: &[EventData],
     raw_table: &str,
     cursor: &BulkCursorUpdate,
 ) -> Result<CursorAdvance, String> {
-    apply_table_operations(prepared, Some(PgWriteMode::Tx(tx)), None, None).await?;
+    apply_table_operations(
+        prepared,
+        #[cfg(feature = "postgres")]
+        Some(PgWriteMode::Tx(tx)),
+        #[cfg(feature = "clickhouse")]
+        None,
+        None,
+    )
+    .await?;
     PostgresClient::insert_bulk_with_cursor_in(
         tx,
         raw_table,
@@ -521,7 +533,7 @@ async fn stage_in_tx(
 /// stage, COMMIT on success or drop (ROLLBACK) on failure, and records the outcome in
 /// `rindexer_atomic_batches_total` exactly once per batch.
 async fn run_atomic_batch(
-    client: &PostgresClient,
+    #[cfg(feature = "postgres")] client: &PostgresClient,
     tables: &[TableRuntime],
     event_name: &str,
     events: &[EventData],
@@ -533,7 +545,16 @@ async fn run_atomic_batch(
     let mut conn = client.raw_connection().await.map_err(|e| e.to_string())?;
     let tx = conn.transaction().await.map_err(|e| e.to_string())?;
 
-    let outcome = match stage_in_tx(&tx, &prepared, events, raw_table, cursor).await {
+    let outcome = match stage_in_tx(
+        #[cfg(feature = "postgres")]
+        &tx,
+        &prepared,
+        events,
+        raw_table,
+        cursor,
+    )
+    .await
+    {
         Ok(advance) => tx.commit().await.map(|()| advance).map_err(|e| e.to_string()),
         Err(e) => {
             drop(tx);
@@ -599,6 +620,7 @@ impl Drop for ShutdownFlagReset {
 /// seeded cursor row in `rindexer_internal` and the reorg journal.
 struct Harness {
     _container: ContainerAsync<Postgres>,
+    #[cfg(feature = "postgres")]
     client: Arc<PostgresClient>,
     contract: String,
     schema: String,
@@ -691,6 +713,7 @@ impl Harness {
         events: &[EventData],
     ) -> Result<CursorAdvance, String> {
         run_atomic_batch(
+            #[cfg(feature = "postgres")]
             &self.client,
             tables,
             event_name,
@@ -712,10 +735,16 @@ impl Harness {
         let prepared = prepare(tables, event_name, events).await.expect("prepare must succeed");
         let mut conn = self.client.raw_connection().await.expect("pool checkout failed");
         let tx = conn.transaction().await.expect("BEGIN failed");
-        let advance =
-            stage_in_tx(&tx, &prepared, events, &self.raw_table, &self.cursor(to_block(events)))
-                .await
-                .expect("every statement must succeed before the simulated crash");
+        let advance = stage_in_tx(
+            #[cfg(feature = "postgres")]
+            &tx,
+            &prepared,
+            events,
+            &self.raw_table,
+            &self.cursor(to_block(events)),
+        )
+        .await
+        .expect("every statement must succeed before the simulated crash");
         assert!(
             matches!(advance, CursorAdvance::Advanced { .. }),
             "the cursor UPDATE must have matched before the crash, got {advance:?}"
@@ -1097,6 +1126,7 @@ async fn shutdown_flag_blocks_prepare_and_apply_tx_has_no_check() {
     let mut conn = harness.client.raw_connection().await.expect("pool checkout failed");
     let tx = conn.transaction().await.expect("BEGIN failed");
     let advance = stage_in_tx(
+        #[cfg(feature = "postgres")]
         &tx,
         &prepared,
         &events,
@@ -1348,7 +1378,9 @@ async fn legacy_eager_path_matches_atomic_balances() {
         std::slice::from_ref(&eager),
         "Transfer",
         &events,
+        #[cfg(feature = "postgres")]
         Some(harness.client.clone()),
+        #[cfg(feature = "clickhouse")]
         None,
         providers,
         &Constants::new(),

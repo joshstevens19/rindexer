@@ -96,6 +96,7 @@ fn assert_reorg_envelope(payload: &Value) {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[cfg(feature = "redis")]
 async fn stream_reorg_reaches_redis() {
     use bb8_redis::redis::{cmd, AsyncCommands, Value as RedisValue};
     use testcontainers::runners::AsyncRunner;
@@ -177,6 +178,7 @@ async fn stream_reorg_reaches_redis() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[cfg(feature = "rabbitmq")]
 async fn stream_reorg_reaches_rabbitmq() {
     use futures::StreamExt;
     use lapin::{

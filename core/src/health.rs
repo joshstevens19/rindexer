@@ -1,17 +1,18 @@
-use std::{net::SocketAddr, sync::Arc};
-
-use axum::{extract::State, http::StatusCode, response::Json, routing::get, Router};
-use serde::{Deserialize, Serialize};
-use tokio::net::TcpListener;
-use tracing::{error, info};
-
+#[cfg(feature = "postgres")]
+use crate::database::postgres::client::PostgresClient;
 use crate::{
-    database::postgres::client::PostgresClient,
     indexer::task_tracker::active_indexing_count,
     manifest::core::Manifest,
     metrics::metrics_handler,
     system_state::{get_reload_state, is_running, ReloadState},
 };
+use axum::{extract::State, http::StatusCode, response::Json, routing::get, Router};
+use serde::{Deserialize, Serialize};
+use std::{net::SocketAddr, sync::Arc};
+use tokio::net::TcpListener;
+#[cfg(feature = "postgres")]
+use tracing::error;
+use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthStatus {
@@ -50,6 +51,7 @@ pub enum HealthStatusType {
 #[derive(Clone)]
 pub struct HealthServerState {
     pub manifest: Arc<Manifest>,
+    #[cfg(feature = "postgres")]
     pub postgres_client: Option<Arc<PostgresClient>>,
 }
 
@@ -62,9 +64,16 @@ impl HealthServer {
     pub fn new(
         port: u16,
         manifest: Arc<Manifest>,
-        postgres_client: Option<Arc<PostgresClient>>,
+        #[cfg(feature = "postgres")] postgres_client: Option<Arc<PostgresClient>>,
     ) -> Self {
-        Self { port, state: HealthServerState { manifest, postgres_client } }
+        Self {
+            port,
+            state: HealthServerState {
+                manifest,
+                #[cfg(feature = "postgres")]
+                postgres_client,
+            },
+        }
     }
 
     pub async fn start(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -126,6 +135,7 @@ fn build_health_status(
     }
 }
 
+#[cfg(feature = "postgres")]
 async fn check_database_health(state: &HealthServerState) -> HealthStatusType {
     if !state.manifest.storage.postgres_enabled() {
         return HealthStatusType::Disabled;
@@ -143,6 +153,11 @@ async fn check_database_health(state: &HealthServerState) -> HealthStatusType {
     }
 }
 
+#[cfg(not(feature = "postgres"))]
+async fn check_database_health(_state: &HealthServerState) -> HealthStatusType {
+    HealthStatusType::Disabled
+}
+
 fn check_indexing_health() -> HealthStatusType {
     if matches!(get_reload_state(), ReloadState::Reloading) {
         return HealthStatusType::Reloading;
@@ -155,15 +170,18 @@ fn check_indexing_health() -> HealthStatusType {
 }
 
 async fn check_sync_health(state: &HealthServerState) -> HealthStatusType {
+    #[cfg(feature = "postgres")]
     if state.manifest.storage.postgres_enabled() {
-        check_postgres_sync_health(state).await
-    } else if state.manifest.storage.csv_enabled() {
+        return check_postgres_sync_health(state).await;
+    }
+    if state.manifest.storage.csv_enabled() {
         check_csv_sync_health(state)
     } else {
         HealthStatusType::Disabled
     }
 }
 
+#[cfg(feature = "postgres")]
 async fn check_postgres_sync_health(state: &HealthServerState) -> HealthStatusType {
     match &state.postgres_client {
         Some(client) => {
@@ -232,8 +250,13 @@ fn determine_overall_status(
 pub async fn start_health_server(
     port: u16,
     manifest: Arc<Manifest>,
-    postgres_client: Option<Arc<PostgresClient>>,
+    #[cfg(feature = "postgres")] postgres_client: Option<Arc<PostgresClient>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let health_server = HealthServer::new(port, manifest, postgres_client);
+    let health_server = HealthServer::new(
+        port,
+        manifest,
+        #[cfg(feature = "postgres")]
+        postgres_client,
+    );
     health_server.start().await
 }
