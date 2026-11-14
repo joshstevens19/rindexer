@@ -3511,7 +3511,7 @@ dependencies = [
 
 [[package]]
 name = "clickhouse_factory_indexing"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "alloy",
  "rindexer",
@@ -4663,7 +4663,7 @@ dependencies = [
 
 [[package]]
 name = "e2e-tests"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -13150,7 +13150,7 @@ dependencies = [
 
 [[package]]
 name = "rindexer"
-version = "0.43.4"
+version = "1.0.0"
 dependencies = [
  "alloy",
  "alloy-chains",
@@ -13200,6 +13200,7 @@ dependencies = [
  "reth-tracing",
  "rust_decimal",
  "rustls 0.23.40",
+ "rustls-native-certs",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -13213,6 +13214,7 @@ dependencies = [
  "tikv-jemallocator",
  "tokio",
  "tokio-postgres",
+ "tokio-postgres-rustls",
  "tokio-stream",
  "tokio-util",
  "tower",
@@ -13220,13 +13222,14 @@ dependencies = [
  "tracing-subscriber 0.3.23",
  "url",
  "uuid 1.23.1",
+ "webpki-roots 1.0.7",
  "winnow 1.0.2",
  "zstd 0.13.3",
 ]
 
 [[package]]
 name = "rindexer_cli"
-version = "0.43.4"
+version = "1.0.0"
 dependencies = [
  "alloy",
  "alloy-chains",
@@ -13246,7 +13249,7 @@ dependencies = [
 
 [[package]]
 name = "rindexer_factory_contract"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "alloy",
  "rindexer",
@@ -13255,7 +13258,7 @@ dependencies = [
 
 [[package]]
 name = "rindexer_rust_playground"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "alloy",
  "rindexer",
@@ -13466,7 +13469,7 @@ dependencies = [
 
 [[package]]
 name = "rust_clickhouse"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "alloy",
  "rindexer",
@@ -15394,6 +15397,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
+name = "tls_codec"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0de2e01245e2bb89d6f05801c564fa27624dbd7b1846859876c7dad82e90bf6b"
+dependencies = [
+ "tls_codec_derive",
+ "zeroize",
+]
+
+[[package]]
+name = "tls_codec_derive"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d2e76690929402faae40aebdda620a2c0e25dd6d3b9afe48867dfd95991f4bd"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "tokio"
 version = "1.52.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -15466,6 +15490,21 @@ dependencies = [
  "tokio",
  "tokio-util",
  "whoami",
+]
+
+[[package]]
+name = "tokio-postgres-rustls"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "27d684bad428a0f2481f42241f821db42c54e2dc81d8c00db8536c506b0a0144"
+dependencies = [
+ "const-oid 0.9.6",
+ "ring 0.17.14",
+ "rustls 0.23.40",
+ "tokio",
+ "tokio-postgres",
+ "tokio-rustls 0.26.4",
+ "x509-cert",
 ]
 
 [[package]]
@@ -17446,6 +17485,7 @@ dependencies = [
  "const-oid 0.9.6",
  "der",
  "spki",
+ "tls_codec",
 ]
 
 [[package]]
@@ -17489,7 +17529,7 @@ checksum = "0637d3a5566a82fa5214bae89087bc8c9fb94cd8e8a3c07feb691bb8d9c632db"
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "clap",
