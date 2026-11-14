@@ -596,6 +596,28 @@ mod tests {
         );
     }
 
+    /// A user manifest may set only `empty_retry_deadline_ms: 1500`.
+    /// That value is a YAML integer. `enabled` and `cache_blocks` stay at their defaults.
+    #[test]
+    fn shared_tip_logs_integer_deadline_keeps_other_defaults() {
+        let network: Network = serde_yaml::from_str(
+            r#"
+            name: ethereum
+            chain_id: 1
+            rpc: https://mainnet.gateway.tenderly.co
+            shared_tip_logs:
+                empty_retry_deadline_ms: 1500
+            "#,
+        )
+        .unwrap();
+
+        let config = network.shared_tip_logs.expect("the stanza is parsed");
+        assert_eq!(
+            config,
+            SharedTipLogsConfig { enabled: true, empty_retry_deadline_ms: 1500, cache_blocks: 32 }
+        );
+    }
+
     #[test]
     fn test_network_block_poll_frequency() {
         let network: Network = serde_yaml::from_str(

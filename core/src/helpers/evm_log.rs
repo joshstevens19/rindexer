@@ -129,11 +129,7 @@ pub fn is_relevant_block(
         }
     }
 
-    if !topic_in_bloom(*topic_id, logs_bloom) {
-        return false;
-    }
-
-    true
+    topic_in_bloom(*topic_id, logs_bloom)
 }
 
 /// Take either the halved block range, or 2 blocks from the current. This is to prevent possible
