@@ -318,7 +318,8 @@ pub fn fetch_logs_stream(
                 current_filter = result.next;
                 max_block_range_limitation = new_max_block_range_limitation;
             } else {
-                break;
+                // A terminal historic error must not hand the unresolved range to live indexing.
+                return;
             }
         }
 
@@ -446,15 +447,30 @@ async fn fetch_historic_logs_stream<P: ChainProvider>(
             }
 
             if timestamps {
-                if let Ok(logs) = block_clock.attach_log_timestamps(logs).await {
-                    sender.send(Ok(FetchLogsResult { logs, from_block, to_block, reorg: None }));
-                } else {
-                    return Some(ProcessHistoricLogsStreamResult {
-                        next: current_filter
-                            .set_from_block(from_block)
-                            .set_to_block(halved_block_number(to_block, from_block)),
-                        max_block_range_limitation,
-                    });
+                match block_clock.attach_log_timestamps(logs).await {
+                    Ok(logs) => {
+                        sender.send(Ok(FetchLogsResult {
+                            logs,
+                            from_block,
+                            to_block,
+                            reorg: None,
+                        }));
+                    }
+                    Err(error) => {
+                        let halved_to_block = halved_block_number(to_block, from_block);
+                        if halved_to_block >= to_block && error.is_missing_block_in_range() {
+                            sender.send(Err(Box::new(error)));
+                            return None;
+                        }
+                        // Provider failures may be transient even when the range cannot shrink.
+                        // Return that range for another fetch instead of dropping its logs.
+                        return Some(ProcessHistoricLogsStreamResult {
+                            next: current_filter
+                                .set_from_block(from_block)
+                                .set_to_block(halved_to_block),
+                            max_block_range_limitation,
+                        });
+                    }
                 }
             } else {
                 sender.send(Ok(FetchLogsResult { logs, from_block, to_block, reorg: None }));
@@ -2136,26 +2152,32 @@ fn calculate_process_historic_log_to_block(
 mod tests {
     use super::*;
     use crate::blockclock::BlockClock;
-    use crate::event::contract_setup::AddressDetails;
+    use crate::event::callback_registry::EventCallbackRegistry;
+    use crate::event::config::{ContractEventProcessingConfig, EventProcessingConfig};
+    use crate::event::contract_setup::{AddressDetails, IndexingContractSetup, NetworkContract};
     use crate::event::RindexerEventFilter;
     use crate::indexer::tip_logs::{
         BlockLinks, BlockLogsSource, FallbackReason, SharedTipLogsSettings,
     };
+    use crate::indexer::IndexingEventsProgressState;
+    use crate::manifest::config::Config;
+    use crate::manifest::network::AddressFiltering;
     use crate::metrics::definitions::{
         SHARED_TIP_LOGS_BLOCKS_TOTAL, SHARED_TIP_LOGS_FALLBACKS_TOTAL, SHARED_TIP_LOGS_SERVED_TOTAL,
     };
     use crate::provider::mock::MockChainProvider;
-    use crate::provider::ChainProvider;
+    use crate::provider::{ChainProvider, JsonRpcCachedProvider};
     use alloy::network::{AnyHeader, AnyRpcBlock, AnyRpcHeader, AnyTransactionReceipt};
     use alloy::primitives::Log as PrimitiveLog;
     use alloy::primitives::{Address, Bloom, Bytes, LogData, TxHash};
     use alloy::rpc::types::trace::parity::LocalizedTransactionTrace;
-    use alloy::rpc::types::Log;
-    use alloy::rpc::types::{BlockTransactions, ValueOrArray};
+    use alloy::rpc::types::{BlockTransactions, Log, ValueOrArray};
+    use futures::StreamExt;
     use prometheus::CounterVec;
     use std::collections::{HashMap, VecDeque};
+    use std::path::PathBuf;
     use std::sync::{Arc, Mutex as StdMutex};
-    use tokio::sync::mpsc;
+    use tokio::sync::{mpsc, Notify};
     use tokio_util::sync::CancellationToken;
     use tracing_subscriber::fmt::MakeWriter;
 
@@ -2168,11 +2190,13 @@ mod tests {
         queried_ranges: Arc<StdMutex<Vec<(u64, u64)>>>,
         cancel_token: CancellationToken,
         fail_first_logs_request: bool,
+        fail_first_block_batch: bool,
         cancel_after_requests: usize,
         request_count: AtomicUsize,
         // Head polls answered before `get_latest_block` fails and cancels; `None` never fails.
         head_polls_before_failure: Option<usize>,
         head_polls: AtomicUsize,
+        block_batch_count: Arc<AtomicUsize>,
     }
 
     impl RecordingLiveProvider {
@@ -2186,10 +2210,12 @@ mod tests {
                 queried_ranges,
                 cancel_token,
                 fail_first_logs_request: false,
+                fail_first_block_batch: false,
                 cancel_after_requests: 1,
                 request_count: AtomicUsize::new(0),
                 head_polls_before_failure: None,
                 head_polls: AtomicUsize::new(0),
+                block_batch_count: Arc::new(AtomicUsize::new(0)),
             }
         }
 
@@ -2277,6 +2303,12 @@ mod tests {
             block_numbers: &[U64],
             include_txs: bool,
         ) -> Result<Vec<AnyRpcBlock>, ProviderError> {
+            let block_call = self.block_batch_count.fetch_add(1, Ordering::SeqCst);
+            if self.fail_first_block_batch && block_call == 0 {
+                return Err(ProviderError::CustomError(
+                    "transient timestamp block RPC failure".to_string(),
+                ));
+            }
             self.inner.get_block_by_number_batch(block_numbers, include_txs).await
         }
 
@@ -2393,6 +2425,134 @@ mod tests {
         }
     }
 
+    fn make_log_at_block_with_index(block_number: u64, log_index: u64) -> Log {
+        let mut log = make_log_at_block(block_number);
+        log.log_index = Some(log_index);
+        log
+    }
+
+    fn make_address_filter() -> RindexerEventFilter {
+        RindexerEventFilter::new_address_filter(
+            &B256::ZERO,
+            "TestEvent",
+            &AddressDetails {
+                address: ValueOrArray::Array(vec![
+                    Address::from([1u8; 20]),
+                    Address::from([2u8; 20]),
+                ]),
+                indexed_filters: None,
+            },
+            U64::from(100),
+            U64::from(500),
+        )
+        .unwrap()
+    }
+
+    async fn make_parallel_worker_config(
+        provider: Arc<JsonRpcCachedProvider>,
+    ) -> Arc<EventProcessingConfig> {
+        let network_contract = Arc::new(NetworkContract {
+            id: "test-network-contract".to_string(),
+            network: "test".to_string(),
+            indexing_contract_setup: IndexingContractSetup::Address(AddressDetails {
+                address: ValueOrArray::Array(vec![
+                    Address::from([1u8; 20]),
+                    Address::from([2u8; 20]),
+                ]),
+                indexed_filters: None,
+            }),
+            cached_provider: provider.clone(),
+            block_clock: BlockClock::new(None, None, provider),
+            decoder: Arc::new(|_, _| Arc::new(()) as Arc<dyn std::any::Any + Send + Sync>),
+            start_block: Some(U64::from(100)),
+            end_block: Some(U64::from(500)),
+            disable_logs_bloom_checks: false,
+        });
+
+        Arc::new(EventProcessingConfig::ContractEventProcessing(ContractEventProcessingConfig {
+            id: "test-event".to_string(),
+            project_path: PathBuf::new(),
+            indexer_name: "test-indexer".to_string(),
+            contract_name: "test-contract".to_string(),
+            topic_id: B256::ZERO,
+            event_name: "TestEvent".to_string(),
+            config: Config::default(),
+            network_contract,
+            timestamps: false,
+            start_block: U64::from(100),
+            end_block: U64::from(500),
+            registry: Arc::new(EventCallbackRegistry::new()),
+            progress: IndexingEventsProgressState::monitor(&[], &[], None).await,
+            postgres: None,
+            clickhouse: None,
+            csv_details: None,
+            stream_last_synced_block_file_path: None,
+            index_event_in_order: false,
+            live_indexing: false,
+            indexing_distance_from_head: U64::ZERO,
+            cancel_token: CancellationToken::new(),
+            tables: Arc::new(vec![]),
+            reorg_sender: None,
+            streams_clients: Arc::new(None),
+            contract_abi: None,
+            providers: Arc::new(HashMap::new()),
+            constants: Arc::new(HashMap::new()),
+            multicall_addresses: Arc::new(HashMap::new()),
+        }))
+    }
+
+    async fn make_live_timestamp_config(
+        provider: Arc<dyn ChainProvider>,
+        block_clock_provider: Arc<dyn ChainProvider>,
+        cancel_token: CancellationToken,
+    ) -> Arc<EventProcessingConfig> {
+        let network_contract = Arc::new(NetworkContract {
+            id: "live-timestamp-test-network-contract".to_string(),
+            network: "test".to_string(),
+            indexing_contract_setup: IndexingContractSetup::Address(AddressDetails {
+                address: ValueOrArray::Array(vec![Address::ZERO]),
+                indexed_filters: None,
+            }),
+            cached_provider: provider,
+            block_clock: BlockClock::new(None, None, block_clock_provider),
+            decoder: Arc::new(|_, _| Arc::new(()) as Arc<dyn std::any::Any + Send + Sync>),
+            start_block: Some(U64::from(100)),
+            end_block: Some(U64::from(110)),
+            disable_logs_bloom_checks: false,
+        });
+
+        Arc::new(EventProcessingConfig::ContractEventProcessing(ContractEventProcessingConfig {
+            id: "live-timestamp-test-event".to_string(),
+            project_path: PathBuf::new(),
+            indexer_name: "test-indexer".to_string(),
+            contract_name: "test-contract".to_string(),
+            topic_id: B256::ZERO,
+            event_name: "TestEvent".to_string(),
+            config: Config { buffer: Some(1), ..Config::default() },
+            network_contract,
+            timestamps: true,
+            start_block: U64::from(100),
+            end_block: U64::from(110),
+            registry: Arc::new(EventCallbackRegistry::new()),
+            progress: IndexingEventsProgressState::monitor(&[], &[], None).await,
+            postgres: None,
+            clickhouse: None,
+            csv_details: None,
+            stream_last_synced_block_file_path: None,
+            index_event_in_order: false,
+            live_indexing: true,
+            indexing_distance_from_head: U64::ZERO,
+            cancel_token,
+            tables: Arc::new(vec![]),
+            reorg_sender: None,
+            streams_clients: Arc::new(None),
+            contract_abi: None,
+            providers: Arc::new(HashMap::new()),
+            constants: Arc::new(HashMap::new()),
+            multicall_addresses: Arc::new(HashMap::new()),
+        }))
+    }
+
     fn make_block(number: u64) -> AnyRpcBlock {
         AnyRpcBlock::new(
             alloy::rpc::types::Block::new(
@@ -2455,6 +2615,259 @@ mod tests {
         let result = result.expect("should return next range");
         // Next from_block should be last_log.block_number + 1 = 176
         assert_eq!(result.next.from_block(), U64::from(176));
+    }
+
+    #[tokio::test]
+    async fn historic_address_chunk_merge_advances_past_highest_log() {
+        let (provider, asserter) = JsonRpcCachedProvider::mock_with_asserter_and_address_filtering(
+            1,
+            AddressFiltering::MaxAddressPerGetLogsRequest(1),
+        );
+        asserter.push_success(&vec![
+            make_log_at_block_with_index(100, 0),
+            make_log_at_block_with_index(500, 1),
+        ]);
+        asserter.push_success(&vec![make_log_at_block_with_index(200, 0)]);
+
+        let (tx, mut rx) = mpsc::channel(4);
+        let result = fetch_historic_logs_stream(
+            false,
+            BlockClock::new(None, None, Arc::new(MockChainProvider::new(1))),
+            provider.as_ref(),
+            &tx,
+            &B256::ZERO,
+            make_address_filter(),
+            None,
+            U64::from(500),
+            "test",
+        )
+        .await
+        .expect("historic fetch should return its next filter");
+
+        let fetched = rx
+            .recv()
+            .await
+            .expect("historic fetch should dispatch its result")
+            .expect("historic fetch should dispatch successful logs");
+        let positions = fetched
+            .logs
+            .iter()
+            .map(|log| (log.block_number.unwrap(), log.log_index.unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(positions, vec![(100, 0), (200, 0), (500, 1)]);
+        assert_eq!(result.next.from_block(), U64::from(501));
+    }
+
+    #[tokio::test]
+    async fn parallel_worker_address_chunk_merge_preserves_log_order() {
+        let (provider, asserter) = JsonRpcCachedProvider::mock_with_asserter_and_address_filtering(
+            1,
+            AddressFiltering::MaxAddressPerGetLogsRequest(1),
+        );
+        asserter.push_success(&vec![
+            make_log_at_block_with_index(100, 0),
+            make_log_at_block_with_index(500, 1),
+        ]);
+        asserter.push_success(&vec![make_log_at_block_with_index(200, 0)]);
+
+        let config = make_parallel_worker_config(provider).await;
+        let (tx, mut rx) = mpsc::channel(4);
+        parallel_worker(
+            config,
+            WorkerState {
+                sequence_id: 0,
+                filter: make_address_filter(),
+                max_block_range_limitation: None,
+                original_max_limit: None,
+            },
+            tx,
+            CancellationToken::new(),
+            Arc::new(AdaptiveConcurrency::new(1, 1, 1)),
+            Arc::new(AtomicUsize::new(1)),
+            Arc::new(Notify::new()),
+        )
+        .await;
+
+        let batch = rx.recv().await.expect("parallel worker should send a final batch");
+        assert!(batch.is_final);
+        let fetched = batch
+            .results
+            .into_iter()
+            .next()
+            .expect("parallel worker should return a result")
+            .expect("parallel worker should fetch logs");
+        let positions = fetched
+            .logs
+            .iter()
+            .map(|log| (log.block_number.unwrap(), log.log_index.unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(positions, vec![(100, 0), (200, 0), (500, 1)]);
+    }
+
+    #[tokio::test]
+    async fn historic_timestamp_omissions_retry_then_stop_at_minimum_range() {
+        for omissions in 1..=3 {
+            let mut batches = vec![vec![]; omissions];
+            if omissions < 3 {
+                let mut block = make_block(100);
+                block.header.inner.timestamp = 2000;
+                batches.push(vec![block]);
+            }
+            let mut provider = RecordingLiveProvider::recording(
+                MockChainProvider::new(1)
+                    .with_logs(vec![make_log_at_block(100)])
+                    .with_block_batches(batches),
+            );
+            provider.cancel_after_requests = usize::MAX;
+            let block_batch_count = Arc::clone(&provider.block_batch_count);
+            let cancel_token = provider.cancel_token.clone();
+            let provider = Arc::new(provider);
+            let mut config =
+                make_live_timestamp_config(provider.clone(), provider, cancel_token.clone()).await;
+            if let EventProcessingConfig::ContractEventProcessing(contract_config) =
+                Arc::get_mut(&mut config).unwrap()
+            {
+                contract_config.live_indexing = false;
+                contract_config.end_block = U64::from(100);
+                Arc::get_mut(&mut contract_config.network_contract).unwrap().end_block =
+                    Some(U64::from(100));
+            }
+
+            let started = Instant::now();
+            let mut stream = fetch_logs_stream(config, false, None, None);
+            let first = tokio::time::timeout(Duration::from_secs(2), stream.next())
+                .await
+                .expect("timestamp retries should be bounded")
+                .expect("the historical stream should report its result");
+            if omissions < 3 {
+                let fetched = first.expect("temporary null blocks should be retried");
+                assert_eq!(fetched.logs.len(), 1);
+                assert_eq!(fetched.logs[0].block_number, Some(100));
+                assert_eq!(fetched.logs[0].block_timestamp, Some(2000));
+            } else {
+                let error = first.err().expect("persistent null blocks should end the stream");
+                assert!(error
+                    .downcast_ref::<crate::blockclock::BlockClockError>()
+                    .is_some_and(|error| error.is_missing_block_in_range()));
+            }
+            let attempts = (omissions + 1).min(3);
+            assert_eq!(block_batch_count.load(Ordering::SeqCst), attempts);
+            assert!(started.elapsed() >= Duration::from_millis(100 * (attempts - 1) as u64));
+            assert!(matches!(
+                tokio::time::timeout(Duration::from_secs(2), stream.next()).await,
+                Ok(None)
+            ));
+            cancel_token.cancel();
+        }
+    }
+
+    #[tokio::test]
+    async fn historic_timestamp_failure_stops_before_live_handoff() {
+        let queried_ranges = Arc::new(StdMutex::new(Vec::new()));
+        let cancel_token = CancellationToken::new();
+        let mut cached_provider = RecordingLiveProvider::new(
+            MockChainProvider::new(1)
+                .with_logs(vec![make_log_at_block(100)])
+                .with_blocks(vec![make_block(111)]),
+            queried_ranges.clone(),
+            cancel_token.clone(),
+        );
+        cached_provider.cancel_after_requests = usize::MAX;
+        let cached_provider: Arc<dyn ChainProvider> = Arc::new(cached_provider);
+        let config = make_live_timestamp_config(
+            cached_provider,
+            Arc::new(MockChainProvider::new(1)),
+            cancel_token.clone(),
+        )
+        .await;
+        let mut stream = fetch_logs_stream(config, false, None, None);
+
+        let first = tokio::time::timeout(Duration::from_secs(2), stream.next()).await;
+        let error_message = match first {
+            Ok(Some(Err(error))) => Some(error.to_string()),
+            _ => None,
+        };
+        let second = tokio::time::timeout(Duration::from_millis(250), stream.next()).await;
+        let second_is_eof = matches!(second, Ok(None));
+        let queried_ranges = queried_ranges.lock().unwrap().clone();
+        let was_cancelled = cancel_token.is_cancelled();
+        cancel_token.cancel();
+
+        assert!(
+            error_message.as_deref().is_some_and(|message| message.contains("missing block 100")),
+            "the terminal historical timestamp error should be reported: {error_message:?}"
+        );
+        assert!(second_is_eof, "a failed historical range must not start a live fetch");
+        assert!(!was_cancelled, "the test must not cancel the producer before its live handoff");
+        assert_eq!(
+            queried_ranges,
+            vec![(100, 110), (100, 105), (100, 102)],
+            "timestamp retry should shrink until the minimum range, then stop"
+        );
+    }
+
+    #[tokio::test]
+    async fn historic_timestamp_provider_error_retries_at_minimum_range() {
+        let queried_ranges = Arc::new(StdMutex::new(Vec::new()));
+        let cancel_token = CancellationToken::new();
+        let mut provider = RecordingLiveProvider::new(
+            MockChainProvider::new(1)
+                .with_logs(vec![make_log_at_block(100)])
+                .with_blocks(vec![make_block(100)]),
+            queried_ranges.clone(),
+            cancel_token.clone(),
+        );
+        provider.fail_first_block_batch = true;
+        provider.cancel_after_requests = usize::MAX;
+        let block_batch_count = Arc::clone(&provider.block_batch_count);
+        let provider = Arc::new(provider);
+        let block_clock = BlockClock::new(None, Some(1.0), provider.clone());
+        let (tx, mut rx) = mpsc::channel(4);
+        let filter = RindexerEventFilter::empty_for_test()
+            .set_from_block(U64::from(100))
+            .set_to_block(U64::from(102));
+
+        let first = fetch_historic_logs_stream(
+            true,
+            block_clock.clone(),
+            provider.as_ref(),
+            &tx,
+            &B256::ZERO,
+            filter,
+            None,
+            U64::from(102),
+            "test",
+        )
+        .await
+        .expect("the one-shot block RPC error should leave a retryable range");
+        assert_eq!(first.next.from_block(), U64::from(100));
+        assert_eq!(first.next.to_block(), U64::from(102));
+        assert!(rx.try_recv().is_err(), "the failed timestamp attempt must not dispatch logs");
+
+        let retry = fetch_historic_logs_stream(
+            true,
+            block_clock,
+            provider.as_ref(),
+            &tx,
+            &B256::ZERO,
+            first.next,
+            None,
+            U64::from(102),
+            "test",
+        )
+        .await
+        .expect("the timestamp retry should advance after the provider recovers");
+        let fetched = rx
+            .try_recv()
+            .expect("the successful retry should dispatch its logs")
+            .expect("the retry should dispatch a successful result");
+
+        assert_eq!(fetched.logs.len(), 1);
+        assert_eq!(fetched.logs[0].block_timestamp, Some(0));
+        assert_eq!(retry.next.from_block(), U64::from(101));
+        assert_eq!(block_batch_count.load(Ordering::SeqCst), 2);
+        assert_eq!(queried_ranges.lock().unwrap().as_slice(), &[(100, 102), (100, 102)]);
+        cancel_token.cancel();
     }
 
     #[tokio::test]
