@@ -12,7 +12,9 @@ use crate::rindexer_client::RindexerInstance;
 pub struct RindexerConfig {
     pub name: String,
     pub project_type: String,
+    #[serde(serialize_with = "serialize_manifest_json_value")]
     pub config: serde_json::Value,
+    #[serde(serialize_with = "serialize_manifest_json")]
     pub timestamps: Option<serde_json::Value>,
     pub networks: Vec<NetworkConfig>,
     pub global: GlobalConfig,
@@ -77,13 +79,16 @@ pub struct NativeTransfersConfig {
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub networks: Option<Vec<NativeTransferNetworkDetail>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", serialize_with = "serialize_manifest_json")]
     pub streams: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generate_csv: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none", serialize_with = "serialize_manifest_json")]
     pub reorg_safe_distance: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_manifest_json_list"
+    )]
     pub tables: Option<Vec<serde_json::Value>>,
 }
 
@@ -106,19 +111,22 @@ pub struct ContractConfig {
     #[serde(skip_serializing_if = "Option::is_none", serialize_with = "serialize_manifest_json")]
     pub reorg_safe_distance: Option<serde_json::Value>,
     pub include_events: Option<Vec<EventConfig>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_manifest_json_list"
+    )]
     pub tables: Option<Vec<serde_json::Value>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", serialize_with = "serialize_manifest_json")]
     pub streams: Option<serde_json::Value>,
 }
 
 /// Emit manifest JSON as ordinary YAML scalars and mappings.
 ///
-/// `foundry-compilers` 0.21 enables `serde_json/arbitrary_precision`, and
-/// `cargo build --bin e2e-tests` (how CI builds this harness) feature-unifies that
-/// into this crate. A `serde_json` number then serializes to YAML as a one-field
-/// map, `$serde_json::private::Number`, which the manifest rejects for `u64`
-/// fields such as `networks[].shared_tip_logs.empty_retry_deadline_ms`.
+/// This crate enables `serde_json/arbitrary_precision`, so a number does not
+/// depend on workspace feature unification. With that feature, `serde_json`
+/// writes a number to YAML as a one-field map, `$serde_json::private::Number`,
+/// and the manifest rejects that map for a `u64`. Every `serde_json::Value` the
+/// harness writes into the manifest goes through here.
 fn serialize_manifest_json<S>(
     value: &Option<serde_json::Value>,
     serializer: S,
@@ -128,7 +136,37 @@ where
 {
     match value {
         None => serializer.serialize_none(),
-        Some(value) => serde::Serialize::serialize(&YamlJson(value), serializer),
+        Some(value) => serialize_manifest_json_value(value, serializer),
+    }
+}
+
+fn serialize_manifest_json_value<S>(
+    value: &serde_json::Value,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serde::Serialize::serialize(&YamlJson(value), serializer)
+}
+
+fn serialize_manifest_json_list<S>(
+    values: &Option<Vec<serde_json::Value>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match values {
+        None => serializer.serialize_none(),
+        Some(values) => {
+            use serde::ser::SerializeSeq;
+            let mut seq = serializer.serialize_seq(Some(values.len()))?;
+            for value in values {
+                seq.serialize_element(&YamlJson(value))?;
+            }
+            seq.end()
+        }
     }
 }
 
@@ -459,5 +497,74 @@ mod tests {
         assert!(!yaml.contains("$serde_json::private::Number"), "{yaml}");
         let parsed: ParsedDistance = serde_yaml::from_str(&yaml).expect("parse distance yaml");
         assert_eq!(parsed.reorg_safe_distance, 2);
+
+        let native = NativeTransfersConfig {
+            streams: Some(serde_json::json!({ "batch_size": 25 })),
+            tables: Some(vec![serde_json::json!({ "name": "balances", "page_size": 50 })]),
+            ..NativeTransfersConfig::default()
+        };
+        let contract = ContractConfig {
+            name: "SimpleERC20".to_string(),
+            details: vec![],
+            abi: None,
+            reorg_safe_distance: None,
+            include_events: None,
+            tables: None,
+            streams: Some(serde_json::json!({
+                "webhooks": [{ "endpoint": "http://127.0.0.1:9/hook", "retry_count": 3 }]
+            })),
+        };
+        let yaml = serde_yaml::to_string(&ManifestPieces { native, contract }).expect("pieces");
+        assert!(
+            !yaml.contains("$serde_json::private::Number"),
+            "nested manifest numbers must stay YAML scalars:\n{yaml}"
+        );
+        let parsed: ParsedPieces = serde_yaml::from_str(&yaml).expect("parse pieces");
+        assert_eq!(parsed.native.streams.batch_size, 25);
+        assert_eq!(parsed.native.tables[0].page_size, 50);
+        assert_eq!(parsed.contract.streams.webhooks[0].retry_count, 3);
+    }
+
+    #[derive(serde::Serialize)]
+    struct ManifestPieces {
+        native: NativeTransfersConfig,
+        contract: ContractConfig,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ParsedPieces {
+        native: ParsedNative,
+        contract: ParsedContract,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ParsedNative {
+        streams: ParsedBatch,
+        tables: Vec<ParsedPage>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ParsedBatch {
+        batch_size: u64,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ParsedPage {
+        page_size: u64,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ParsedContract {
+        streams: ParsedStreams,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ParsedStreams {
+        webhooks: Vec<ParsedWebhook>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ParsedWebhook {
+        retry_count: u64,
     }
 }

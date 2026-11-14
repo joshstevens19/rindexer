@@ -594,7 +594,12 @@ mod tests {
             config,
             SharedTipLogsConfig { enabled: false, empty_retry_deadline_ms: 7000, cache_blocks: 32 }
         );
+    }
 
+    /// A user manifest may set only `empty_retry_deadline_ms: 1500`.
+    /// That value is a YAML integer. `enabled` and `cache_blocks` stay at their defaults.
+    #[test]
+    fn shared_tip_logs_integer_deadline_keeps_other_defaults() {
         let network: Network = serde_yaml::from_str(
             r#"
             name: ethereum
