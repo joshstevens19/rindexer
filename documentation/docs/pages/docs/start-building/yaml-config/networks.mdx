@@ -382,6 +382,12 @@ networks:
   with a warning naming it, and every stream fetches it once on its own.
 - `cache_blocks` (default `32`): recent tip blocks kept resident per network.
 
+A load-balanced RPC can report a head that jumps from block N to N+2, so N+1 is never polled as head. When at most 8
+blocks were skipped (fewer when `cache_blocks` is below 10) and the block below them is cached, they are read the same way: their headers by hash
+(`eth_getBlockByHash`, for the parent link and the bloom), then their logs with the same empty-answer re-ask, and the
+streams wait for them instead of fetching them on their own. A longer run leaves those blocks to the streams' own
+`eth_getLogs`, counted as `served_total{mode="prefix_rpc_plus_tip"}`.
+
 On a network with `disable_logs_bloom_checks: true` no header bloom is trusted: every tip block is fetched, and an
 empty answer is accepted without retry. The shared read still removes the per-stream tip calls there, but it
 cannot tell an empty block from an upstream that has not indexed it yet.

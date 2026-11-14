@@ -8,7 +8,7 @@ edition = "2021"
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_yaml = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["arbitrary_precision"] }
 reqwest = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }

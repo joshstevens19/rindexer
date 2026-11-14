@@ -61,6 +61,12 @@ pub enum BlockClockError {
     DeltaFileDecoderError(#[from] anyhow::Error),
 }
 
+impl BlockClockError {
+    pub(crate) fn is_missing_block_in_range(&self) -> bool {
+        matches!(self, Self::BlockFetcherError(BlockFetcherError::MissingBlockInRange(_, _)))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BlockClock {
     #[allow(unused)]
