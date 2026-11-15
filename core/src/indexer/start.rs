@@ -105,21 +105,29 @@ pub struct ProcessedNetworkContract {
 /// Where to resume given a stored cursor.
 ///
 /// A configured `start_block` always resumes at `last_synced + 1` (that is
-/// the backfill contract). Live-from-head indexing leaves `start_block`
-/// unset so a restart does not backfill blocks missed while down, but a
-/// cursor that has already reached the head must still resume AFTER that
-/// block. Starting at the head re-indexes it, and raw-event inserts are not
-/// idempotent, so custom-table arithmetic would apply twice.
+/// the backfill contract). `backfill_downtime` is set for events that drive
+/// custom tables: the aggregate is wrong if transfers mined while the
+/// process was down are skipped, so any stored cursor resumes at
+/// `last_synced + 1` even when the head has moved past it.
+///
+/// Live-from-head indexing without that flag leaves `start_block` unset and
+/// does not backfill a gap. A cursor that has already reached the head must
+/// still resume AFTER that block. Starting at the head re-indexes it, and
+/// raw-event inserts are not idempotent, so table arithmetic would apply
+/// twice.
 ///
 /// `last_synced_block` is `None` for a missing row and for the seeded `0`
-/// (`get_last_synced_block_number` treats zero as "never indexed").
+/// (`get_last_synced_block_number` treats zero as "never indexed"). A tables
+/// contract therefore still starts at the head on its first boot, and
+/// rewinding the cursor to 0 does not rebuild history.
 fn indexing_resume_block(
     manifest_start_block: Option<U64>,
     last_synced_block: Option<U64>,
     latest_block: U64,
+    backfill_downtime: bool,
 ) -> Option<U64> {
     let last_synced = last_synced_block?;
-    if manifest_start_block.is_some() || last_synced >= latest_block {
+    if manifest_start_block.is_some() || backfill_downtime || last_synced >= latest_block {
         Some(last_synced + U64::from(1))
     } else {
         None
@@ -134,6 +142,7 @@ async fn get_start_end_block(
     event_name: &str,
     network: &str,
     reorg_safe_distance: Option<ReorgSafeDistance>,
+    backfill_downtime: bool,
 ) -> Result<(U64, U64, U64), StartIndexingError> {
     let latest_block = provider.get_block_number().await?;
 
@@ -166,8 +175,12 @@ async fn get_start_end_block(
     }
 
     let last_synced_block = get_last_synced_block_number(config).await;
-    let last_known_start_block =
-        indexing_resume_block(manifest_start_block, last_synced_block, latest_block);
+    let last_known_start_block = indexing_resume_block(
+        manifest_start_block,
+        last_synced_block,
+        latest_block,
+        backfill_downtime,
+    );
     if let Some(start_from) = last_known_start_block {
         info!(
             "{} Found last synced block number - {:?} rindexer will start up from {:?}",
@@ -277,6 +290,7 @@ async fn start_indexing_traces(
             &format!("TraceEvents[{}]", network_name),
             &network_name,
             first_event.trace_information.reorg_safe_distance,
+            false,
         )
         .await?;
 
@@ -633,6 +647,11 @@ async fn start_indexing_contract_events(
                     &event.info_log_name(),
                     &network_contract.network,
                     event.contract.reorg_safe_distance,
+                    // Custom-table arithmetic is not idempotent. Once a cursor
+                    // exists, resume at cursor+1 so transfers mined during
+                    // downtime are applied. Events with no tables keep the
+                    // live-from-head gap skip.
+                    !event.tables.is_empty(),
                 )
                 .await;
 
@@ -1510,6 +1529,7 @@ mod tests {
             "Test",
             "ethereum",
             None,
+            false,
         )
         .await;
 
@@ -1530,6 +1550,7 @@ mod tests {
             "Test",
             "ethereum",
             None,
+            false,
         )
         .await;
 
@@ -1550,6 +1571,7 @@ mod tests {
             "Test",
             "ethereum",
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1570,6 +1592,7 @@ mod tests {
             "Test",
             "ethereum",
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1588,6 +1611,7 @@ mod tests {
             "Test",
             "ethereum",
             Some(ReorgSafeDistance::Custom(50)),
+            false,
         )
         .await
         .unwrap();
@@ -1608,6 +1632,7 @@ mod tests {
             "Test",
             "ethereum",
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1621,32 +1646,52 @@ mod tests {
         // Caught up at the head: resume AFTER it. Starting at the head
         // would store the block's events a second time.
         assert_eq!(
-            indexing_resume_block(None, Some(U64::from(5)), U64::from(5)),
+            indexing_resume_block(None, Some(U64::from(5)), U64::from(5), false),
             Some(U64::from(6))
         );
         // Cursor ahead of the tip (the chain has not produced the next
         // block yet, or the tip read lagged). Still do not step backwards.
         assert_eq!(
-            indexing_resume_block(None, Some(U64::from(8)), U64::from(5)),
+            indexing_resume_block(None, Some(U64::from(8)), U64::from(5), false),
             Some(U64::from(9))
         );
     }
 
     #[test]
     fn live_from_head_skips_blocks_missed_while_down() {
-        // No start_block and the cursor is behind the tip: keep starting at
-        // the head. Downtime must not turn into a backfill.
-        assert_eq!(indexing_resume_block(None, Some(U64::from(5)), U64::from(100)), None);
-        assert_eq!(indexing_resume_block(None, None, U64::from(100)), None);
+        // No start_block, no tables, and the cursor is behind the tip: keep
+        // starting at the head. Downtime must not turn into a backfill.
+        assert_eq!(indexing_resume_block(None, Some(U64::from(5)), U64::from(100), false), None);
+        assert_eq!(indexing_resume_block(None, None, U64::from(100), false), None);
+    }
+
+    #[test]
+    fn tables_backfill_from_the_cursor_when_the_head_moved() {
+        // A custom-table event must apply transfers mined while the process
+        // was down. The head moving past the cursor is the normal case on a
+        // live chain.
+        assert_eq!(
+            indexing_resume_block(None, Some(U64::from(5)), U64::from(100), true),
+            Some(U64::from(6))
+        );
+        // Caught up still resumes after the cursor, not on top of it.
+        assert_eq!(
+            indexing_resume_block(None, Some(U64::from(5)), U64::from(5), true),
+            Some(U64::from(6))
+        );
+        // No cursor (including the seeded 0, which the reader turns into
+        // None): first boot still starts at the head. Rewinding to 0 does
+        // not rebuild history.
+        assert_eq!(indexing_resume_block(None, None, U64::from(100), true), None);
     }
 
     #[test]
     fn configured_start_block_always_resumes_from_the_cursor() {
         assert_eq!(
-            indexing_resume_block(Some(U64::from(1)), Some(U64::from(5)), U64::from(100)),
+            indexing_resume_block(Some(U64::from(1)), Some(U64::from(5)), U64::from(100), false),
             Some(U64::from(6))
         );
-        assert_eq!(indexing_resume_block(Some(U64::from(1)), None, U64::from(100)), None);
+        assert_eq!(indexing_resume_block(Some(U64::from(1)), None, U64::from(100), false), None);
     }
 
     #[tokio::test]
@@ -1660,6 +1705,7 @@ mod tests {
             "Test",
             "ethereum",
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1680,6 +1726,7 @@ mod tests {
             "Test",
             "ethereum",
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1700,6 +1747,7 @@ mod tests {
             "Test",
             "ethereum",
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1722,6 +1770,7 @@ mod tests {
             "Test",
             "ethereum",
             Some(ReorgSafeDistance::Custom(200)),
+            false,
         )
         .await
         .unwrap();
