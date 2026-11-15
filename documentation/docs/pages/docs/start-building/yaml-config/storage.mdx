@@ -39,6 +39,7 @@ DATABASE_URL=postgresql://[user[:password]@][host][:port][/dbname]
 PostgreSQL uses OpenSSL with certificate-chain and hostname verification and TLS 1.2 or later.
 Use `sslmode=require` to prevent plaintext fallback. Trusted CAs come from OpenSSL's
 system paths; set `SSL_CERT_FILE` to a PEM CA bundle or `SSL_CERT_DIR` to a hashed CA directory.
+macOS release binaries link this OpenSSL statically and do not read a Homebrew certificate directory.
 An IP connection must match an IP SAN in the certificate. For a DNS-only certificate,
 use its DNS name as the host and `hostaddr` to select the server IP without DNS resolution:
 

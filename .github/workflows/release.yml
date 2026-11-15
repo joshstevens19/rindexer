@@ -259,6 +259,14 @@ jobs:
           [[ "$target" == *windows* ]] && binary_path+=".exe"
           "$binary_path" --version
           "$binary_path" help
+          if [[ "$target" == *apple-darwin* ]]; then
+            echo "=== otool -L $binary_path ==="
+            otool -L "$binary_path"
+            if otool -L "$binary_path" | grep -Ei 'libssl|libcrypto|openssl'; then
+              echo "Release binary links OpenSSL dynamically (Homebrew or /usr/local)."
+              exit 1
+            fi
+          fi
 
       - name: Archive binaries
         if: steps.check_release.outputs.is_release == 'true'
