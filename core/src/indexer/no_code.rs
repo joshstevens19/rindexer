@@ -1116,7 +1116,7 @@ fn ensure_table_column_types(
     manifest: &mut Manifest,
 ) -> Result<(), ProcessIndexersError> {
     for contract in &mut manifest.contracts {
-        let needs = contract.tables.as_ref().is_some_and(tables_need_column_types);
+        let needs = contract.tables.as_ref().is_some_and(|tables| tables_need_column_types(tables));
         if !needs {
             continue;
         }
