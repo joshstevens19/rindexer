@@ -16,6 +16,42 @@ use crate::{
     manifest::contract::{Contract, ParseAbiError},
 };
 
+/// Columns rindexer writes into every event table itself.
+///
+/// An ABI input whose snake-cased column name matches one of these would be
+/// emitted twice in the same `CREATE TABLE`, which the database rejects. Keep
+/// in sync with the event-table DDL in `database/generate.rs` (Postgres) and
+/// `database/clickhouse/generate.rs`; the list is the union of both so the two
+/// backends stay column-for-column identical for the same ABI.
+pub const RESERVED_EVENT_COLUMN_NAMES: [&str; 9] = [
+    "rindexer_id",
+    "contract_address",
+    "tx_hash",
+    "block_number",
+    "block_timestamp",
+    "block_hash",
+    "network",
+    "tx_index",
+    "log_index",
+];
+
+/// Suffix appended to an ABI-derived column that would collide with one of
+/// [`RESERVED_EVENT_COLUMN_NAMES`].
+pub const RESERVED_COLUMN_COLLISION_SUFFIX: &str = "_abi";
+
+/// Returns the column name to store `column_name` under, renaming it when it
+/// would collide with a column rindexer adds itself.
+///
+/// Applied to the fully-qualified name, so a flattened tuple field such as
+/// `block.number` -> `block_number` is caught as well as a top-level input.
+pub fn db_safe_column_name(column_name: &str) -> String {
+    if RESERVED_EVENT_COLUMN_NAMES.contains(&column_name) {
+        format!("{column_name}{RESERVED_COLUMN_COLLISION_SUFFIX}")
+    } else {
+        column_name.to_string()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ABIInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -149,12 +185,20 @@ impl ABIInput {
                             .join("_")
                     });
 
+                    let snake_name = camel_to_snake(&input.name);
+
+                    // Postgres, ClickHouse and CSV all share this name so the
+                    // three stay column-for-column identical for the same ABI.
+                    let column_name = db_safe_column_name(&match &prefix {
+                        Some(p) => format!("{p}_{snake_name}"),
+                        None => snake_name.clone(),
+                    });
+
                     match properties_type {
                         GenerateAbiPropertiesType::PostgresWithDataTypes => {
                             let value = format!(
-                                "\"{}{}\" {}",
-                                prefix.map_or_else(|| "".to_string(), |p| format!("{p}_")),
-                                camel_to_snake(&input.name),
+                                "\"{}\" {}",
+                                column_name,
                                 solidity_type_to_db_type(&input.type_)
                             );
 
@@ -162,28 +206,29 @@ impl ABIInput {
                         }
                         GenerateAbiPropertiesType::PostgresColumnsNamesOnly
                         | GenerateAbiPropertiesType::CsvHeaderNames => {
-                            let value = format!(
-                                "{}{}",
-                                prefix.map_or_else(|| "".to_string(), |p| format!("{p}_")),
-                                camel_to_snake(&input.name),
-                            );
-
-                            vec![AbiProperty::new(value, &input.name, &input.type_, path.clone())]
+                            vec![AbiProperty::new(
+                                column_name,
+                                &input.name,
+                                &input.type_,
+                                path.clone(),
+                            )]
                         }
+                        // Not renamed: this builds a Rust field-access path
+                        // against the alloy-generated event struct, whose
+                        // fields carry the original ABI names.
                         GenerateAbiPropertiesType::Object => {
                             let value = format!(
                                 "{}{}",
-                                prefix.map_or_else(|| "".to_string(), |p| format!("{p}.")),
-                                camel_to_snake(&input.name),
+                                prefix.as_ref().map_or_else(|| "".to_string(), |p| format!("{p}.")),
+                                snake_name,
                             );
 
                             vec![AbiProperty::new(value, &input.name, &input.type_, path.clone())]
                         }
                         GenerateAbiPropertiesType::ClickhouseWithDataTypes => {
                             let value = format!(
-                                "\"{}{}\" {}",
-                                prefix.map_or_else(|| "".to_string(), |p| format!("{}_", p)),
-                                camel_to_snake(&input.name),
+                                "\"{}\" {}",
+                                column_name,
                                 solidity_type_to_clickhouse_type(&input.type_)
                             );
 
@@ -463,9 +508,13 @@ pub fn get_abi_item_with_db_map(
                                 .last()
                                 .expect("Parameter mapping should have at least one element")
                         {
+                            // Must match the column naming in
+                            // `generate_abi_name_properties`, otherwise the
+                            // index/relationship SQL built from this name
+                            // would reference a column that does not exist.
                             return Ok(GetAbiItemWithDbMap {
                                 abi_item: input.clone(),
-                                db_column_name,
+                                db_column_name: db_safe_column_name(&db_column_name),
                             });
                         } else {
                             current_inputs = match input.type_.as_str() {
@@ -501,5 +550,132 @@ pub fn get_abi_item_with_db_map(
         None => Err(GetAbiItemWithDbMapError::ParameterNotFound(format!(
             "Event {event_name} not found in contract ABI"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod reserved_column_tests {
+    use super::*;
+
+    fn input(name: &str, type_: &str) -> ABIInput {
+        ABIInput {
+            indexed: None,
+            name: name.to_string(),
+            type_: type_.to_string(),
+            components: None,
+        }
+    }
+
+    fn tuple(name: &str, components: Vec<ABIInput>) -> ABIInput {
+        ABIInput {
+            indexed: None,
+            name: name.to_string(),
+            type_: "tuple".to_string(),
+            components: Some(components),
+        }
+    }
+
+    fn names(inputs: &[ABIInput], kind: GenerateAbiPropertiesType) -> Vec<String> {
+        ABIInput::generate_abi_name_properties(inputs, &kind, None)
+            .into_iter()
+            .map(|p| p.value)
+            .collect()
+    }
+
+    #[test]
+    fn leaves_non_reserved_names_untouched() {
+        assert_eq!(db_safe_column_name("amount"), "amount");
+        assert_eq!(db_safe_column_name("from_address"), "from_address");
+    }
+
+    #[test]
+    fn renames_every_reserved_column() {
+        for reserved in RESERVED_EVENT_COLUMN_NAMES {
+            assert_eq!(db_safe_column_name(reserved), format!("{reserved}_abi"));
+        }
+    }
+
+    /// An ABI input named after one of rindexer's own columns used to emit that
+    /// column twice in the same `CREATE TABLE`, which the database rejects.
+    #[test]
+    fn reserved_abi_input_does_not_duplicate_a_rindexer_column() {
+        let inputs = vec![input("network", "string"), input("blockNumber", "uint256")];
+
+        let columns = names(&inputs, GenerateAbiPropertiesType::PostgresColumnsNamesOnly);
+        assert_eq!(columns, vec!["network_abi", "block_number_abi"]);
+
+        for column in &columns {
+            assert!(
+                !RESERVED_EVENT_COLUMN_NAMES.contains(&column.as_str()),
+                "`{column}` still collides with a rindexer column"
+            );
+        }
+    }
+
+    /// Flattened tuple fields are renamed on their full path, so a tuple named
+    /// `block` with a field `number` cannot collide with `block_number` either.
+    #[test]
+    fn flattened_tuple_path_is_checked_not_just_the_leaf_name() {
+        let inputs = vec![tuple("block", vec![input("number", "uint256")])];
+
+        assert_eq!(
+            names(&inputs, GenerateAbiPropertiesType::PostgresColumnsNamesOnly),
+            vec!["block_number_abi"]
+        );
+    }
+
+    #[test]
+    fn nested_leaf_named_after_a_reserved_column_is_safe_when_prefixed() {
+        let inputs = vec![tuple("meta", vec![input("network", "string")])];
+
+        assert_eq!(
+            names(&inputs, GenerateAbiPropertiesType::PostgresColumnsNamesOnly),
+            vec!["meta_network"]
+        );
+    }
+
+    #[test]
+    fn postgres_clickhouse_and_csv_agree_on_the_column_name() {
+        let inputs = vec![input("network", "string")];
+
+        assert_eq!(
+            names(&inputs, GenerateAbiPropertiesType::CsvHeaderNames),
+            names(&inputs, GenerateAbiPropertiesType::PostgresColumnsNamesOnly)
+        );
+        assert!(names(&inputs, GenerateAbiPropertiesType::PostgresWithDataTypes)[0]
+            .starts_with("\"network_abi\" "));
+        assert!(names(&inputs, GenerateAbiPropertiesType::ClickhouseWithDataTypes)[0]
+            .starts_with("\"network_abi\" "));
+    }
+
+    /// Index and relationship SQL is built from `get_abi_item_with_db_map`, so
+    /// it has to resolve to the same renamed column as the `CREATE TABLE`.
+    #[test]
+    fn db_map_resolves_to_the_renamed_column() {
+        let abi_items = vec![ABIItem {
+            type_: "event".to_string(),
+            name: "Transfer".to_string(),
+            inputs: vec![input("network", "string"), input("amount", "uint256")],
+        }];
+
+        let mapped = get_abi_item_with_db_map(&abi_items, "Transfer", &["network"]).unwrap();
+        assert_eq!(mapped.db_column_name, "network_abi");
+
+        let untouched = get_abi_item_with_db_map(&abi_items, "Transfer", &["amount"]).unwrap();
+        assert_eq!(untouched.db_column_name, "amount");
+    }
+
+    /// `Object` builds a Rust field-access path against the alloy-generated
+    /// event struct, whose fields keep the original ABI names, so it must never
+    /// pick up the database rename.
+    #[test]
+    fn object_paths_keep_the_original_abi_name() {
+        let inputs =
+            vec![input("network", "string"), tuple("meta", vec![input("txHash", "bytes32")])];
+
+        assert_eq!(
+            names(&inputs, GenerateAbiPropertiesType::Object),
+            vec!["network", "meta.tx_hash"]
+        );
     }
 }

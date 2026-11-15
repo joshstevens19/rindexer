@@ -5,6 +5,7 @@
 
 ### Bug fixes
 -------------------------------------------------
+- fix: **ABI inputs named after rindexer's own event columns no longer fail table creation** — an input that resolves to `rindexer_id`, `contract_address`, `tx_hash`, `block_number`, `block_timestamp`, `block_hash`, `network`, `tx_index` or `log_index` used to be emitted twice in the same `CREATE TABLE` and the database rejected it. Such a column is now suffixed with `_abi` (for example an ABI input `network` is stored as `network_abi`), consistently across Postgres, ClickHouse and CSV headers. The check runs on the full column path, so a flattened tuple field such as `block.number` is covered too. Only configs that previously failed to start are affected; no existing column is renamed ([#65](https://github.com/joshstevens19/rindexer/issues/65)).
 - fix: docs site no longer scrolls sideways on narrow screens. The home page install command wraps inside its block (and scrolls if a token is wider), and the mobile sidebar stays on screen and tappable from 320px up.
 - fix: macOS release binaries statically link OpenSSL, require macOS 11.0 or newer, and use `/etc/ssl/cert.pem` for PostgreSQL TLS when `SSL_CERT_FILE` and `SSL_CERT_DIR` are unset.
 
