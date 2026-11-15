@@ -1,12 +1,9 @@
-# Temporary proof that the Apple Silicon release binary links.
-# Same cargo command as the aarch64 leg of release.yml.
-# pull_request is removed after the run is recorded. workflow_dispatch stays.
+# Manual re-check of the Apple Silicon release link.
+# The pull_request trigger ran once on PR #501 (run 43657431869) and was removed.
 name: macOS arm64 release link
 
 on:
   workflow_dispatch:
-  pull_request:
-    branches: [master]
 
 jobs:
   aarch64-apple-darwin:
