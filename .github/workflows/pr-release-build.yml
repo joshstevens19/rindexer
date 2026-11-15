@@ -1,0 +1,65 @@
+# Same release build as release.yml for Linux and macOS. Windows is omitted.
+name: PR release build
+
+on:
+  pull_request:
+    branches: [master]
+
+jobs:
+  release-build:
+    name: Release build — ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: pr-release-${{ matrix.target }}
+          cache-on-failure: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install OpenSSL dev libraries
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Build release binary
+        working-directory: cli
+        shell: bash
+        run: |
+          set -eo pipefail
+          target="${{ matrix.target }}"
+          if [[ "$target" == *apple-darwin* ]]; then
+            export MACOSX_DEPLOYMENT_TARGET=15.0
+            export SDKROOT="$(xcrun -sdk macosx --show-sdk-path)"
+            export CFLAGS="-mmacosx-version-min=15.0"
+            export CXXFLAGS="-mmacosx-version-min=15.0"
+            export LDFLAGS="-mmacosx-version-min=15.0"
+            echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET"
+          fi
+          cargo build --release --target "$target" --features jemalloc,reth
+
+      - name: Version
+        shell: bash
+        run: |
+          "${{ github.workspace }}/target/${{ matrix.target }}/release/rindexer_cli" --version

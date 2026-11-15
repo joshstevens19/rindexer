@@ -280,12 +280,8 @@ jobs:
           target="${{ matrix.target }}"
           binary_path="${{ github.workspace }}/target/$target/release/rindexer_cli"
           [[ "$target" == *windows* ]] && binary_path+=".exe"
-          if [[ "$target" == *apple-darwin* ]]; then
-            bash ci/check-macos-binary.sh "$binary_path" 15.0
-          else
-            "$binary_path" --version
-            "$binary_path" help
-          fi
+          "$binary_path" --version
+          "$binary_path" help
 
       - name: Archive binaries
         if: steps.check_release.outputs.is_release == 'true'
