@@ -147,6 +147,14 @@ rindexer will inject common parameters into the event tables for you:
 - `tx_index` - The transaction index of the event
 - `log_index` - The log index of the event
 
+:::info
+If one of your ABI inputs resolves to the same column name as an injected parameter
+(or to `rindexer_id` / `block_timestamp`), rindexer stores it with an `_abi` suffix so the two
+do not clash - an ABI input called `network` becomes the column `network_abi`. The same name is
+used for Postgres, ClickHouse and CSV headers, and the check applies to the full column path, so
+a flattened tuple field such as `block.number` is covered as well.
+:::
+
 If you start seeing your queries being slow when using any of these to filter you can add them to the `global_injected_parameters`
 and rindexer will apply on all tables it generates.
 
