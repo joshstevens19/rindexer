@@ -3511,7 +3511,7 @@ dependencies = [
 
 [[package]]
 name = "clickhouse_factory_indexing"
-version = "1.0.0"
+version = "0.1.0"
 dependencies = [
  "alloy",
  "rindexer",
@@ -4663,7 +4663,7 @@ dependencies = [
 
 [[package]]
 name = "e2e-tests"
-version = "1.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -8756,6 +8756,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
+name = "openssl-src"
+version = "300.6.1+3.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46eb8fb9fb3b61ce1c0f8a026c4c1a0714d3a9e138e7fbde78753ce2babc3846"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "openssl-sys"
 version = "0.9.114"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8763,6 +8772,7 @@ checksum = "13ce1245cd07fcc4cfdb438f7507b0c7e4f3849a69fd84d52374c66d83741bb6"
 dependencies = [
  "cc",
  "libc",
+ "openssl-src",
  "pkg-config",
  "vcpkg",
 ]
@@ -13249,7 +13259,7 @@ dependencies = [
 
 [[package]]
 name = "rindexer_factory_contract"
-version = "1.0.0"
+version = "0.1.0"
 dependencies = [
  "alloy",
  "rindexer",
@@ -13258,7 +13268,7 @@ dependencies = [
 
 [[package]]
 name = "rindexer_rust_playground"
-version = "1.0.0"
+version = "0.1.0"
 dependencies = [
  "alloy",
  "rindexer",
@@ -13469,7 +13479,7 @@ dependencies = [
 
 [[package]]
 name = "rust_clickhouse"
-version = "1.0.0"
+version = "0.1.0"
 dependencies = [
  "alloy",
  "rindexer",
@@ -17529,7 +17539,7 @@ checksum = "0637d3a5566a82fa5214bae89087bc8c9fb94cd8e8a3c07feb691bb8d9c632db"
 
 [[package]]
 name = "xtask"
-version = "1.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
