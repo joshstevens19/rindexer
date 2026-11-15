@@ -2,6 +2,11 @@ name: Release
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish from this branch, without a leading v (example: 1.0.0). Builds the selected commit. Does not require a Release vX.Y.Z commit."
+        required: false
+        type: string
   push:
     branches:
       - "release/**"
@@ -95,7 +100,7 @@ jobs:
     if: |
       github.actor != 'github-actions[bot]' &&
       github.ref == 'refs/heads/master' &&
-      github.event_name == 'push'
+      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.version != ''))
     timeout-minutes: 240
     strategy:
       fail-fast: false
@@ -130,8 +135,16 @@ jobs:
         id: check_release
         shell: bash
         run: |
-          MSG=$(git log --oneline -1 --pretty=format:"%s")
-          VERSION=$(echo "$MSG" | grep -o 'Release v[0-9]*\.[0-9]*\.[0-9]*' | sed 's/Release v//' || echo "")
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            MSG=$(git log --oneline -1 --pretty=format:"%s")
+            VERSION=$(echo "$MSG" | grep -o 'Release v[0-9]*\.[0-9]*\.[0-9]*' | sed 's/Release v//' || echo "")
+          fi
+          if [[ -n "$VERSION" && ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid version: $VERSION"
+            exit 1
+          fi
           if [[ -n "$VERSION" ]]; then
             echo "VERSION_NAME=$VERSION" >> $GITHUB_ENV
             echo "is_release=true" >> $GITHUB_OUTPUT
@@ -144,8 +157,10 @@ jobs:
         shell: bash
         run: echo "Not a release commit — skipping" && exit 0
 
+      # Push-triggered releases build the release/* branch. A manual run builds
+      # the ref selected in the workflow UI (master after the fix is merged).
       - name: Checkout release branch
-        if: steps.check_release.outputs.is_release == 'true'
+        if: steps.check_release.outputs.is_release == 'true' && github.event_name == 'push'
         uses: actions/checkout@v4
         with:
           ref: release/${{ env.VERSION_NAME }}
@@ -168,11 +183,9 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Apple M1 setup
-        if: steps.check_release.outputs.is_release == 'true' && matrix.target == 'aarch64-apple-darwin'
-        run: |
-          echo "SDKROOT=$(xcrun -sdk macosx --show-sdk-path)" >> $GITHUB_ENV
-          echo "MACOSX_DEPLOYMENT_TARGET=$(xcrun -sdk macosx --show-sdk-platform-version)" >> $GITHUB_ENV
+      - name: macOS SDK
+        if: steps.check_release.outputs.is_release == 'true' && contains(matrix.target, 'apple-darwin')
+        run: echo "SDKROOT=$(xcrun -sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
 
       - name: Install MSVC target
         if: steps.check_release.outputs.is_release == 'true' && matrix.target == 'x86_64-pc-windows-msvc'
@@ -247,6 +260,16 @@ jobs:
             "$NASM" -v
           fi
 
+          if [[ "$target" == *apple-darwin* ]]; then
+            # Pin both Mac targets to 15.0. The runner SDK version must not
+            # become the binary's minimum OS.
+            export MACOSX_DEPLOYMENT_TARGET=15.0
+            export CFLAGS="-mmacosx-version-min=15.0"
+            export CXXFLAGS="-mmacosx-version-min=15.0"
+            export LDFLAGS="-mmacosx-version-min=15.0"
+            echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET"
+          fi
+
           RUST_BACKTRACE=1 CMAKE_TOOLCHAIN_FILE="$CMAKE_TOOLCHAIN_FILE" cargo build --release --target "$target" "${flags[@]}" -vv
 
       - name: Smoke test
@@ -257,15 +280,11 @@ jobs:
           target="${{ matrix.target }}"
           binary_path="${{ github.workspace }}/target/$target/release/rindexer_cli"
           [[ "$target" == *windows* ]] && binary_path+=".exe"
-          "$binary_path" --version
-          "$binary_path" help
           if [[ "$target" == *apple-darwin* ]]; then
-            echo "=== otool -L $binary_path ==="
-            otool -L "$binary_path"
-            if otool -L "$binary_path" | grep -Ei 'libssl|libcrypto|openssl'; then
-              echo "Release binary links OpenSSL dynamically (Homebrew or /usr/local)."
-              exit 1
-            fi
+            bash ci/check-macos-binary.sh "$binary_path" 15.0
+          else
+            "$binary_path" --version
+            "$binary_path" help
           fi
 
       - name: Archive binaries
@@ -309,7 +328,7 @@ jobs:
     if: |
       github.actor != 'github-actions[bot]' &&
       github.ref == 'refs/heads/master' &&
-      github.event_name == 'push'
+      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.version != ''))
     steps:
       - uses: actions/checkout@v4
         with:
@@ -319,8 +338,16 @@ jobs:
         id: check_release
         shell: bash
         run: |
-          MSG=$(git log --oneline -1 --pretty=format:"%s")
-          VERSION=$(echo "$MSG" | grep -o 'Release v[0-9]*\.[0-9]*\.[0-9]*' | sed 's/Release v//' || echo "")
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            MSG=$(git log --oneline -1 --pretty=format:"%s")
+            VERSION=$(echo "$MSG" | grep -o 'Release v[0-9]*\.[0-9]*\.[0-9]*' | sed 's/Release v//' || echo "")
+          fi
+          if [[ -n "$VERSION" && ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid version: $VERSION"
+            exit 1
+          fi
           if [[ -n "$VERSION" ]]; then
             echo "VERSION_NAME=$VERSION" >> $GITHUB_ENV
             echo "is_release=true" >> $GITHUB_OUTPUT
