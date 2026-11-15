@@ -106,8 +106,19 @@ reth-node-api = { git = "https://github.com/paradigmxyz/reth", tag = "v2.1.0", o
 reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v2.1.0", optional = true }
 reth-tracing = { git = "https://github.com/paradigmxyz/reth", tag = "v2.1.0", optional = true }
 
-[target.'cfg(not(windows))'.dependencies]
+# macOS CI and developer machines often install two Homebrew OpenSSL copies:
+# OpenSSL 4 on the unversioned `openssl` prefix, and OpenSSL 3 on `openssl@3`.
+# librdkafka's configure script adds the unversioned prefix to pkg-config, so
+# rdkafka_ssl.c is compiled against OpenSSL 4 (`BIO_eof`, `OPENSSL_sk_set_*_thunks`).
+# openssl-sys then links OpenSSL 3, and the Apple Silicon release link fails.
+# `ssl-vendored` builds one static OpenSSL through openssl-sys and points
+# librdkafka at that same tree. The CLI binary does not need a Homebrew dylib.
+# Linux keeps the distro libssl. Windows keeps the vcpkg static build below.
+[target.'cfg(all(not(windows), not(target_os = "macos")))'.dependencies]
 rdkafka = { version = "0.39.0", features = ["tokio", "ssl"], optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+rdkafka = { version = "0.39.0", features = ["tokio", "ssl-vendored"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 rdkafka = { version = "0.39.0", features = ["tokio", "cmake-build", "ssl"], optional = true }
