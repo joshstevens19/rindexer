@@ -1082,12 +1082,20 @@ pub async fn process_events(
     clickhouse: Option<Arc<ClickhouseClient>>,
     network_providers: &[CreateNetworkProvider],
 ) -> Result<Vec<EventCallbackRegistryInformation>, ProcessIndexersError> {
+    // Rust hosts (rflow) read the manifest straight off disk, where column
+    // types are still inferred. Fill those before the storage callbacks clone
+    // the tables. No-code already resolved on this manifest, so this is a
+    // no-op there — and it must NOT rename filter contracts (that rename
+    // already happened, and doing it again would double the `Filter` suffix).
+    let mut manifest = manifest.clone();
+    ensure_table_column_types(project_path, &mut manifest)?;
+
     let mut events: Vec<EventCallbackRegistryInformation> = vec![];
 
     for mut contract in manifest.all_contracts().clone() {
         let contract_events = process_contract(
             project_path,
-            manifest,
+            &manifest,
             postgres.clone(),
             clickhouse.clone(),
             network_providers,
@@ -1099,6 +1107,35 @@ pub async fn process_events(
     }
 
     Ok(events)
+}
+
+/// Fills custom-table column types that the yaml left for ABI inference.
+/// Does not rename contracts.
+fn ensure_table_column_types(
+    project_path: &Path,
+    manifest: &mut Manifest,
+) -> Result<(), ProcessIndexersError> {
+    for contract in &mut manifest.contracts {
+        let needs = contract.tables.as_ref().is_some_and(tables_need_column_types);
+        if !needs {
+            continue;
+        }
+        let is_filter = contract.is_filter();
+        let abi_items = ABIItem::get_abi_items(project_path, contract, is_filter)?;
+        let event_abi_types = build_event_abi_types(abi_items).map_err(|error| {
+            ProcessIndexersError::TableColumnTypeResolutionError(error.to_string())
+        })?;
+        if let Some(tables) = &mut contract.tables {
+            resolve_tables_against_abi(tables, &event_abi_types).map_err(|error| {
+                ProcessIndexersError::TableColumnTypeResolutionError(error.to_string())
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn tables_need_column_types(tables: &[crate::manifest::contract::Table]) -> bool {
+    tables.iter().any(|table| table.columns.iter().any(|column| column.column_type.is_none()))
 }
 
 async fn process_contract(

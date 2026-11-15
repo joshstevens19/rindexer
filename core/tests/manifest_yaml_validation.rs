@@ -209,6 +209,49 @@ contracts: []
 }
 
 #[test]
+fn read_manifest_accepts_custom_tables_on_a_rust_project() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    write_abi(temp_dir.path());
+    let yaml = r#"
+name: coverage
+project_type: rust
+networks:
+  - name: mainnet
+    chain_id: 1
+    rpc: http://localhost:8545
+contracts:
+  - name: Token
+    details:
+      - network: mainnet
+        address: "0x0000000000000000000000000000000000000001"
+    abi: ./abis/token.json
+    tables:
+      - name: balances
+        columns:
+          - name: holder
+          - name: balance
+            default: "0"
+        events:
+          - event: Transfer
+            operations:
+              - type: upsert
+                where:
+                  holder: $to
+                set:
+                  - column: balance
+                    action: add
+                    value: $value
+"#;
+    let path = manifest_path(temp_dir.path());
+    fs::write(&path, yaml).expect("manifest writes");
+
+    let manifest = read_manifest(&path).expect("rust projects may declare custom tables");
+    let tables = manifest.contracts[0].tables.as_ref().expect("tables parsed");
+    assert_eq!(tables[0].name, "balances");
+    assert_eq!(tables[0].events[0].event, "Transfer");
+}
+
+#[test]
 fn write_manifest_round_trips_manifest_to_yaml_file() {
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let manifest: Manifest = serde_yaml::from_str(

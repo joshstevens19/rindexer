@@ -109,6 +109,9 @@ pub enum StartRindexerError {
     #[error("Port conflict: {0}")]
     PortConflict(String),
 
+    #[error("Could not resolve custom table column types: {0}")]
+    CouldNotResolveTableColumnTypes(String),
+
     #[error("Could not start Reth node: {0}")]
     CouldNotStartRethNode(#[from] eyre::Error),
 
@@ -139,6 +142,19 @@ async fn wait_for_shutdown_handle(
             Ok(())
         }
     }
+}
+
+/// True when a custom table column was left for ABI inference. `CREATE TABLE`
+/// panics on an unresolved type, so rust startup resolves before setup.
+fn manifest_has_unresolved_table_columns(manifest: &crate::manifest::core::Manifest) -> bool {
+    let unresolved = |tables: &[crate::manifest::contract::Table]| {
+        tables.iter().any(|table| table.columns.iter().any(|column| column.column_type.is_none()))
+    };
+    manifest
+        .contracts
+        .iter()
+        .any(|contract| contract.tables.as_ref().is_some_and(|tables| unresolved(tables)))
+        || manifest.native_transfers.tables.as_ref().is_some_and(|tables| unresolved(tables))
 }
 
 pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindexerError> {
@@ -190,7 +206,19 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                 None
             };
 
-            let manifest = Arc::new(read_manifest(details.manifest_path)?);
+            let mut manifest = read_manifest(details.manifest_path)?;
+            // Rust projects skip the no-code startup that infers table column
+            // types. CREATE TABLE calls `resolved_type()` and panics when a
+            // column was left for ABI inference, so resolve here before
+            // setup_postgres. No-code already resolved; a second pass only
+            // fills types that are still missing.
+            if manifest_has_unresolved_table_columns(&manifest) {
+                crate::indexer::no_code::resolve_table_column_types(project_path, &mut manifest)
+                    .map_err(|error| {
+                        StartRindexerError::CouldNotResolveTableColumnTypes(error.to_string())
+                    })?;
+            }
+            let manifest = Arc::new(manifest);
 
             if manifest.project_type != ProjectType::NoCode {
                 setup_info_logger();

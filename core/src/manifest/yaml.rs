@@ -238,9 +238,6 @@ pub enum ValidateManifestError {
     #[error("Iterate field '${0}' in event '{1}' for table '{2}' in contract '{3}' not found in event ABI")]
     CustomIndexingIterateFieldNotFound(String, String, String, String),
 
-    #[error("Tables are defined in contract '{0}' but project_type is not 'no-code'. Tables only work with 'project_type: no-code'. Either change project_type to 'no-code' or remove the tables configuration.")]
-    TablesRequireNoCodeProjectType(String),
-
     // Cron validation errors
     #[error("Table '{0}' in contract '{1}' has no triggers. Must have at least one 'events' or 'cron' entry.")]
     TableNoTriggers(String, String),
@@ -283,15 +280,13 @@ fn validate_manifest(
         ));
     }
 
-    if manifest.project_type != ProjectType::NoCode {
-        for contract in &manifest.contracts {
-            if contract.tables.is_some() {
-                return Err(ValidateManifestError::TablesRequireNoCodeProjectType(
-                    contract.name.clone(),
-                ));
-            }
-        }
-    }
+    // Custom tables are applied by the no-code storage callbacks
+    // (`indexer::no_code::process_events`). Rust projects may declare them
+    // too: an embedding host (rflow) registers those callbacks itself.
+    // `start_rindexer` resolves column types before CREATE TABLE, and
+    // `process_events` fills any types still missing, so inferred columns
+    // work without rewriting the yaml. A rust project that never registers
+    // the callbacks gets the tables created and not written.
 
     for contract in &manifest.all_contracts() {
         if contract.name.to_lowercase().contains("filter") {
