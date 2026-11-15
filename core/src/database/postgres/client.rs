@@ -143,6 +143,17 @@ impl PostgresClient {
                 .map_err(|_| PostgresConnectionError::CouldNotCreateTlsConnector)?;
             tls.set_min_proto_version(Some(SslVersion::TLS1_2))
                 .map_err(|_| PostgresConnectionError::CouldNotCreateTlsConnector)?;
+            // Vendored OpenSSL loads CAs from /usr/local/ssl, which macOS does
+            // not ship. /etc/ssl/cert.pem is the system bundle. Skip it when
+            // SSL_CERT_FILE or SSL_CERT_DIR is set, so those still define trust.
+            #[cfg(target_os = "macos")]
+            if env::var_os("SSL_CERT_FILE").is_none() && env::var_os("SSL_CERT_DIR").is_none() {
+                let apple_cas = std::path::Path::new("/etc/ssl/cert.pem");
+                if apple_cas.is_file() {
+                    tls.set_ca_file(apple_cas)
+                        .map_err(|_| PostgresConnectionError::CouldNotCreateTlsConnector)?;
+                }
+            }
             let tls_connector = MakeTlsConnector::new(tls.build());
 
             // Perform a direct connection test

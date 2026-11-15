@@ -5,8 +5,7 @@
 
 ### Bug fixes
 -------------------------------------------------
-- fix: macOS release binaries statically link one vendored OpenSSL for Kafka and PostgreSQL TLS, so the Apple Silicon build links on macOS 26 and the binary runs without a Homebrew OpenSSL install. PostgreSQL TLS still reads `SSL_CERT_FILE` and `SSL_CERT_DIR`.
-- fix: macOS release binaries set the minimum OS to 15.0 for both Apple Silicon and Intel. They load on macOS 15 and macOS 26. The release build no longer copies the runner SDK version into `MACOSX_DEPLOYMENT_TARGET`.
+- fix: macOS release binaries statically link OpenSSL, require macOS 15.0 or newer, and use `/etc/ssl/cert.pem` for PostgreSQL TLS when `SSL_CERT_FILE` and `SSL_CERT_DIR` are unset.
 
 ### Features
 -------------------------------------------------
