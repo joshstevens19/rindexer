@@ -6,16 +6,18 @@ on:
 
 jobs:
   smoke:
-    name: ${{ matrix.target }}
+    name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-latest
+          - name: Mac apple silicon smoke build
+            runner: macos-latest
             target: aarch64-apple-darwin
-          - runner: macos-15-intel
+          - name: Mac intel smoke build
+            runner: macos-15-intel
             target: x86_64-apple-darwin
     steps:
       - uses: actions/checkout@v4
