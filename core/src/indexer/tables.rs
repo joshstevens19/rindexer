@@ -1880,13 +1880,16 @@ fn parse_view_call(value: &str) -> Option<ViewCall> {
     let mut paren_depth = 1;
     let mut call_end = None;
 
-    for (i, c) in value.chars().enumerate().skip(start) {
+    // `char_indices` on the slice after the prefix yields byte offsets, which is
+    // what the `value[..]` slicing below needs; a character index would land in
+    // the wrong place (or inside a character) for any multi-byte input.
+    for (offset, c) in value[start..].char_indices() {
         match c {
             '(' => paren_depth += 1,
             ')' => {
                 paren_depth -= 1;
                 if paren_depth == 0 {
-                    call_end = Some(i);
+                    call_end = Some(start + offset);
                     break;
                 }
             }
@@ -1999,13 +2002,14 @@ fn parse_single_return_field(s: &str) -> Option<ReturnField> {
         // Find matching closing paren
         let mut paren_depth = 0;
         let mut tuple_end = None;
-        for (i, c) in s.chars().enumerate() {
+        // Byte offsets, not character indices: the slicing below indexes bytes.
+        for (offset, c) in s.char_indices() {
             match c {
                 '(' => paren_depth += 1,
                 ')' => {
                     paren_depth -= 1;
                     if paren_depth == 0 {
-                        tuple_end = Some(i);
+                        tuple_end = Some(offset);
                         break;
                     }
                 }
@@ -5277,6 +5281,38 @@ mod tests {
         assert!(!is_view_call("call(something)"));
         assert!(!is_view_call("$call("));
         assert!(!is_view_call("$call"));
+    }
+
+    /// Both loops below used to report a character index and then slice the
+    /// string by it as though it were a byte offset. With any multi-byte
+    /// character before the closing paren the slice was short - silently
+    /// mis-parsing the expression - and it panicked outright
+    /// ("byte index is not a char boundary") when the offset landed inside a
+    /// character.
+    #[test]
+    fn multi_byte_view_call_parses_at_byte_offsets() {
+        let vc = parse_view_call("$call($assét, \"decimals()\")").unwrap();
+        assert_eq!(vc.contract_address, "$assét");
+        assert_eq!(vc.function_sig, "decimals()");
+        assert_eq!(vc.accessor, None);
+
+        let vc = parse_view_call("$call($a🚀b, \"f()\")[0]").unwrap();
+        assert_eq!(vc.contract_address, "$a🚀b");
+        assert_eq!(vc.accessor, Some("[0]".to_string()));
+    }
+
+    #[test]
+    fn multi_byte_nested_return_field_parses_at_byte_offsets() {
+        let field = parse_single_return_field("(uint256 amoünt) data").unwrap();
+        assert_eq!(field.name, "data");
+        assert_eq!(field.type_str, "tuple");
+
+        let field = parse_single_return_field("(uint256 a🚀b) data").unwrap();
+        assert_eq!(field.name, "data");
+
+        // ASCII must be untouched.
+        let field = parse_single_return_field("(uint256 amount) data").unwrap();
+        assert_eq!(field.name, "data");
     }
 
     #[test]
