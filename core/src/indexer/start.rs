@@ -102,6 +102,30 @@ pub struct ProcessedNetworkContract {
     pub processed_up_to: U64,
 }
 
+/// Where to resume given a stored cursor.
+///
+/// A configured `start_block` always resumes at `last_synced + 1` (that is
+/// the backfill contract). Live-from-head indexing leaves `start_block`
+/// unset so a restart does not backfill blocks missed while down, but a
+/// cursor that has already reached the head must still resume AFTER that
+/// block. Starting at the head re-indexes it, and raw-event inserts are not
+/// idempotent, so custom-table arithmetic would apply twice.
+///
+/// `last_synced_block` is `None` for a missing row and for the seeded `0`
+/// (`get_last_synced_block_number` treats zero as "never indexed").
+fn indexing_resume_block(
+    manifest_start_block: Option<U64>,
+    last_synced_block: Option<U64>,
+    latest_block: U64,
+) -> Option<U64> {
+    let last_synced = last_synced_block?;
+    if manifest_start_block.is_some() || last_synced >= latest_block {
+        Some(last_synced + U64::from(1))
+    } else {
+        None
+    }
+}
+
 async fn get_start_end_block(
     provider: &dyn ChainProvider,
     manifest_start_block: Option<U64>,
@@ -141,22 +165,15 @@ async fn get_start_end_block(
         }
     }
 
-    let last_known_start_block = if manifest_start_block.is_some() {
-        let last_synced_block = get_last_synced_block_number(config).await;
-
-        if let Some(value) = last_synced_block {
-            let start_from = value + U64::from(1);
-            info!(
-                "{} Found last synced block number - {:?} rindexer will start up from {:?}",
-                event_name, value, start_from
-            );
-            Some(start_from)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    let last_synced_block = get_last_synced_block_number(config).await;
+    let last_known_start_block =
+        indexing_resume_block(manifest_start_block, last_synced_block, latest_block);
+    if let Some(start_from) = last_known_start_block {
+        info!(
+            "{} Found last synced block number - {:?} rindexer will start up from {:?}",
+            event_name, last_synced_block, start_from
+        );
+    }
 
     let start_block =
         last_known_start_block.unwrap_or(manifest_start_block.unwrap_or(latest_block));
@@ -1597,6 +1614,39 @@ mod tests {
 
         assert_eq!(start, U64::from(500));
         assert_eq!(end, U64::from(500));
+    }
+
+    #[test]
+    fn live_from_head_does_not_reindex_a_caught_up_cursor() {
+        // Caught up at the head: resume AFTER it. Starting at the head
+        // would store the block's events a second time.
+        assert_eq!(
+            indexing_resume_block(None, Some(U64::from(5)), U64::from(5)),
+            Some(U64::from(6))
+        );
+        // Cursor ahead of the tip (the chain has not produced the next
+        // block yet, or the tip read lagged). Still do not step backwards.
+        assert_eq!(
+            indexing_resume_block(None, Some(U64::from(8)), U64::from(5)),
+            Some(U64::from(9))
+        );
+    }
+
+    #[test]
+    fn live_from_head_skips_blocks_missed_while_down() {
+        // No start_block and the cursor is behind the tip: keep starting at
+        // the head. Downtime must not turn into a backfill.
+        assert_eq!(indexing_resume_block(None, Some(U64::from(5)), U64::from(100)), None);
+        assert_eq!(indexing_resume_block(None, None, U64::from(100)), None);
+    }
+
+    #[test]
+    fn configured_start_block_always_resumes_from_the_cursor() {
+        assert_eq!(
+            indexing_resume_block(Some(U64::from(1)), Some(U64::from(5)), U64::from(100)),
+            Some(U64::from(6))
+        );
+        assert_eq!(indexing_resume_block(Some(U64::from(1)), None, U64::from(100)), None);
     }
 
     #[tokio::test]
