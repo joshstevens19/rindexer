@@ -697,15 +697,11 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
             //   [batch + cursor] commit LAST: a crash anywhere earlier re-runs
             //   the whole batch; a crash after it never re-fetches committed
             //   raw rows.
-            //   Deliberate tradeoff: table ops commit in their OWN transactions,
-            //   so a failure/crash between them and the atomic commit re-runs
-            //   them on retry (duplicate Insert-ops / re-applied arithmetic) —
-            //   the same at-least-once exposure they have on the legacy path
-            //   today. Running them after the atomic commit instead would turn
-            //   a crash in between into a PERMANENT skip (cursor already past
-            //   the batch), which is strictly worse. Folding them into the same
-            //   transaction as the raw insert is the real fix and is the
-            //   direction of the sync_together work (PR #453's block sink).
+            //   Table operations commit their own transaction, which also
+            //   inserts rindexer_internal.table_op_claim. A crash before the
+            //   raw insert and cursor retries the log, the claim conflicts,
+            //   and the arithmetic is not applied again. The raw insert and
+            //   the cursor still commit together afterwards.
             //   LEGACY arm (CH/CSV alongside PG, factory discovery events,
             //   concurrency > 1, or no PG): the ORIGINAL ordering — raw sinks
             //   first, table ops after — so a transient raw-sink failure retries
@@ -747,6 +743,9 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                         }
                         return Err(e);
                     }
+                    // Test hook: the arithmetic has committed and the cursor
+                    // has not. A crash here is the window the claim closes.
+                    pause_after_table_ops().await?;
                 }
 
                 if params.store_raw_events {
@@ -1073,6 +1072,34 @@ pub enum ProcessIndexersError {
 
     #[error("Table column type resolution error: {0}")]
     TableColumnTypeResolutionError(String),
+}
+
+/// When `RINDEXER_PAUSE_AFTER_TABLE_OPS` is a path, write that file after
+/// the table-operation transaction commits and wait until it is removed.
+/// The e2e suite kills the process in that gap. Unset in production.
+async fn pause_after_table_ops() -> Result<(), String> {
+    let Ok(path) = std::env::var("RINDEXER_PAUSE_AFTER_TABLE_OPS") else {
+        return Ok(());
+    };
+    if path.is_empty() {
+        return Ok(());
+    }
+    let flag = std::path::PathBuf::from(&path);
+    if let Some(parent) = flag.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+    }
+    std::fs::write(&flag, b"table-ops-committed").map_err(|e| e.to_string())?;
+    loop {
+        if !crate::system_state::is_running() {
+            return Err("Shutdown requested".to_string());
+        }
+        if !flag.exists() {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
 }
 
 pub async fn process_events(

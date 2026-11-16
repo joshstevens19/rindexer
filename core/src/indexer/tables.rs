@@ -142,7 +142,7 @@
 //!                 value: $value
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use alloy::dyn_abi::{DynSolType, DynSolValue};
@@ -162,9 +162,10 @@ use crate::database::clickhouse::batch_operations::execute_dynamic_batch_operati
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::generate::generate_indexer_contract_schema_name;
 use crate::database::generate::generate_table_full_name;
-use crate::database::postgres::batch_operations::execute_dynamic_batch_operation;
+use crate::database::postgres::batch_operations::execute_dynamic_batch_operation_in;
 use crate::database::postgres::client::PostgresClient;
 use crate::database::postgres::generate::generate_internal_event_table_name;
+use crate::database::postgres::generate::generate_table_op_claim_table_sql;
 use crate::database::sql_type_wrapper::EthereumSqlTypeWrapper;
 use crate::event::{
     evaluate_arithmetic, filter_by_expression, parse_filter_expression, ComputedValue,
@@ -1475,12 +1476,18 @@ pub(crate) fn warn_on_unusable_arithmetic_defaults(table: &Table, table_label: &
 }
 
 /// Data for a single table row to be processed.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct TableRowData {
     /// Column values keyed by column name
     pub columns: HashMap<String, EthereumSqlTypeWrapper>,
     /// Network for this row
     pub network: String,
+    /// Log identity. The arithmetic claim is keyed on these so a retried log
+    /// does not apply again. Empty `tx_hash` means "no identity" and the row
+    /// is applied without a claim (tests that predate the claim).
+    pub tx_hash: String,
+    pub log_index: i64,
+    pub block_number: i64,
 }
 
 /// Checks if a value string contains arithmetic operators indicating it's a computed expression.
@@ -3619,7 +3626,7 @@ pub async fn process_table_operations(
             None => continue,
         };
 
-        for operation in &event_mapping.operations {
+        for (op_ordinal, operation) in event_mapping.operations.iter().enumerate() {
             let mut rows_to_process: Vec<TableRowData> = Vec::new();
             // Track max block per network for this batch of rows
             let mut batch_max_blocks: HashMap<String, u64> = HashMap::new();
@@ -3800,7 +3807,15 @@ pub async fn process_table_operations(
                             EthereumSqlTypeWrapper::Address(tx_metadata.contract_address),
                         );
 
-                        rows_to_process.push(TableRowData { columns, network: network.clone() });
+                        rows_to_process.push(TableRowData {
+                            columns,
+                            network: network.clone(),
+                            tx_hash: format!("{:?}", tx_metadata.tx_hash),
+                            log_index: i64::try_from(tx_metadata.log_index.to::<u64>())
+                                .unwrap_or(i64::MAX),
+                            block_number: i64::try_from(tx_metadata.block_number)
+                                .unwrap_or(i64::MAX),
+                        });
                         // Track max block for this batch
                         batch_max_blocks
                             .entry(network.clone())
@@ -3820,6 +3835,9 @@ pub async fn process_table_operations(
 
             // Execute the operation
             if let Some(postgres) = &postgres {
+                // The claim, the arithmetic and the set/max/min journal commit
+                // together. A crash before that commit retries the log; a crash
+                // after it finds the claim and does not apply the arithmetic again.
                 execute_postgres_operation(
                     postgres,
                     &table_runtime.full_table_name,
@@ -3827,17 +3845,9 @@ pub async fn process_table_operations(
                     operation,
                     &rows_to_process,
                     sql_condition.as_deref(),
+                    i32::try_from(op_ordinal).unwrap_or(i32::MAX),
                 )
                 .await?;
-
-                // Journal non-reversible operations (Set/Max/Min) for reorg recalculation
-                journal_non_reversible_ops(
-                    postgres,
-                    &table_runtime.full_table_name,
-                    operation,
-                    &rows_to_process,
-                )
-                .await;
             }
 
             if let Some(clickhouse) = &clickhouse {
@@ -3956,6 +3966,75 @@ fn operation_type_to_batch_type(op_type: &OperationType) -> BatchOperationType {
 /// * `sql_where` - Optional SQL WHERE condition for upsert operations.
 ///   Used when the `if`/`filter` condition contains `@table` references.
 ///   E.g., conditions like `$value > @balance` become SQL `EXCLUDED.value > table.balance`.
+/// Inserts one claim per log and returns the rows whose claim was new, plus
+/// any row with no log identity (cron). The caller applies those rows on the
+/// same transaction and then commits.
+async fn claim_fresh_rows<'a>(
+    tx: &tokio_postgres::Transaction<'_>,
+    table_name: &str,
+    op_ordinal: i32,
+    rows: &'a [TableRowData],
+) -> Result<Vec<&'a TableRowData>, String> {
+    let mut fresh = Vec::new();
+    let mut pending: Vec<&TableRowData> = Vec::new();
+    for row in rows {
+        if row.tx_hash.is_empty() {
+            fresh.push(row);
+        } else {
+            pending.push(row);
+        }
+    }
+    if pending.is_empty() {
+        return Ok(fresh);
+    }
+
+    let mut claimed: HashSet<(String, String, i64)> = HashSet::new();
+    for chunk in pending.chunks(5000) {
+        let mut values = Vec::with_capacity(chunk.len());
+        let mut params: Vec<EthereumSqlTypeWrapper> = Vec::with_capacity(chunk.len() * 6);
+        for (index, row) in chunk.iter().enumerate() {
+            let base = index * 6;
+            values.push(format!(
+                "(${}::varchar, ${}::char(66), ${}::bigint, ${}::varchar, ${}::int, ${}::bigint)",
+                base + 1,
+                base + 2,
+                base + 3,
+                base + 4,
+                base + 5,
+                base + 6
+            ));
+            params.push(EthereumSqlTypeWrapper::String(row.network.clone()));
+            params.push(EthereumSqlTypeWrapper::String(row.tx_hash.clone()));
+            params.push(EthereumSqlTypeWrapper::I64(row.log_index));
+            params.push(EthereumSqlTypeWrapper::String(table_name.to_string()));
+            params.push(EthereumSqlTypeWrapper::I32(op_ordinal));
+            params.push(EthereumSqlTypeWrapper::I64(row.block_number));
+        }
+        let sql = format!(
+            "INSERT INTO rindexer_internal.table_op_claim \
+             (network, tx_hash, log_index, derived_table, op_ordinal, block_number) \
+             VALUES {} \
+             ON CONFLICT (network, tx_hash, log_index, derived_table, op_ordinal) DO NOTHING \
+             RETURNING network, btrim(tx_hash::text), log_index",
+            values.join(", ")
+        );
+        let refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
+            params.iter().map(|param| param as _).collect();
+        let returned = tx.query(&sql, &refs).await.map_err(|e| e.to_string())?;
+        for row in returned {
+            let network: String = row.get(0);
+            let tx_hash: String = row.get(1);
+            let log_index: i64 = row.get(2);
+            claimed.insert((network, tx_hash, log_index));
+        }
+    }
+
+    fresh.extend(pending.into_iter().filter(|row| {
+        claimed.contains(&(row.network.clone(), row.tx_hash.clone(), row.log_index))
+    }));
+    Ok(fresh)
+}
+
 async fn execute_postgres_operation(
     postgres: &PostgresClient,
     table_name: &str,
@@ -3963,18 +4042,34 @@ async fn execute_postgres_operation(
     operation: &TableOperation,
     rows: &[TableRowData],
     sql_where: Option<&str>,
+    op_ordinal: i32,
 ) -> Result<(), String> {
     if rows.is_empty() {
         return Ok(());
     }
 
+    // Idempotency table. setup_postgres creates it; this covers tests and a
+    // database that was migrated before the table existed.
+    postgres
+        .batch_execute(&generate_table_op_claim_table_sql())
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut conn = postgres.raw_connection().await.map_err(|e| e.to_string())?;
+    let tx = conn.transaction().await.map_err(|e| e.to_string())?;
+    let fresh = claim_fresh_rows(&tx, table_name, op_ordinal, rows).await?;
+    if fresh.is_empty() {
+        tx.commit().await.map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     // Build rows of DynamicColumnDefinition for the batch operation
-    let mut batch_rows: Vec<Vec<DynamicColumnDefinition>> = Vec::with_capacity(rows.len());
+    let mut batch_rows: Vec<Vec<DynamicColumnDefinition>> = Vec::with_capacity(fresh.len());
 
     // For Insert operations, don't use Distinct behavior (no deduplication)
     let is_insert = operation.operation_type == OperationType::Insert;
 
-    for row in rows {
+    for row in &fresh {
         let mut columns: Vec<DynamicColumnDefinition> = Vec::new();
 
         if !table_def.cross_chain {
@@ -4112,8 +4207,8 @@ async fn execute_postgres_operation(
     let short_table_name = table_name.split('.').next_back().unwrap_or(table_name);
     let event_name = format!("Tables::{}", short_table_name);
 
-    execute_dynamic_batch_operation(
-        postgres,
+    execute_dynamic_batch_operation_in(
+        &tx,
         table_name,
         op_type,
         batch_rows,
@@ -4121,6 +4216,19 @@ async fn execute_postgres_operation(
         sql_where,
     )
     .await?;
+
+    let journal_rows: Vec<TableRowData> = fresh.iter().map(|row| (*row).clone()).collect();
+    let journal = collect_journal_values(table_name, operation, &journal_rows, "''");
+    if !journal.is_empty() {
+        let sql = format!(
+            "INSERT INTO rindexer_internal.derived_op_log \
+             (derived_table, network, where_key, column_name, value, block_number, tx_index, log_index) \
+             VALUES {}",
+            journal.join(", ")
+        );
+        tx.batch_execute(&sql).await.map_err(|e| e.to_string())?;
+    }
+    tx.commit().await.map_err(|e| e.to_string())?;
 
     let op_label = match operation.operation_type {
         OperationType::Upsert => "UPSERT",
@@ -4321,7 +4429,7 @@ pub async fn execute_postgres_operation_internal(
     rows: &[TableRowData],
     sql_where: Option<&str>,
 ) -> Result<(), String> {
-    execute_postgres_operation(postgres, table_name, table_def, operation, rows, sql_where).await
+    execute_postgres_operation(postgres, table_name, table_def, operation, rows, sql_where, 0).await
 }
 
 /// Internal ClickHouse operation execution - used by cron scheduler.
@@ -4633,34 +4741,6 @@ fn collect_journal_values(
     }
 
     value_tuples
-}
-
-/// Journal non-reversible (Set/Max/Min) operations to Postgres `rindexer_internal.derived_op_log`.
-/// Batches all rows into a single INSERT statement.
-async fn journal_non_reversible_ops(
-    postgres: &PostgresClient,
-    derived_table: &str,
-    operation: &TableOperation,
-    rows: &[TableRowData],
-) {
-    let values = collect_journal_values(derived_table, operation, rows, "''");
-    if values.is_empty() {
-        return;
-    }
-
-    let sql = format!(
-        "INSERT INTO rindexer_internal.derived_op_log \
-         (derived_table, network, where_key, column_name, value, block_number, tx_index, log_index) \
-         VALUES {}",
-        values.join(", ")
-    );
-
-    if let Err(e) = postgres.batch_execute(&sql).await {
-        tracing::error!(
-            table = %derived_table,
-            "Failed to journal non-reversible ops: {:?}", e
-        );
-    }
 }
 
 /// Journal non-reversible (Set/Max/Min) operations to ClickHouse `rindexer_internal.derived_op_log`.
@@ -5823,6 +5903,16 @@ mod tests {
     }
 
     #[test]
+    fn table_op_claim_identity_includes_every_operation_on_a_log() {
+        let sql = generate_table_op_claim_table_sql();
+        assert!(
+            sql.contains("PRIMARY KEY (network, tx_hash, log_index, derived_table, op_ordinal)"),
+            "{sql}"
+        );
+        assert!(sql.contains("idx_table_op_claim_reorg"), "{sql}");
+    }
+
+    #[test]
     fn arithmetic_insert_default_canonicalizes_numeric_literals() {
         // Accepted: plain decimals (trimmed), hex via alloy FromStr, signed values
         assert_eq!(arithmetic_insert_default("0", &ColumnType::Uint256), Some("0".to_string()));
@@ -5915,6 +6005,9 @@ events:
                 ),
             ]),
             network: "ethereum".to_string(),
+            tx_hash: format!("0x{seq:064x}"),
+            log_index: seq as i64,
+            block_number: seq as i64,
         };
 
         // First touch is a debit: row must be created at 50 - 30 = 20
@@ -5925,6 +6018,7 @@ events:
             operation,
             &[row(30, 1)],
             None,
+            0,
         )
         .await
         .expect("first debit failed");
@@ -5936,9 +6030,22 @@ events:
             operation,
             &[row(25, 2)],
             None,
+            0,
         )
         .await
         .expect("second debit failed");
+        // The same log again must not subtract a second time.
+        execute_postgres_operation(
+            &postgres,
+            "yaml_balances",
+            &table,
+            operation,
+            &[row(25, 2)],
+            None,
+            0,
+        )
+        .await
+        .expect("replayed debit failed");
 
         let stored = postgres
             .query_one("SELECT balance::TEXT AS balance FROM yaml_balances", &[])

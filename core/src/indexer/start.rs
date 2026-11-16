@@ -134,6 +134,7 @@ fn indexing_resume_block(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn get_start_end_block(
     provider: &dyn ChainProvider,
     manifest_start_block: Option<U64>,

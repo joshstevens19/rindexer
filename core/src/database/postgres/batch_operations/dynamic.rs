@@ -1,6 +1,7 @@
 //! Dynamic batch operations for runtime-defined columns (used by custom indexing).
 
 use tokio_postgres::types::ToSql;
+use tokio_postgres::Transaction;
 
 use super::query_builder::{
     build_arithmetic_insert_expr, build_cte_header, build_delete_body, build_sequence_condition,
@@ -43,17 +44,47 @@ pub async fn execute_dynamic_batch_operation(
     let max_rows_per_batch = (32767 / num_columns).max(1);
 
     for batch in rows.chunks(max_rows_per_batch) {
-        execute_batch(database, table_name, op_type, batch, custom_where).await.map_err(|e| {
-            tracing::error!("{} - Batch operation failed: {}", event_name, e);
-            e
-        })?;
+        execute_batch(Some(database), None, table_name, op_type, batch, custom_where)
+            .await
+            .map_err(|e| {
+                tracing::error!("{} - Batch operation failed: {}", event_name, e);
+                e
+            })?;
     }
 
     Ok(())
 }
 
+/// Same as [`execute_dynamic_batch_operation`], but the statements run on
+/// `tx` and this function does not commit. The caller commits the claim
+/// insert and these statements together.
+pub async fn execute_dynamic_batch_operation_in(
+    tx: &Transaction<'_>,
+    table_name: &str,
+    op_type: BatchOperationType,
+    rows: Vec<Vec<DynamicColumnDefinition>>,
+    event_name: &str,
+    custom_where: Option<&str>,
+) -> Result<(), String> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let num_columns = rows.first().map_or(1, |r| r.len().max(1));
+    let max_rows_per_batch = (32767 / num_columns).max(1);
+    for batch in rows.chunks(max_rows_per_batch) {
+        execute_batch(None, Some(tx), table_name, op_type, batch, custom_where).await.map_err(
+            |e| {
+                tracing::error!("{} - Batch operation failed: {}", event_name, e);
+                e
+            },
+        )?;
+    }
+    Ok(())
+}
+
 async fn execute_batch(
-    database: &PostgresClient,
+    database: Option<&PostgresClient>,
+    tx: Option<&Transaction<'_>>,
     table_name: &str,
     op_type: BatchOperationType,
     batch: &[Vec<DynamicColumnDefinition>],
@@ -262,13 +293,19 @@ async fn execute_batch(
                 table_name
             );
 
-            database
-                .bulk_insert_via_copy(table_name, &column_names_owned, &column_types, &data)
-                .await
-                .map_err(|e| {
-                    tracing::error!("PostgreSQL COPY error: {:?}", e);
-                    e.to_string()
-                })?;
+            if let Some(tx) = tx {
+                copy_in_transaction(tx, table_name, &column_names_owned, &column_types, &data)
+                    .await?;
+            } else {
+                database
+                    .expect("batch execution has a client when it is not inside a transaction")
+                    .bulk_insert_via_copy(table_name, &column_names_owned, &column_types, &data)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("PostgreSQL COPY error: {:?}", e);
+                        e.to_string()
+                    })?;
+            }
 
             return Ok(());
         }
@@ -382,13 +419,7 @@ async fn execute_batch(
 
             tracing::debug!("Custom indexing query: {}", query);
 
-            database.with_transaction(&query, &params, |_| async move { Ok(()) }).await.map_err(
-                |e| {
-                    tracing::error!("PostgreSQL error: {:?}", e);
-                    tracing::error!("Failed query:");
-                    e.to_string()
-                },
-            )?;
+            exec_query(database, tx, &query, &params).await?;
 
             return Ok(());
         }
@@ -425,11 +456,63 @@ async fn execute_batch(
 
     tracing::debug!("Custom indexing query: {}", query);
 
-    database.with_transaction(&query, &params, |_| async move { Ok(()) }).await.map_err(|e| {
-        tracing::error!("PostgreSQL error: {:?}", e);
-        tracing::error!("Failed query:\n{}", query);
-        e.to_string()
-    })?;
+    exec_query(database, tx, &query, &params).await?;
 
+    Ok(())
+}
+
+async fn exec_query(
+    database: Option<&PostgresClient>,
+    tx: Option<&Transaction<'_>>,
+    query: &str,
+    params: &[&(dyn ToSql + Sync)],
+) -> Result<(), String> {
+    if let Some(tx) = tx {
+        tx.execute(query, params).await.map_err(|e| {
+            tracing::error!("PostgreSQL error: {:?}", e);
+            tracing::error!("Failed query:\n{}", query);
+            e.to_string()
+        })?;
+        return Ok(());
+    }
+    database
+        .expect("batch execution has a client when it is not inside a transaction")
+        .with_transaction(query, params, |_| async move { Ok(()) })
+        .await
+        .map_err(|e| {
+            tracing::error!("PostgreSQL error: {:?}", e);
+            tracing::error!("Failed query:\n{}", query);
+            e.to_string()
+        })
+}
+
+async fn copy_in_transaction(
+    tx: &Transaction<'_>,
+    table_name: &str,
+    column_names: &[String],
+    column_types: &[tokio_postgres::types::Type],
+    data: &[Vec<EthereumSqlTypeWrapper>],
+) -> Result<(), String> {
+    use futures::pin_mut;
+    use tokio_postgres::binary_copy::BinaryCopyInWriter;
+
+    use crate::database::generate::generate_event_table_columns_names_sql;
+
+    let stmt = format!(
+        "COPY {} ({}) FROM STDIN WITH (FORMAT binary)",
+        table_name,
+        generate_event_table_columns_names_sql(column_names),
+    );
+    let sink = tx.copy_in(&stmt).await.map_err(|e| e.to_string())?;
+    let writer = BinaryCopyInWriter::new(sink, column_types);
+    pin_mut!(writer);
+    for row in data {
+        let refs: Vec<&(dyn ToSql + Sync)> = row.iter().map(|param| param as _).collect();
+        if let Err(e) = writer.as_mut().write(&refs).await {
+            writer.as_mut().finish().await.map_err(|finish| finish.to_string())?;
+            return Err(e.to_string());
+        }
+    }
+    writer.finish().await.map_err(|e| e.to_string())?;
     Ok(())
 }

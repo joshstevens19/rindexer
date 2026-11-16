@@ -729,7 +729,16 @@ impl PostgresClient {
                 .await?;
         }
 
-        // 4. Rewind last_synced_block checkpoints to fork_point - 1
+        // 4. Drop idempotency claims in the reorged range so a re-included log
+        //    can apply its arithmetic again. The reversal below undoes the
+        //    first apply; leaving the claim would skip the replay.
+        let delete_claims = "DELETE FROM rindexer_internal.table_op_claim \
+             WHERE network = $1 AND block_number >= $2 AND block_number <= $3";
+        transaction
+            .execute(delete_claims, &[&network, &fork_point_i64, &detection_point_i64])
+            .await?;
+
+        // 5. Rewind last_synced_block checkpoints to fork_point - 1
         let rewind_block = Decimal::from(fork_point.saturating_sub(1));
         for table in checkpoint_tables {
             let query = format!(

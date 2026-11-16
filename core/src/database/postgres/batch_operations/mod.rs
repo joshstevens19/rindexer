@@ -10,7 +10,7 @@ mod query_builder;
 #[cfg(test)]
 mod tests;
 
-pub use dynamic::execute_dynamic_batch_operation;
+pub use dynamic::{execute_dynamic_batch_operation, execute_dynamic_batch_operation_in};
 
 // Re-exported for use by the create_batch_postgres_operation! macro
 #[allow(unused_imports)]

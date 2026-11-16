@@ -1174,7 +1174,15 @@ async fn execute_cron_operations_batch(
                     EthereumSqlTypeWrapper::Address(contract_address),
                 );
 
-                all_rows.push(TableRowData { columns, network: task.network.clone() });
+                all_rows.push(TableRowData {
+                    columns,
+                    network: task.network.clone(),
+                    // Cron rows are not chain logs. An empty hash skips the
+                    // idempotency claim so each scheduled run still applies.
+                    tx_hash: String::new(),
+                    log_index: 0,
+                    block_number: 0,
+                });
             }
         }
 
@@ -1518,7 +1526,15 @@ async fn execute_cron_operations(
                 EthereumSqlTypeWrapper::Address(contract_address),
             );
 
-            all_rows.push(TableRowData { columns, network: task.network.clone() });
+            all_rows.push(TableRowData {
+                columns,
+                network: task.network.clone(),
+                // Cron rows are not chain logs. An empty hash skips the
+                // idempotency claim so each scheduled run still applies.
+                tx_hash: String::new(),
+                log_index: 0,
+                block_number: 0,
+            });
         }
 
         if all_rows.is_empty() {
