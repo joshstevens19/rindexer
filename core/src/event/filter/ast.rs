@@ -233,6 +233,38 @@ impl<'a> Expression<'a> {
             }
         }
     }
+
+    /// Same as [`to_sql_condition`], but event variables are columns of the
+    /// stored event row (`"to"`) rather than `EXCLUDED."to"`. Reorg reversal
+    /// snapshots read the event table; there is no INSERT to attach
+    /// `EXCLUDED` to.
+    pub fn to_event_row_condition(&self) -> String {
+        match self {
+            Expression::Condition(cond) => {
+                let left_sql = cond.left.to_event_row_sql();
+                let right_sql = cond.right.to_event_row_sql();
+                let op_sql = match cond.operator {
+                    ComparisonOperator::Eq => "=",
+                    ComparisonOperator::Ne => "<>",
+                    ComparisonOperator::Gt => ">",
+                    ComparisonOperator::Gte => ">=",
+                    ComparisonOperator::Lt => "<",
+                    ComparisonOperator::Lte => "<=",
+                };
+                format!("{left_sql} {op_sql} {right_sql}")
+            }
+            Expression::Logical { left, operator, right } => {
+                let left_sql = left.to_event_row_condition();
+                let right_sql = right.to_event_row_condition();
+                let op_sql = match operator {
+                    LogicalOperator::And => "AND",
+                    LogicalOperator::Or => "OR",
+                };
+                format!("({left_sql} {op_sql} {right_sql})")
+            }
+            Expression::Not(inner) => format!("NOT ({})", inner.to_event_row_condition()),
+        }
+    }
 }
 
 impl<'a> ArithmeticExpr<'a> {
@@ -283,6 +315,13 @@ impl<'a> ArithmeticExpr<'a> {
                     }
                 }
             }
+        }
+    }
+
+    fn to_event_row_sql(&self) -> String {
+        match self {
+            ArithmeticExpr::Variable(cond_left) => format!("\"{}\"", cond_left.base_name()),
+            other => other.to_sql(""),
         }
     }
 }

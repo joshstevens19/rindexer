@@ -327,7 +327,14 @@ impl ReorgTask {
                 let network_filter = self.network_filter(dt.cross_chain);
 
                 let condition_filter = match &op.condition {
-                    Some(cond) => format!(" AND ({})", cond),
+                    Some(cond) => {
+                        let expr = crate::event::parse_filter_expression(cond).map_err(|error| {
+                            anyhow::anyhow!(
+                                "reorg reversal condition is not a filter expression: {cond} ({error})"
+                            )
+                        })?;
+                        format!(" AND ({})", expr.to_event_row_condition())
+                    }
                     None => String::new(),
                 };
 
