@@ -352,7 +352,9 @@ impl ReorgTask {
                 // columns are user-controlled identifiers that may collide with SQL
                 // reserved words (e.g. `to`, `from`), so each backend quotes them with
                 // its own convention (Postgres double quotes, ClickHouse backticks).
-                let build_select = |quote: &dyn Fn(&str) -> String| {
+                // Raw uint256 event columns are VARCHAR. Postgres cannot
+                // SUM those, and the aggregate itself is NUMERIC.
+                let build_select = |quote: &dyn Fn(&str) -> String, cast_numeric: bool| {
                     let group =
                         where_ev_cols.iter().map(|c| quote(c)).collect::<Vec<_>>().join(", ");
                     let aggs = agg_specs
@@ -361,7 +363,12 @@ impl ReorgTask {
                             if *is_counter {
                                 format!("COUNT(*) AS {}", alias)
                             } else {
-                                format!("SUM({}) AS {}", quote(ev), alias)
+                                let source = if cast_numeric {
+                                    format!("{}::numeric", quote(ev))
+                                } else {
+                                    quote(ev)
+                                };
+                                format!("SUM({}) AS {}", source, alias)
                             }
                         })
                         .collect::<Vec<_>>()
@@ -384,7 +391,7 @@ impl ReorgTask {
                     let pg_create = format!(
                         "CREATE TEMP TABLE {} AS {}",
                         pg_temp,
-                        build_select(&quote_pg_ident)
+                        build_select(&quote_pg_ident, true)
                     );
                     pg.batch_execute(&pg_create).await.with_context(|| {
                         format!(
@@ -417,7 +424,7 @@ impl ReorgTask {
                         "CREATE TABLE IF NOT EXISTS {} ENGINE = Join(ANY, LEFT, {}) AS {}",
                         ch_temp,
                         ch_snap_keys.join(", "),
-                        build_select(&quote_ch_ident),
+                        build_select(&quote_ch_ident, false),
                     );
                     ch.execute(&ch_create).await.with_context(|| {
                         format!(
