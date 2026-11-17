@@ -18,6 +18,7 @@ impl DiscordBot {
         Self { http }
     }
 
+    #[allow(clippy::result_large_err, reason = "preserve existing error API")]
     pub async fn send_message(
         &self,
         channel_id: ChannelId,

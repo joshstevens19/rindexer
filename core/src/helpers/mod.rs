@@ -38,13 +38,17 @@ pub fn camel_to_snake_advanced(s: &str, numbers_attach_to_last_word: bool) -> St
     let mut previous_was_digit = false;
     let mut uppercase_sequence_length = 0;
 
-    for (i, c) in s.chars().enumerate() {
+    // Collected up front so the look-ahead below indexes characters rather than
+    // bytes: `s.len()` is a byte count, and comparing a character index against
+    // it over-runs the end for any multi-byte input.
+    let chars: Vec<char> = s.chars().collect();
+
+    for (i, c) in chars.iter().copied().enumerate() {
         if c.is_alphanumeric() || c == '_' {
             if c.is_uppercase() {
                 if i > 0
                     && (!previous_was_uppercase
-                        || (i + 1 < s.len()
-                            && s.chars().nth(i + 1).expect("Failed to get char").is_lowercase()))
+                        || chars.get(i + 1).is_some_and(|next| next.is_lowercase()))
                 {
                     snake_case.push('_');
                 }
@@ -200,6 +204,35 @@ pub fn replace_env_variable_to_raw_name(rpc: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The upper-case look-ahead used to compare a character index against
+    /// `s.len()`, a byte count, and then unwrap the result - so any name
+    /// carrying a multi-byte character and ending in two upper-case letters
+    /// panicked with "Failed to get char". Contract and indexer names come
+    /// straight from `rindexer.yaml`, so this was reachable from user config.
+    #[test]
+    fn multi_byte_names_do_not_panic() {
+        assert_eq!(camel_to_snake("Café ID"), "café_id");
+        assert_eq!(camel_to_snake("naïveURI"), "naïve_uri");
+        assert_eq!(camel_to_snake("éAB"), "é_ab");
+        assert_eq!(camel_to_snake("Token🚀ID"), "token_id");
+    }
+
+    /// Pure-ASCII names must keep resolving to exactly the same identifiers,
+    /// otherwise the fix would silently rename users' tables and columns.
+    #[test]
+    fn ascii_names_are_unchanged_by_the_lookahead_fix() {
+        for (input, expected) in [
+            ("transferFrom", "transfer_from"),
+            ("TransferAB", "transfer_ab"),
+            ("URI", "uri"),
+            ("myURIValue", "my_uri_value"),
+            ("erc20Token", "erc_20_token"),
+            ("value2Thing", "value_2_thing"),
+        ] {
+            assert_eq!(camel_to_snake(input), expected, "input: {input}");
+        }
+    }
 
     #[test]
     fn test_camel_to_snake() {

@@ -1,16 +1,15 @@
+#[cfg(feature = "postgres")]
+use crate::database::postgres::relationship::Relationship;
+use crate::{
+    event::{config::EventProcessingConfig, contract_setup::ContractEventMapping},
+    indexer::{reorg::ReorgCoordinator, start::strip_filter_suffixes},
+    manifest::{contract::DependencyEventTree, core::Manifest},
+};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
 };
-
 use tokio::sync::Mutex;
-
-use crate::{
-    database::postgres::relationship::Relationship,
-    event::{config::EventProcessingConfig, contract_setup::ContractEventMapping},
-    indexer::reorg::ReorgCoordinator,
-    manifest::{contract::DependencyEventTree, core::Manifest},
-};
 
 #[derive(Debug, Clone)]
 pub struct EventsDependencyTree {
@@ -68,6 +67,7 @@ pub enum ContractEventDependenciesMapFromRelationshipsError {
 }
 
 impl ContractEventDependencies {
+    #[cfg(feature = "postgres")]
     pub fn map_from_relationships(
         relationships: &[Relationship],
     ) -> Result<Vec<ContractEventDependencies>, ContractEventDependenciesMapFromRelationshipsError>
@@ -79,6 +79,7 @@ impl ContractEventDependencies {
         Ok(ContractEventDependencies::map_all_dependencies(relationships))
     }
 
+    #[cfg(feature = "postgres")]
     fn map_all_dependencies(relationships: &[Relationship]) -> Vec<ContractEventDependencies> {
         let relationships_map =
             ContractEventDependencies::generate_relationships_map(relationships);
@@ -111,6 +112,7 @@ impl ContractEventDependencies {
             .collect()
     }
 
+    #[cfg(feature = "postgres")]
     fn merge_trees(
         tree1: &EventsDependencyTree,
         tree2: &EventsDependencyTree,
@@ -139,6 +141,7 @@ impl ContractEventDependencies {
         }
     }
 
+    #[cfg(feature = "postgres")]
     fn build_dependency_tree(
         event: &ContractEventMapping,
         relationships_map: &HashMap<ContractEventMapping, Vec<ContractEventMapping>>,
@@ -180,6 +183,7 @@ impl ContractEventDependencies {
         Arc::new(EventsDependencyTree { contract_events, then: Box::new(next_tree) })
     }
 
+    #[cfg(feature = "postgres")]
     fn generate_relationships_map(
         relationships: &[Relationship],
     ) -> HashMap<ContractEventMapping, Vec<ContractEventMapping>> {
@@ -202,6 +206,7 @@ impl ContractEventDependencies {
         relationships_map
     }
 
+    #[cfg(feature = "postgres")]
     fn collect_dependency_events(tree: &EventsDependencyTree) -> Vec<ContractEventMapping> {
         let mut events = tree.contract_events.clone();
         if let Some(ref then_tree) = *tree.then {
@@ -262,8 +267,10 @@ impl ContractEventDependencies {
         event_name: &str,
         dependencies: &[ContractEventDependencies],
     ) -> DependencyStatus {
-        let has_dependency_in_own_contract =
-            dependencies.iter().find(|d| d.contract_name == contract_name).is_some_and(|deps| {
+        let has_dependency_in_own_contract = dependencies
+            .iter()
+            .find(|d| is_same_contract(&d.contract_name, contract_name))
+            .is_some_and(|deps| {
                 deps.event_dependencies.has_dependency(&ContractEventMapping {
                     contract_name: deps.contract_name.clone(),
                     event_name: event_name.to_string(),
@@ -273,7 +280,7 @@ impl ContractEventDependencies {
         let dependencies_in_other_contracts: Vec<String> = dependencies
             .iter()
             .filter_map(|d| {
-                if d.contract_name != contract_name {
+                if !is_same_contract(&d.contract_name, contract_name) {
                     let has_dependency =
                         d.event_dependencies.has_dependency(&ContractEventMapping {
                             contract_name: contract_name.to_string(),
@@ -301,6 +308,12 @@ impl ContractEventDependencies {
 
         DependencyStatus { has_dependency_in_own_contract, dependencies_in_other_contracts }
     }
+}
+
+/// A contract without `address` runs under its name plus one or more `Filter` suffixes,
+/// while its `dependency_events` stay keyed by the manifest name.
+fn is_same_contract(manifest_name: &str, runtime_name: &str) -> bool {
+    manifest_name == runtime_name || manifest_name == strip_filter_suffixes(runtime_name)
 }
 
 pub struct ContractEventsDependenciesConfig {
@@ -333,7 +346,12 @@ impl ContractEventsDependenciesConfig {
                     contract_name: event_processing_config.contract_name().clone(),
                     event_dependencies: dependencies
                         .iter()
-                        .find(|d| d.contract_name == event_processing_config.contract_name())
+                        .find(|d| {
+                            is_same_contract(
+                                &d.contract_name,
+                                &event_processing_config.contract_name(),
+                            )
+                        })
                         .expect("Failed to find contract dependencies")
                         .event_dependencies
                         .clone(),
@@ -364,5 +382,65 @@ impl ContractEventsDependenciesConfig {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn deps(contract_name: &str, events: &[&str]) -> ContractEventDependencies {
+        let mappings: Vec<ContractEventMapping> = events
+            .iter()
+            .map(|event| ContractEventMapping {
+                contract_name: contract_name.to_string(),
+                event_name: event.to_string(),
+            })
+            .collect();
+        ContractEventDependencies {
+            contract_name: contract_name.to_string(),
+            event_dependencies: EventDependencies {
+                tree: Arc::new(EventsDependencyTree::new(mappings.clone())),
+                dependency_events: mappings,
+            },
+        }
+    }
+
+    #[test]
+    fn filter_contract_dependencies_count_as_own_contract() {
+        let dependencies = vec![deps("V3Liquidity", &["Mint", "Burn"])];
+
+        for runtime_name in ["V3Liquidity", "V3LiquidityFilter", "V3LiquidityFilterFilter"] {
+            let status =
+                ContractEventDependencies::dependencies_status(runtime_name, "Mint", &dependencies);
+            assert!(status.has_dependency_in_own_contract, "{runtime_name}");
+            assert!(status.dependencies_in_other_contracts.is_empty(), "{runtime_name}");
+        }
+    }
+
+    #[test]
+    fn filter_contract_event_outside_dependencies_is_non_blocking() {
+        let dependencies = vec![deps("V3Liquidity", &["Mint", "Burn"])];
+        let status = ContractEventDependencies::dependencies_status(
+            "V3LiquidityFilterFilter",
+            "Initialize",
+            &dependencies,
+        );
+        assert!(!status.has_dependencies());
+    }
+
+    #[test]
+    fn cross_contract_dependency_on_filter_contract_still_detected() {
+        let mut other = deps("Other", &["Transfer"]);
+        other.event_dependencies.dependency_events.push(ContractEventMapping {
+            contract_name: "V3Liquidity".to_string(),
+            event_name: "Mint".to_string(),
+        });
+        let status = ContractEventDependencies::dependencies_status(
+            "V3LiquidityFilterFilter",
+            "Mint",
+            &[other],
+        );
+        assert_eq!(status.dependencies_in_other_contracts, vec!["Other".to_string()]);
     }
 }

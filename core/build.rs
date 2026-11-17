@@ -5,7 +5,9 @@ use std::{
 };
 
 fn main() {
-    build_graphql_if_needed();
+    if env::var_os("CARGO_FEATURE_GRAPHQL").is_some() {
+        build_graphql_if_needed();
+    }
     build_blockclock_if_needed();
 }
 

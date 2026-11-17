@@ -172,7 +172,7 @@ jobs:
         if: steps.check_release.outputs.is_release == 'true' && matrix.target == 'aarch64-apple-darwin'
         run: |
           echo "SDKROOT=$(xcrun -sdk macosx --show-sdk-path)" >> $GITHUB_ENV
-          echo "MACOSX_DEPLOYMENT_TARGET=$(xcrun -sdk macosx --show-sdk-platform-version)" >> $GITHUB_ENV
+          echo "MACOSX_DEPLOYMENT_TARGET=11.0" >> $GITHUB_ENV
 
       - name: Install MSVC target
         if: steps.check_release.outputs.is_release == 'true' && matrix.target == 'x86_64-pc-windows-msvc'

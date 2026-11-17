@@ -6,7 +6,7 @@ use alloy::rpc::types::{Filter, ValueOrArray};
 use alloy::transports::mock::Asserter;
 use alloy::{
     eips::{BlockId, BlockNumberOrTag},
-    primitives::{Address, Bytes, TxHash, U256, U64},
+    primitives::{Address, Bytes, TxHash, B256, U256, U64},
     providers::{
         ext::TraceApi,
         fillers::{BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller},
@@ -45,7 +45,7 @@ use thiserror::Error;
 use tokio::sync::{broadcast::Sender, Mutex, Semaphore};
 use tokio::task::JoinError;
 use tower::Layer;
-use tracing::{debug, debug_span, error, warn, Instrument};
+use tracing::{debug, debug_span, error, info, warn, Instrument};
 use url::Url;
 
 use async_trait::async_trait;
@@ -56,6 +56,7 @@ use crate::endpoint_failover::{
 };
 use crate::helpers::chunk_hashset;
 use crate::indexer::reorg::reorg_safe_distance_for_chain;
+use crate::indexer::tip_logs::{BlockLinks, BlockLogsSource, SharedTipLogs, SharedTipLogsSettings};
 use crate::layer_extensions::{RpcLoggingLayer, RpcLoggingService};
 use crate::manifest::network::{AddressFiltering, BlockPollFrequency};
 use crate::metrics::rpc as rpc_metrics;
@@ -66,6 +67,9 @@ use crate::{event::RindexerEventFilter, manifest::core::Manifest};
 /// `JsonRpcCachedProvider` is the production implementation (with caching,
 /// batching, metrics, etc.).  Tests can supply a [`MockChainProvider`] that
 /// returns canned data without touching the network.
+// `async_trait` expands every `async fn` into a `#[must_use]` boxed future; the methods already
+// return `Result`, which clippy on Rust 1.99 reports as a double `must_use`.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait ChainProvider: Send + Sync + Debug {
     fn chain(&self) -> Chain;
@@ -92,6 +96,16 @@ pub trait ChainProvider: Send + Sync + Debug {
     /// providers without a failover transport (IPC/reth, mocks).
     fn rpc_health(&self) -> Vec<EndpointHealthSnapshot> {
         Vec::new()
+    }
+
+    /// How long the provider may cache the latest block; zero means no caching.
+    fn block_poll_frequency(&self) -> Duration {
+        Duration::ZERO
+    }
+
+    /// The network's shared tip-block log cache; `None` keeps the per-stream tip `eth_getLogs`.
+    fn shared_tip_logs(&self) -> Option<Arc<SharedTipLogs>> {
+        None
     }
 
     async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError>;
@@ -180,6 +194,7 @@ pub struct JsonRpcCachedProvider {
     /// the failover transport. `None` for IPC/reth and single-purpose mock
     /// providers.
     failover: Option<Arc<FailoverState>>,
+    shared_tip_logs: Option<Arc<SharedTipLogs>>,
 }
 
 #[derive(Error, Debug)]
@@ -728,9 +743,11 @@ impl JsonRpcCachedProvider {
             self.provider.get_logs(&filter).await
         });
 
-        let chunked_logs = try_join_all(logs_futures).await?;
+        let mut logs = try_join_all(logs_futures).await?.concat();
+        // Chunks can have different last matching blocks, so order them before callers read `last()`.
+        logs.sort_unstable_by_key(|log| (log.block_number, log.transaction_index, log.log_index));
 
-        Ok(chunked_logs.concat())
+        Ok(logs)
     }
 
     /// Gets all logs for a given filter and then filters by addresses in memory
@@ -796,6 +813,22 @@ impl JsonRpcCachedProvider {
     /// ```
     #[cfg(test)]
     pub fn mock_with_asserter(chain_id: u64) -> (Arc<Self>, Asserter) {
+        Self::mock_with_asserter_and_filtering(chain_id, None)
+    }
+
+    #[cfg(test)]
+    pub fn mock_with_asserter_and_address_filtering(
+        chain_id: u64,
+        address_filtering: AddressFiltering,
+    ) -> (Arc<Self>, Asserter) {
+        Self::mock_with_asserter_and_filtering(chain_id, Some(address_filtering))
+    }
+
+    #[cfg(test)]
+    fn mock_with_asserter_and_filtering(
+        chain_id: u64,
+        address_filtering: Option<AddressFiltering>,
+    ) -> (Arc<Self>, Asserter) {
         let chain = Chain::from(chain_id);
         let asserter = Asserter::new();
         let client = RpcClient::mocked(asserter.clone());
@@ -810,13 +843,54 @@ impl JsonRpcCachedProvider {
             is_zk_chain,
             chain,
             block_poll_frequency: None,
-            address_filtering: None,
+            address_filtering,
             max_block_range: None,
             chain_state_notification: None,
             failover: None,
+            shared_tip_logs: None,
         });
 
         (cached, asserter)
+    }
+}
+
+/// The shared tip-block fetcher's source: one unfiltered `eth_getLogs` per block through the raw
+/// provider, counted like every other `eth_getLogs`.
+#[derive(Debug)]
+pub struct RpcBlockLogsSource {
+    network: String,
+    provider: Arc<RindexerProvider>,
+}
+
+#[async_trait]
+impl BlockLogsSource for RpcBlockLogsSource {
+    async fn block_logs(&self, block: u64) -> Result<Vec<Log>, ProviderError> {
+        let start = Instant::now();
+        let filter = Filter::new().from_block(block).to_block(block);
+        let logs = self.provider.get_logs(&filter).await.map_err(ProviderError::from);
+        rpc_metrics::record_rpc_request(
+            &self.network,
+            "eth_getLogs",
+            logs.is_ok(),
+            start.elapsed().as_secs_f64(),
+        );
+        logs
+    }
+
+    async fn block_header(&self, hash: B256) -> Result<Option<BlockLinks>, ProviderError> {
+        let start = Instant::now();
+        let block = self.provider.get_block_by_hash(hash).await.map_err(ProviderError::from);
+        rpc_metrics::record_rpc_request(
+            &self.network,
+            "eth_getBlockByHash",
+            block.is_ok(),
+            start.elapsed().as_secs_f64(),
+        );
+        Ok(block?.map(|block| BlockLinks {
+            number: block.header.number,
+            parent_hash: block.header.parent_hash,
+            logs_bloom: block.header.logs_bloom,
+        }))
     }
 }
 
@@ -844,6 +918,14 @@ impl ChainProvider for JsonRpcCachedProvider {
 
     fn rpc_health(&self) -> Vec<EndpointHealthSnapshot> {
         JsonRpcCachedProvider::rpc_health(self)
+    }
+
+    fn block_poll_frequency(&self) -> Duration {
+        JsonRpcCachedProvider::block_poll_frequency(self)
+    }
+
+    fn shared_tip_logs(&self) -> Option<Arc<SharedTipLogs>> {
+        self.shared_tip_logs.clone()
     }
 
     async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
@@ -944,6 +1026,14 @@ impl<T: ChainProvider + ?Sized> ChainProvider for Arc<T> {
         (**self).rpc_health()
     }
 
+    fn block_poll_frequency(&self) -> Duration {
+        (**self).block_poll_frequency()
+    }
+
+    fn shared_tip_logs(&self) -> Option<Arc<SharedTipLogs>> {
+        (**self).shared_tip_logs()
+    }
+
     async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
         (**self).get_latest_block().await
     }
@@ -1020,6 +1110,7 @@ impl<T: ChainProvider + ?Sized> ChainProvider for Arc<T> {
 /// embedders (e.g. rflow) can drive registry/callback tests without a chain.
 pub mod mock {
     use super::*;
+    use std::collections::VecDeque;
 
     #[derive(Debug)]
     pub struct MockChainProvider {
@@ -1027,11 +1118,13 @@ pub mod mock {
         max_block_range: Option<U64>,
         logs: Vec<Log>,
         blocks: Vec<Arc<AnyRpcBlock>>,
+        block_batches: Option<std::sync::Mutex<VecDeque<Vec<AnyRpcBlock>>>>,
         block_number: U64,
         receipts: Vec<AnyTransactionReceipt>,
         traces: Vec<LocalizedTransactionTrace>,
         flagged_endpoint_reasons: std::sync::Mutex<Vec<String>>,
         endpoint_switches: std::sync::atomic::AtomicU64,
+        shared_tip_logs: Option<Arc<SharedTipLogs>>,
     }
 
     impl MockChainProvider {
@@ -1041,11 +1134,13 @@ pub mod mock {
                 max_block_range: None,
                 logs: vec![],
                 blocks: vec![],
+                block_batches: None,
                 block_number: U64::ZERO,
                 receipts: vec![],
                 traces: vec![],
                 flagged_endpoint_reasons: std::sync::Mutex::new(vec![]),
                 endpoint_switches: std::sync::atomic::AtomicU64::new(0),
+                shared_tip_logs: None,
             }
         }
 
@@ -1075,6 +1170,12 @@ pub mod mock {
             self
         }
 
+        /// Return successive block batches from `get_block_by_number_batch` calls.
+        pub fn with_block_batches(mut self, batches: Vec<Vec<AnyRpcBlock>>) -> Self {
+            self.block_batches = Some(std::sync::Mutex::new(batches.into_iter().collect()));
+            self
+        }
+
         pub fn with_traces(mut self, traces: Vec<LocalizedTransactionTrace>) -> Self {
             self.traces = traces;
             self
@@ -1082,6 +1183,11 @@ pub mod mock {
 
         pub fn with_max_block_range(mut self, range: u64) -> Self {
             self.max_block_range = Some(U64::from(range));
+            self
+        }
+
+        pub fn with_shared_tip_logs(mut self, handle: Arc<SharedTipLogs>) -> Self {
+            self.shared_tip_logs = Some(handle);
             self
         }
     }
@@ -1106,6 +1212,10 @@ pub mod mock {
 
         fn endpoint_switches(&self) -> u64 {
             self.endpoint_switches.load(std::sync::atomic::Ordering::Acquire)
+        }
+
+        fn shared_tip_logs(&self) -> Option<Arc<SharedTipLogs>> {
+            self.shared_tip_logs.clone()
         }
 
         async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
@@ -1157,11 +1267,17 @@ pub mod mock {
         ) -> Result<Vec<AnyRpcBlock>, ProviderError> {
             use std::collections::HashSet;
             let requested: HashSet<u64> = block_numbers.iter().map(|n| n.to::<u64>()).collect();
-            Ok(self
-                .blocks
-                .iter()
-                .filter(|b| requested.contains(&b.inner.number()))
-                .map(|b| (**b).clone())
+            let blocks = match &self.block_batches {
+                Some(batches) => batches
+                    .lock()
+                    .expect("mock block batches lock should not be poisoned")
+                    .pop_front()
+                    .unwrap_or_default(),
+                None => self.blocks.iter().map(|block| (**block).clone()).collect(),
+            };
+            Ok(blocks
+                .into_iter()
+                .filter(|block| requested.contains(&block.inner.number()))
                 .collect())
         }
 
@@ -1239,6 +1355,9 @@ pub enum RetryClientError {
 
     #[error("Could not start reth node for network {0}: {1}")]
     RethNodeStartError(String, String),
+
+    #[error("Could not create hypersync client for network {0}: {1}")]
+    HypersyncClientCantBeCreated(String, String),
 }
 
 fn ensure_rpc_url_not_empty(
@@ -1270,6 +1389,9 @@ pub fn validate_manifest_network_rpc_urls(manifest: &Manifest) -> Result<(), Ret
 /// HTTP transport.
 type HttpEndpointTransport = RpcLoggingService<Http<Client>>;
 
+/// Creates a network provider without the shared tip-block log fetch: its live streams issue
+/// their own tip `eth_getLogs`. Same multi-url signature this branch already publishes;
+/// regenerated typings call [`create_client_with_shared_tip_logs`].
 #[allow(clippy::too_many_arguments)]
 pub async fn create_client(
     network: &str,
@@ -1281,6 +1403,36 @@ pub async fn create_client(
     custom_headers: HeaderMap,
     address_filtering: Option<AddressFiltering>,
     chain_state_notification: Option<Sender<ChainStateNotification>>,
+) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
+    create_client_with_shared_tip_logs(
+        network,
+        rpc_urls,
+        chain_id,
+        compute_units_per_second,
+        max_block_range,
+        block_poll_frequency,
+        custom_headers,
+        address_filtering,
+        chain_state_notification,
+        None,
+    )
+    .await
+}
+
+/// [`create_client`] plus the network's resolved `shared_tip_logs` settings (`None` disables the
+/// shared tip-block log fetch for this provider).
+#[allow(clippy::too_many_arguments)]
+pub async fn create_client_with_shared_tip_logs(
+    network: &str,
+    rpc_urls: &[String],
+    chain_id: u64,
+    compute_units_per_second: Option<u64>,
+    max_block_range: Option<U64>,
+    block_poll_frequency: Option<BlockPollFrequency>,
+    custom_headers: HeaderMap,
+    address_filtering: Option<AddressFiltering>,
+    chain_state_notification: Option<Sender<ChainStateNotification>>,
+    shared_tip_logs: Option<SharedTipLogsSettings>,
 ) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
     for rpc_url in rpc_urls {
         ensure_rpc_url_not_empty(format!("chain_id {chain_id}"), rpc_url)?;
@@ -1438,8 +1590,17 @@ pub async fn create_client(
         }
     };
 
+    let provider = Arc::new(provider);
+    let shared_tip_logs = match shared_tip_logs {
+        Some(settings) => Some(shared_tip_logs_handle(chain, Arc::clone(&provider), settings)),
+        None => {
+            info!("shared tip logs disabled for {chain}");
+            None
+        }
+    };
+
     Ok(Arc::new(JsonRpcCachedProvider {
-        provider: Arc::new(provider),
+        provider,
         cache: Mutex::new(None),
         max_block_range,
         client,
@@ -1449,7 +1610,23 @@ pub async fn create_client(
         address_filtering,
         chain_state_notification,
         failover,
+        shared_tip_logs,
     }))
+}
+
+/// Builds the network's shared tip-block cache and logs the boot line operators grep for.
+fn shared_tip_logs_handle(
+    chain: Chain,
+    provider: Arc<RindexerProvider>,
+    settings: SharedTipLogsSettings,
+) -> Arc<SharedTipLogs> {
+    let network = chain.to_string();
+    info!(
+        "shared tip logs enabled for {network} (empty_retry_deadline_ms={}, cache_blocks={}, bloom_trusted={})",
+        settings.empty_retry_deadline_ms, settings.cache_blocks, settings.bloom_trusted
+    );
+    let source = RpcBlockLogsSource { network: network.clone(), provider };
+    SharedTipLogs::new(&network, Arc::new(source), settings)
 }
 
 pub async fn get_chain_id(rpc_url: &str) -> Result<U256, RpcError<TransportErrorKind>> {
@@ -1464,7 +1641,7 @@ pub async fn get_chain_id(rpc_url: &str) -> Result<U256, RpcError<TransportError
 pub struct CreateNetworkProvider {
     pub network_name: String,
     pub disable_logs_bloom_checks: bool,
-    pub client: Arc<JsonRpcCachedProvider>,
+    pub client: Arc<dyn ChainProvider>,
 }
 
 impl CreateNetworkProvider {
@@ -1502,7 +1679,7 @@ impl CreateNetworkProvider {
             }
 
             // create the provider
-            let provider = create_client(
+            let provider = create_client_with_shared_tip_logs(
                 &network.name,
                 &provider_urls,
                 network.chain_id,
@@ -1512,13 +1689,38 @@ impl CreateNetworkProvider {
                 manifest.get_custom_headers(),
                 network.get_logs_settings.clone().map(|settings| settings.address_filtering),
                 reth_tx.clone(),
+                SharedTipLogsSettings::resolve(network),
             )
             .await?;
+
+            // When hypersync is configured, historical log fetching is served by
+            // HyperSync with the RPC provider handling everything else.
+            let client: Arc<dyn ChainProvider> = match &network.hypersync {
+                #[cfg(feature = "hypersync")]
+                Some(hypersync_config) => {
+                    crate::hypersync::create_hypersync_provider(
+                        hypersync_config,
+                        &network.name,
+                        network.chain_id,
+                        network.max_block_range,
+                        provider,
+                    )
+                    .await?
+                }
+                #[cfg(not(feature = "hypersync"))]
+                Some(_) => {
+                    return Err(RetryClientError::HypersyncClientCantBeCreated(
+                        network.name.clone(),
+                        "enable the hypersync Cargo feature".into(),
+                    ))
+                }
+                None => provider,
+            };
 
             Ok::<_, RetryClientError>(CreateNetworkProvider {
                 network_name: network.name.clone(),
                 disable_logs_bloom_checks: network.disable_logs_bloom_checks.unwrap_or_default(),
-                client: provider,
+                client,
             })
         });
 
@@ -1527,7 +1729,7 @@ impl CreateNetworkProvider {
 
     /// Get the chain state notification for this network
     pub fn chain_state_notification(&self) -> Option<Sender<ChainStateNotification>> {
-        self.client.chain_state_notification.clone()
+        self.client.chain_state_notification()
     }
 }
 
@@ -1543,6 +1745,21 @@ pub fn get_network_provider<'a>(
 mod tests {
     use super::mock::MockChainProvider;
     use super::*;
+    use crate::event::contract_setup::AddressDetails;
+    use crate::manifest::network::AddressFiltering;
+    use alloy::primitives::{Log as PrimitiveLog, B256};
+    use alloy::rpc::types::ValueOrArray;
+
+    #[test]
+    fn block_poll_frequency_survives_provider_wrapping() {
+        let (mut provider, _) = JsonRpcCachedProvider::mock_with_asserter(1);
+        Arc::get_mut(&mut provider).unwrap().block_poll_frequency =
+            Some(BlockPollFrequency::PollRateMs { millis: 600_000 });
+        assert_eq!(ChainProvider::block_poll_frequency(&provider), Duration::from_secs(600));
+        let provider: Arc<dyn ChainProvider> = provider;
+        assert_eq!(provider.block_poll_frequency(), Duration::from_secs(600));
+        assert_eq!(MockChainProvider::new(1).block_poll_frequency(), Duration::ZERO);
+    }
 
     #[test]
     fn mock_chain_provider_defaults() {
@@ -1814,5 +2031,103 @@ mod tests {
         // No response pushed — should return Err
         let result = provider.get_latest_block().await;
         assert!(result.is_err(), "expected Err when asserter queue is empty");
+    }
+
+    fn make_log_at(block_number: u64, log_index: u64) -> Log {
+        Log {
+            inner: PrimitiveLog { address: Address::ZERO, data: Default::default() },
+            block_hash: None,
+            block_number: Some(block_number),
+            block_timestamp: None,
+            transaction_hash: None,
+            transaction_index: None,
+            log_index: Some(log_index),
+            removed: false,
+        }
+    }
+
+    fn address_filter(addresses: Vec<Address>) -> RindexerEventFilter {
+        RindexerEventFilter::new_address_filter(
+            &B256::ZERO,
+            "TestEvent",
+            &AddressDetails { address: ValueOrArray::Array(addresses), indexed_filters: None },
+            U64::from(100),
+            U64::from(500),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn mock_with_asserter_get_logs_sorts_address_chunks() {
+        let (provider, asserter) = JsonRpcCachedProvider::mock_with_asserter_and_address_filtering(
+            1,
+            AddressFiltering::MaxAddressPerGetLogsRequest(1),
+        );
+        asserter.push_success(&vec![make_log_at(100, 0), make_log_at(500, 1)]);
+        asserter.push_success(&vec![make_log_at(200, 0)]);
+
+        let filter = address_filter(vec![Address::from([1u8; 20]), Address::from([2u8; 20])]);
+        let logs = provider.get_logs(&filter).await.unwrap();
+
+        let positions = logs
+            .iter()
+            .map(|log| (log.block_number.unwrap(), log.log_index.unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(positions, vec![(100, 0), (200, 0), (500, 1)]);
+    }
+
+    #[tokio::test]
+    async fn mock_with_asserter_get_logs_sorts_address_chunks_by_log_index() {
+        let (provider, asserter) = JsonRpcCachedProvider::mock_with_asserter_and_address_filtering(
+            1,
+            AddressFiltering::MaxAddressPerGetLogsRequest(1),
+        );
+        asserter.push_success(&vec![make_log_at(100, 1)]);
+        asserter.push_success(&vec![make_log_at(100, 0)]);
+
+        let filter = address_filter(vec![Address::from([1u8; 20]), Address::from([2u8; 20])]);
+        let logs = provider.get_logs(&filter).await.unwrap();
+
+        let positions = logs
+            .iter()
+            .map(|log| (log.block_number.unwrap(), log.log_index.unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(positions, vec![(100, 0), (100, 1)]);
+    }
+
+    #[tokio::test]
+    async fn mock_with_asserter_get_logs_sorts_single_address_chunk_by_position() {
+        let (provider, asserter) = JsonRpcCachedProvider::mock_with_asserter_and_address_filtering(
+            1,
+            AddressFiltering::MaxAddressPerGetLogsRequest(10),
+        );
+        let log = |block_number, transaction_index, log_index| {
+            let mut log = make_log_at(block_number, log_index);
+            log.transaction_index = Some(transaction_index);
+            log
+        };
+        asserter.push_success(&vec![
+            log(500, 0, 1),
+            log(100, 1, 0),
+            log(100, 0, 0),
+            log(300, 0, 0),
+        ]);
+
+        let filter = address_filter(vec![Address::from([1u8; 20])]);
+        let logs = provider.get_logs(&filter).await.unwrap();
+
+        let positions = logs
+            .iter()
+            .map(|log| (log.block_number, log.transaction_index, log.log_index))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            positions,
+            vec![
+                (Some(100), Some(0), Some(0)),
+                (Some(100), Some(1), Some(0)),
+                (Some(300), Some(0), Some(0)),
+                (Some(500), Some(0), Some(1)),
+            ]
+        );
     }
 }

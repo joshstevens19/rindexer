@@ -1,17 +1,23 @@
-use crate::event::contract_setup::{AddressDetails, FilterDetails};
-use crate::event::factory_event_filter_sync::{
-    get_known_factory_deployed_addresses, GetKnownFactoryDeployedAddressesParams,
+#[cfg(feature = "clickhouse")]
+use crate::ClickhouseClient;
+#[cfg(feature = "postgres")]
+use crate::PostgresClient;
+use crate::{
+    event::{
+        contract_setup::{AddressDetails, FilterDetails},
+        factory_event_filter_sync::{
+            get_known_factory_deployed_addresses, GetKnownFactoryDeployedAddressesParams,
+        },
+    },
+    manifest::storage::CsvDetails,
 };
-use crate::manifest::storage::CsvDetails;
-use crate::{ClickhouseClient, PostgresClient};
-use alloy::rpc::types::Topic;
 use alloy::{
     primitives::{Address, B256, U64},
-    rpc::types::ValueOrArray,
+    rpc::types::{Topic, ValueOrArray},
 };
-use std::collections::HashSet;
-use std::path::PathBuf;
+#[cfg(any(feature = "postgres", feature = "clickhouse"))]
 use std::sync::Arc;
+use std::{collections::HashSet, path::PathBuf};
 
 #[derive(thiserror::Error, Debug)]
 pub enum BuildRindexerFilterError {
@@ -62,7 +68,9 @@ pub struct FactoryFilter {
     pub topic_id: B256,
     pub topics: [Topic; 4],
 
+    #[cfg(feature = "clickhouse")]
     pub clickhouse: Option<Arc<ClickhouseClient>>,
+    #[cfg(feature = "postgres")]
     pub postgres: Option<Arc<PostgresClient>>,
     pub csv_details: Option<CsvDetails>,
 
@@ -113,7 +121,9 @@ impl FactoryFilter {
             event_name: self.factory_event_name.clone(),
             input_names,
             network: self.network.clone(),
+            #[cfg(feature = "clickhouse")]
             clickhouse: self.clickhouse.clone(),
+            #[cfg(feature = "postgres")]
             postgres: self.postgres.clone(),
             csv_details: self.csv_details.clone(),
         })

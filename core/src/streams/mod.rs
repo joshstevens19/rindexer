@@ -1,10 +1,14 @@
+#[cfg(feature = "sns")]
 mod sns;
+#[cfg(feature = "sns")]
 pub use sns::SNS;
 
 mod webhook;
 pub use webhook::{Webhook, WebhookError};
 
+#[cfg(feature = "rabbitmq")]
 mod rabbitmq;
+#[cfg(feature = "rabbitmq")]
 pub use rabbitmq::{RabbitMQ, RabbitMQError};
 
 #[cfg(feature = "kafka")]
@@ -12,8 +16,10 @@ mod kafka;
 
 mod clients;
 
+#[cfg(feature = "redis")]
 mod redis;
 pub use clients::StreamsClients;
+#[cfg(feature = "redis")]
 pub use redis::{Redis, RedisError};
 
 mod cloudflare_queues;

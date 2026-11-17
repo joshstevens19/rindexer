@@ -1,19 +1,19 @@
-use std::str::FromStr;
-use std::sync::Arc;
-
+use super::{
+    event_writer_barrier,
+    persistence::ReorgBlockHashPersistence,
+    task::{DerivedTableInfo, DerivedTableRollbackPlan, EventTableInfo, ReorgTask},
+    window::{BlockChainWindow, ParentValidation},
+    ReorgContext,
+};
+use crate::{
+    event::callback_registry::ReorgNotification, metrics::indexing as metrics,
+    provider::ChainProvider, streams::StreamsClients,
+};
 use alloy::primitives::{B256, U64};
 use anyhow::Context;
+use std::{str::FromStr, sync::Arc};
+use tokio::sync::OwnedRwLockWriteGuard;
 use tracing::{debug, info, warn};
-
-use crate::event::callback_registry::ReorgNotification;
-use crate::metrics::indexing as metrics;
-use crate::provider::ChainProvider;
-use crate::streams::StreamsClients;
-
-use super::persistence::ReorgBlockHashPersistence;
-use super::task::{DerivedTableInfo, EventTableInfo, ReorgTask};
-use super::window::{BlockChainWindow, ParentValidation};
-use super::ReorgContext;
 
 /// Number of blocks between periodic flushes of the in-memory block window to the database.
 /// Balances write frequency against data-loss risk on crash.
@@ -26,6 +26,9 @@ pub struct ReorgCoordinator {
     provider: Option<Arc<dyn ChainProvider>>,
     event_tables: Vec<EventTableInfo>,
     derived_tables: Vec<DerivedTableInfo>,
+    rollback_plan: DerivedTableRollbackPlan,
+    /// Retained after a failed rollback so no event writer can race ahead of its retry.
+    rollback_writer_guard: Option<OwnedRwLockWriteGuard<()>>,
     /// All `StreamsClients` configured for this network across every indexing
     /// pipeline (contract events + native transfers). When a reorg is handled
     /// we fan the retraction notification across all of them so consumers
@@ -65,6 +68,8 @@ impl ReorgCoordinator {
             provider: Some(provider),
             event_tables,
             derived_tables,
+            rollback_plan: DerivedTableRollbackPlan::default(),
+            rollback_writer_guard: None,
             streams_clients,
             blocks_since_flush: 0,
             suspended_below: None,
@@ -94,6 +99,11 @@ impl ReorgCoordinator {
             watermark,
             "RPC endpoint switched - suspending parent-hash reorg validation until the new endpoint's tip passes the last validated block"
         );
+    }
+
+    pub(crate) fn with_rollback_plan(mut self, rollback_plan: DerivedTableRollbackPlan) -> Self {
+        self.rollback_plan = rollback_plan;
+        self
     }
 
     /// Called on each new block during live indexing.
@@ -559,9 +569,29 @@ impl ReorgCoordinator {
         reorg_task: ReorgTask,
         ctx: &ReorgContext<'_>,
     ) -> anyhow::Result<()> {
-        let result = reorg_task
-            .execute(&mut self.window, ctx.postgres, ctx.clickhouse, self.provider.as_ref())
-            .await?;
+        let writer_guard = match self.rollback_writer_guard.take() {
+            Some(guard) => guard,
+            None => event_writer_barrier(&self.network).write_owned().await,
+        };
+        let result = match reorg_task
+            .execute_with_rollback_plan(
+                &mut self.window,
+                #[cfg(feature = "postgres")]
+                ctx.postgres,
+                #[cfg(feature = "clickhouse")]
+                ctx.clickhouse,
+                self.provider.as_ref(),
+                &self.rollback_plan,
+            )
+            .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                self.rollback_writer_guard = Some(writer_guard);
+                return Err(error);
+            }
+        };
+        drop(writer_guard);
 
         let affected_tx_hashes: Vec<B256> =
             result.affected_tx_hashes.iter().filter_map(|h| B256::from_str(h).ok()).collect();
@@ -708,7 +738,12 @@ mod tests {
     }
 
     fn make_coordinator(window: BlockChainWindow) -> ReorgCoordinator {
-        let persistence = Arc::new(ReorgBlockHashPersistence::new(None, None));
+        let persistence = Arc::new(ReorgBlockHashPersistence::new(
+            #[cfg(feature = "postgres")]
+            None,
+            #[cfg(feature = "clickhouse")]
+            None,
+        ));
         ReorgCoordinator {
             network: "test".to_string(),
             window,
@@ -716,6 +751,8 @@ mod tests {
             provider: None,
             event_tables: vec![],
             derived_tables: vec![],
+            rollback_plan: DerivedTableRollbackPlan::default(),
+            rollback_writer_guard: None,
             streams_clients: vec![],
             blocks_since_flush: 0,
             suspended_below: None,
@@ -745,6 +782,43 @@ mod tests {
 
         assert!(result.is_none(), "Expected None for NoPreviousBlock");
         assert!(coordinator.window.get(100).is_some(), "Block should be inserted");
+    }
+
+    #[tokio::test]
+    async fn reorg_drains_writers_and_blocks_them_until_retry_succeeds() {
+        const NETWORK: &str = "writer-barrier-test";
+        let mut coordinator = make_coordinator(BlockChainWindow::try_new(100).unwrap());
+        coordinator.network = NETWORK.to_string();
+        let ctx = ReorgContext {
+            #[cfg(feature = "postgres")]
+            postgres: None,
+            #[cfg(feature = "clickhouse")]
+            clickhouse: None,
+            registry: None,
+            trace_registry: None,
+        };
+        let task = |network: &str| ReorgTask {
+            network: network.to_string(),
+            fork_point: 10,
+            detection_point: 11,
+            event_tables: vec![],
+            derived_tables: vec![],
+            canonical_blocks: vec![],
+        };
+
+        let barrier = event_writer_barrier(NETWORK);
+        let writer = barrier.clone().read_owned().await;
+        let mut rollback = Box::pin(coordinator.handle_reorg(task("invalid network"), &ctx));
+        assert!(futures::poll!(&mut rollback).is_pending(), "rollback must drain active writers");
+        drop(writer);
+        rollback.await.expect_err("invalid network must fail rollback");
+        assert!(barrier.try_read().is_err(), "failed rollback must keep event writers blocked");
+
+        coordinator
+            .handle_reorg(task(NETWORK), &ctx)
+            .await
+            .expect("retry should release the writer barrier");
+        assert!(barrier.try_read().is_ok(), "successful retry must release event writers");
     }
 
     #[tokio::test]
@@ -843,6 +917,8 @@ mod tests {
             provider: Some(provider),
             event_tables: vec![],
             derived_tables: vec![],
+            rollback_plan: Default::default(),
+            rollback_writer_guard: None,
             streams_clients: vec![],
             blocks_since_flush: 0,
             suspended_below: None,
@@ -1041,7 +1117,9 @@ mod tests {
         }));
 
         let ctx = ReorgContext {
+            #[cfg(feature = "postgres")]
             postgres: None,
+            #[cfg(feature = "clickhouse")]
             clickhouse: None,
             registry: Some(&registry),
             trace_registry: None,
@@ -1085,7 +1163,9 @@ mod tests {
         }));
 
         let ctx = ReorgContext {
+            #[cfg(feature = "postgres")]
             postgres: None,
+            #[cfg(feature = "clickhouse")]
             clickhouse: None,
             registry: None,
             trace_registry: Some(&trace_registry),
@@ -1136,7 +1216,12 @@ mod tests {
     #[test]
     fn test_derived_tables_propagate_to_tasks() {
         let window = make_window_with_blocks(&[(10, 10, 9), (11, 11, 10), (12, 12, 11)]);
-        let persistence = Arc::new(ReorgBlockHashPersistence::new(None, None));
+        let persistence = Arc::new(ReorgBlockHashPersistence::new(
+            #[cfg(feature = "postgres")]
+            None,
+            #[cfg(feature = "clickhouse")]
+            None,
+        ));
         let coordinator = ReorgCoordinator {
             network: "test".to_string(),
             window,
@@ -1157,6 +1242,8 @@ mod tests {
                     journal_columns: vec![],
                 },
             ],
+            rollback_plan: DerivedTableRollbackPlan::default(),
+            rollback_writer_guard: None,
             streams_clients: vec![],
             blocks_since_flush: 0,
             suspended_below: None,
@@ -1174,7 +1261,12 @@ mod tests {
     #[test]
     fn test_derived_tables_propagate_to_removed_logs_task() {
         let window = make_window_with_blocks(&[(10, 10, 9), (11, 11, 10)]);
-        let persistence = Arc::new(ReorgBlockHashPersistence::new(None, None));
+        let persistence = Arc::new(ReorgBlockHashPersistence::new(
+            #[cfg(feature = "postgres")]
+            None,
+            #[cfg(feature = "clickhouse")]
+            None,
+        ));
         let coordinator = ReorgCoordinator {
             network: "test".to_string(),
             window,
@@ -1187,6 +1279,8 @@ mod tests {
                 rollback_ops: vec![],
                 journal_columns: vec![],
             }],
+            rollback_plan: DerivedTableRollbackPlan::default(),
+            rollback_writer_guard: None,
             streams_clients: vec![],
             blocks_since_flush: 0,
             suspended_below: None,
@@ -1200,7 +1294,12 @@ mod tests {
     #[test]
     fn test_on_exex_reorg() {
         let window = BlockChainWindow::try_new(100).unwrap();
-        let persistence = Arc::new(ReorgBlockHashPersistence::new(None, None));
+        let persistence = Arc::new(ReorgBlockHashPersistence::new(
+            #[cfg(feature = "postgres")]
+            None,
+            #[cfg(feature = "clickhouse")]
+            None,
+        ));
         let coordinator = ReorgCoordinator {
             network: "test".to_string(),
             window,
@@ -1216,6 +1315,8 @@ mod tests {
             )
             .unwrap()],
             derived_tables: vec![],
+            rollback_plan: DerivedTableRollbackPlan::default(),
+            rollback_writer_guard: None,
             streams_clients: vec![],
             blocks_since_flush: 0,
             suspended_below: None,
@@ -1241,7 +1342,12 @@ mod tests {
         window: BlockChainWindow,
         streams_clients: Vec<Arc<Option<StreamsClients>>>,
     ) -> ReorgCoordinator {
-        let persistence = Arc::new(ReorgBlockHashPersistence::new(None, None));
+        let persistence = Arc::new(ReorgBlockHashPersistence::new(
+            #[cfg(feature = "postgres")]
+            None,
+            #[cfg(feature = "clickhouse")]
+            None,
+        ));
         ReorgCoordinator {
             network: "ethereum".to_string(),
             window,
@@ -1249,6 +1355,8 @@ mod tests {
             provider: None,
             event_tables: vec![],
             derived_tables: vec![],
+            rollback_plan: DerivedTableRollbackPlan::default(),
+            rollback_writer_guard: None,
             streams_clients,
             blocks_since_flush: 0,
             suspended_below: None,
@@ -1269,8 +1377,14 @@ mod tests {
         let mut coordinator = make_coordinator_with_streams(window, streams.clone());
 
         let task = coordinator.on_exex_reorg(101, 110).unwrap();
-        let ctx =
-            ReorgContext { postgres: None, clickhouse: None, registry: None, trace_registry: None };
+        let ctx = ReorgContext {
+            #[cfg(feature = "postgres")]
+            postgres: None,
+            #[cfg(feature = "clickhouse")]
+            clickhouse: None,
+            registry: None,
+            trace_registry: None,
+        };
         coordinator.handle_reorg(task, &ctx).await.unwrap();
 
         let remaining =
@@ -1329,8 +1443,14 @@ mod tests {
         assert_eq!(task.fork_point, 101);
         assert_eq!(task.detection_point, 110);
 
-        let ctx =
-            ReorgContext { postgres: None, clickhouse: None, registry: None, trace_registry: None };
+        let ctx = ReorgContext {
+            #[cfg(feature = "postgres")]
+            postgres: None,
+            #[cfg(feature = "clickhouse")]
+            clickhouse: None,
+            registry: None,
+            trace_registry: None,
+        };
         coordinator.handle_reorg(task, &ctx).await.unwrap();
 
         let remaining =
@@ -1353,8 +1473,14 @@ mod tests {
         );
 
         let task = coordinator.on_exex_reorg(100, 100).unwrap();
-        let ctx =
-            ReorgContext { postgres: None, clickhouse: None, registry: None, trace_registry: None };
+        let ctx = ReorgContext {
+            #[cfg(feature = "postgres")]
+            postgres: None,
+            #[cfg(feature = "clickhouse")]
+            clickhouse: None,
+            registry: None,
+            trace_registry: None,
+        };
         coordinator.handle_reorg(task, &ctx).await.unwrap();
 
         let remaining =
@@ -1379,8 +1505,14 @@ mod tests {
         );
 
         let task = coordinator.on_exex_reorg(101, 102).unwrap();
-        let ctx =
-            ReorgContext { postgres: None, clickhouse: None, registry: None, trace_registry: None };
+        let ctx = ReorgContext {
+            #[cfg(feature = "postgres")]
+            postgres: None,
+            #[cfg(feature = "clickhouse")]
+            clickhouse: None,
+            registry: None,
+            trace_registry: None,
+        };
         coordinator.handle_reorg(task, &ctx).await.unwrap();
 
         for s in &streams {

@@ -1,93 +1,54 @@
-use crate::adaptive_concurrency::{AdaptiveConcurrency, ADAPTIVE_CONCURRENCY};
-use crate::blockclock::BlockClock;
+#[cfg(feature = "clickhouse")]
 use crate::database::clickhouse::client::ClickhouseClient;
-use crate::event::callback_registry::{EventCallbackRegistry, TraceCallbackRegistry};
-use crate::helpers::{halved_block_number, is_relevant_block};
-use crate::indexer::heartbeat::{HeartbeatAction, HeartbeatTracker};
-use crate::indexer::reorg::{
-    detect_and_handle_reorg, reorg_safe_distance_for_chain, ReorgContext, ReorgCoordinator,
-};
-use crate::metrics::indexing as metrics;
+#[cfg(feature = "postgres")]
 use crate::PostgresClient;
 use crate::{
-    event::{config::EventProcessingConfig, RindexerEventFilter},
-    indexer::{reorg::handle_chain_notification, IndexingEventProgressStatus},
+    adaptive_concurrency::{AdaptiveConcurrency, ADAPTIVE_CONCURRENCY},
+    blockclock::BlockClock,
+    event::{
+        callback_registry::{EventCallbackRegistry, TraceCallbackRegistry},
+        config::EventProcessingConfig,
+        RindexerEventFilter,
+    },
+    helpers::{halved_block_number, is_relevant_block},
+    indexer::{
+        heartbeat::{HeartbeatAction, HeartbeatTracker},
+        reorg::{
+            detect_and_handle_reorg, handle_chain_notification, reorg_safe_distance_for_chain,
+            ReorgContext, ReorgCoordinator,
+        },
+        tip_logs::{filter_logs_for_stream, SharedTipLogs, TipLookup},
+        IndexingEventProgressStatus,
+    },
     is_running,
+    metrics::indexing as metrics,
     provider::{ChainProvider, ProviderError},
 };
 use alloy::{
-    primitives::{B256, U64},
+    primitives::{Address, B256, U64},
     rpc::types::Log,
 };
 use lru::LruCache;
 use rand::{random_bool, random_ratio};
 use regex::Regex;
-use std::collections::BTreeMap;
-use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
-use tokio::sync::Mutex;
-use tokio::{sync::mpsc, time::Instant};
+use std::{
+    collections::{BTreeMap, HashSet},
+    error::Error,
+    num::NonZeroUsize,
+    str::FromStr,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
+use tokio::{
+    sync::{mpsc, Mutex},
+    time::Instant,
+};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
-
-/// Consecutive `get_latest_block` failures in the live loop before the
-/// active endpoint is flagged degraded. Errors surfacing there have already
-/// been retried through the transport-level failover, so a short streak is
-/// enough evidence.
-const LATEST_BLOCK_ERRORS_BEFORE_FLAG: u32 = 3;
-
-/// How many times a single historic range may be discarded because the
-/// transport failed over mid-fetch before that range is given up. Sticky
-/// failover normally settles in one retry; the cap stops a flapping pair
-/// of endpoints from spinning the historic loop forever.
-const MAX_ENDPOINT_SWITCH_DISCARDS: usize = 10;
-
-/// Polls a provider's endpoint switch counter so the indexing loops can
-/// notice transport failovers and reset endpoint-specific state: the
-/// per-endpoint block range shrink state, and - critically - the reorg
-/// coordinator's parent-hash window, which must not compare a lagging
-/// replacement endpoint's view against blocks the previous endpoint
-/// validated (that shape triggers a spurious rollback).
-pub(crate) struct EndpointSwitchWatcher {
-    last_seen: u64,
-}
-
-impl EndpointSwitchWatcher {
-    pub(crate) fn new<P: ChainProvider + ?Sized>(provider: &P) -> Self {
-        Self { last_seen: provider.endpoint_switches() }
-    }
-
-    /// Returns true when the provider failed over since the last check.
-    pub(crate) fn switched<P: ChainProvider + ?Sized>(&mut self, provider: &P) -> bool {
-        let current = provider.endpoint_switches();
-        if current == self.last_seen {
-            return false;
-        }
-        self.last_seen = current;
-        true
-    }
-}
-
-/// Handle an observed endpoint switch in the live loop: drop the block range
-/// shrink state (it belonged to the previous endpoint) and suspend the reorg
-/// coordinator's parent-hash validation until the new endpoint's tip passes
-/// the last validated block.
-async fn handle_live_endpoint_switch(
-    log_response_to_large_to_block: &mut Option<U64>,
-    reorg_coordinator: Option<&Arc<Mutex<ReorgCoordinator>>>,
-    info_log_name: &str,
-) {
-    *log_response_to_large_to_block = None;
-    if let Some(coordinator) = reorg_coordinator {
-        coordinator.lock().await.suspend_for_endpoint_switch();
-    }
-    info!(
-        "{} - RPC endpoint switched - resetting block range state and suspending reorg window validation until the new endpoint catches up",
-        info_log_name
-    );
-}
 
 /// Metadata for a processed block, used for reorg detection via parent hash chain validation.
 #[allow(dead_code)]
@@ -297,7 +258,9 @@ pub fn fetch_logs_stream(
                         original_max_limit,
                         config.cancel_token().clone(),
                         reorg_coordinator,
+                        #[cfg(feature = "postgres")]
                         config.postgres(),
+                        #[cfg(feature = "clickhouse")]
                         config.clickhouse(),
                         &registry,
                         trace_registry.as_deref(),
@@ -332,19 +295,9 @@ pub fn fetch_logs_stream(
             }
         }
 
-        let mut switch_watcher =
-            EndpointSwitchWatcher::new(&config.network_contract().cached_provider);
-        let mut endpoint_switch_discards: usize = 0;
-
         while current_filter.from_block() <= snapshot_to_block {
             if !is_running() || config.cancel_token().is_cancelled() {
                 break;
-            }
-
-            // The shrunken block range belonged to the previous endpoint -
-            // start the new endpoint from the configured limit.
-            if switch_watcher.switched(&config.network_contract().cached_provider) {
-                max_block_range_limitation = original_max_limit;
             }
 
             let result = fetch_historic_logs_stream(
@@ -359,34 +312,6 @@ pub fn fetch_logs_stream(
                 &config.info_log_name(),
             )
             .await;
-
-            // A failover during the fetch means the result (often an empty
-            // log set from a node that has not reached `to_block`) must not
-            // advance the cursor. `fetch_historic_logs_stream` also withholds
-            // the batch in that case; retry the same range on the endpoint
-            // that is active now.
-            if switch_watcher.switched(&config.network_contract().cached_provider) {
-                endpoint_switch_discards = endpoint_switch_discards.saturating_add(1);
-                if endpoint_switch_discards >= MAX_ENDPOINT_SWITCH_DISCARDS {
-                    error!(
-                        "{} - RPC endpoint failed over {} times during historic eth_getLogs for blocks {}-{}; giving up on this range",
-                        config.info_log_name(),
-                        endpoint_switch_discards,
-                        current_filter.from_block(),
-                        current_filter.to_block()
-                    );
-                    break;
-                }
-                info!(
-                    "{} - RPC endpoint switched during historic eth_getLogs for blocks {}-{}; discarding the result and retrying the range",
-                    config.info_log_name(),
-                    current_filter.from_block(),
-                    current_filter.to_block()
-                );
-                max_block_range_limitation = original_max_limit;
-                continue;
-            }
-            endpoint_switch_discards = 0;
 
             // This check can be very noisy. We want to only sample this warning to notify
             // the user, rather than warn on every log fetch.
@@ -412,7 +337,8 @@ pub fn fetch_logs_stream(
                 current_filter = result.next;
                 max_block_range_limitation = new_max_block_range_limitation;
             } else {
-                break;
+                // A terminal historic error must not hand the unresolved range to live indexing.
+                return;
             }
         }
 
@@ -440,7 +366,9 @@ pub fn fetch_logs_stream(
                 original_max_limit,
                 config.cancel_token().clone(),
                 reorg_coordinator,
+                #[cfg(feature = "postgres")]
                 config.postgres(),
+                #[cfg(feature = "clickhouse")]
                 config.clickhouse(),
                 &registry,
                 trace_registry.as_deref(),
@@ -515,17 +443,12 @@ async fn fetch_historic_logs_stream<P: ChainProvider>(
     let switches_before = cached_provider.endpoint_switches();
     match cached_provider.get_logs(&current_filter).await {
         Ok(logs) => {
-            // The range was chosen against the previous endpoint's tip. A
-            // lagging replacement can answer this successfully with no logs
-            // for blocks it has not synced; publishing that would advance the
-            // cursor past them. The caller retries the same range.
             if cached_provider.endpoint_switches() != switches_before {
                 return Some(ProcessHistoricLogsStreamResult {
                     next: current_filter,
                     max_block_range_limitation,
                 });
             }
-
             debug!(
                 "{} - {} - topic_id {}, Logs: {} from {} to {}",
                 info_log_name,
@@ -552,15 +475,30 @@ async fn fetch_historic_logs_stream<P: ChainProvider>(
             }
 
             if timestamps {
-                if let Ok(logs) = block_clock.attach_log_timestamps(logs).await {
-                    sender.send(Ok(FetchLogsResult { logs, from_block, to_block, reorg: None }));
-                } else {
-                    return Some(ProcessHistoricLogsStreamResult {
-                        next: current_filter
-                            .set_from_block(from_block)
-                            .set_to_block(halved_block_number(to_block, from_block)),
-                        max_block_range_limitation,
-                    });
+                match block_clock.attach_log_timestamps(logs).await {
+                    Ok(logs) => {
+                        sender.send(Ok(FetchLogsResult {
+                            logs,
+                            from_block,
+                            to_block,
+                            reorg: None,
+                        }));
+                    }
+                    Err(error) => {
+                        let halved_to_block = halved_block_number(to_block, from_block);
+                        if halved_to_block >= to_block && error.is_missing_block_in_range() {
+                            sender.send(Err(Box::new(error)));
+                            return None;
+                        }
+                        // Provider failures may be transient even when the range cannot shrink.
+                        // Return that range for another fetch instead of dropping its logs.
+                        return Some(ProcessHistoricLogsStreamResult {
+                            next: current_filter
+                                .set_from_block(from_block)
+                                .set_to_block(halved_to_block),
+                            max_block_range_limitation,
+                        });
+                    }
                 }
             } else {
                 sender.send(Ok(FetchLogsResult { logs, from_block, to_block, reorg: None }));
@@ -1231,6 +1169,110 @@ async fn fetch_logs_once<P: ChainProvider + ?Sized>(
     (None, None, None)
 }
 
+/// What the shared tip-block cache did for a live window that ends at the tip.
+enum TipWindowFetch {
+    /// The window's logs: filtered from the cache, or the stream's own `eth_getLogs` when the
+    /// cache could not serve the window.
+    Fetched(Result<Vec<Log>, ProviderError>),
+    /// A block of the window is still being fetched; wake on the cache's `notified` future.
+    Wait,
+}
+
+/// Serves the live window of `current_filter`, which ends at the tip the stream polled
+/// (`tip_hash`), from the shared cache. `contract_address` is the snapshot this window would
+/// have sent to `eth_getLogs`; the stream's own call is the fallback, counted by reason.
+async fn fetch_tip_window(
+    tip_logs: &SharedTipLogs,
+    cached_provider: &dyn ChainProvider,
+    current_filter: &RindexerEventFilter,
+    contract_address: &Option<HashSet<Address>>,
+    tip_hash: B256,
+    info_log_name: &str,
+) -> TipWindowFetch {
+    let from_block = current_filter.from_block();
+    let to_block = current_filter.to_block();
+    let fetched: Result<Vec<Log>, ProviderError> =
+        match tip_logs.lookup(from_block.to::<u64>(), to_block.to::<u64>(), tip_hash) {
+            TipLookup::ServeTip(logs) => {
+                Ok(filter_logs_for_stream(&logs, contract_address, current_filter))
+            }
+            TipLookup::ServeWindow(blocks) => Ok(blocks
+                .iter()
+                .flat_map(|logs| filter_logs_for_stream(logs, contract_address, current_filter))
+                .collect()),
+            TipLookup::ServePrefixByRpcPlusTip(tip) => {
+                let prefix = if from_block < to_block {
+                    let prefix_filter =
+                        current_filter.clone().set_to_block(to_block - U64::from(1));
+                    cached_provider.get_logs(&prefix_filter).await
+                } else {
+                    Ok(Vec::new())
+                };
+                prefix.map(|mut logs| {
+                    logs.extend(filter_logs_for_stream(&tip, contract_address, current_filter));
+                    logs.sort_by_key(|log| (log.block_number, log.log_index));
+                    logs
+                })
+            }
+            TipLookup::Wait { oldest_pending, first_seen } => {
+                let waited = first_seen.elapsed();
+                if waited < tip_logs.stream_wait_budget() {
+                    return TipWindowFetch::Wait;
+                }
+                metrics::record_shared_tip_logs_fallback(tip_logs.network(), "wait_timeout");
+                warn!(
+                    "{} - {} - waited {} ms for the shared logs of block {}; fetching it directly",
+                    info_log_name,
+                    IndexingEventProgressStatus::live_log(),
+                    waited.as_millis(),
+                    oldest_pending
+                );
+                cached_provider.get_logs(current_filter).await
+            }
+            TipLookup::Fallback(reason) => {
+                metrics::record_shared_tip_logs_fallback(tip_logs.network(), reason.as_label());
+                cached_provider.get_logs(current_filter).await
+            }
+        };
+    TipWindowFetch::Fetched(fetched)
+}
+
+/// Polls a provider's endpoint switch counter so the live loop can reset
+/// endpoint-specific state and suspend parent-hash validation after a failover.
+pub(crate) struct EndpointSwitchWatcher {
+    last_seen: u64,
+}
+
+impl EndpointSwitchWatcher {
+    pub(crate) fn new<P: ChainProvider + ?Sized>(provider: &P) -> Self {
+        Self { last_seen: provider.endpoint_switches() }
+    }
+
+    pub(crate) fn switched<P: ChainProvider + ?Sized>(&mut self, provider: &P) -> bool {
+        let current = provider.endpoint_switches();
+        if current == self.last_seen {
+            return false;
+        }
+        self.last_seen = current;
+        true
+    }
+}
+
+async fn handle_live_endpoint_switch(
+    log_response_to_large_to_block: &mut Option<U64>,
+    reorg_coordinator: Option<&Arc<Mutex<ReorgCoordinator>>>,
+    info_log_name: &str,
+) {
+    *log_response_to_large_to_block = None;
+    if let Some(coordinator) = reorg_coordinator {
+        coordinator.lock().await.suspend_for_endpoint_switch();
+    }
+    info!(
+        "{} - RPC endpoint switched - resetting block range state and suspending reorg window validation until the new endpoint catches up",
+        info_log_name
+    );
+}
+
 /// Handles live indexing mode, continuously checking for new blocks, ensuring they are
 /// within a safe range, updating the filter, and sending the logs to the provided channel.
 #[allow(clippy::too_many_arguments)]
@@ -1249,14 +1291,15 @@ async fn live_indexing_stream(
     original_max_limit: Option<U64>,
     cancel_token: CancellationToken,
     reorg_coordinator: Option<Arc<Mutex<ReorgCoordinator>>>,
-    postgres: Option<Arc<PostgresClient>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    #[cfg(feature = "postgres")] postgres: Option<Arc<PostgresClient>>,
+    #[cfg(feature = "clickhouse")] clickhouse: Option<Arc<ClickhouseClient>>,
     registry: &EventCallbackRegistry,
     trace_registry: Option<&TraceCallbackRegistry>,
 ) {
     let mut last_seen_block_number = last_seen_block_number;
     let mut log_response_to_large_to_block: Option<U64> = None;
-    let mut heartbeat = HeartbeatTracker::new(Duration::from_secs(300));
+    let tip_logs = cached_provider.shared_tip_logs();
+    let mut heartbeat = HeartbeatTracker::new(cached_provider.block_poll_frequency());
     let mut consecutive_latest_block_errors: u32 = 0;
     let mut switch_watcher = EndpointSwitchWatcher::new(cached_provider.as_ref());
     let target_iteration_duration = Duration::from_millis(200);
@@ -1318,6 +1361,9 @@ async fn live_indexing_stream(
             for b in fork_block..(fork_block + reth_reorg.depth) {
                 block_cache.pop(&b);
             }
+            if let Some(tip_logs) = tip_logs.as_deref() {
+                tip_logs.invalidate_from(fork_block);
+            }
 
             // Route through coordinator for full recovery (event deletion, checkpoint
             // rewind, derived table rollback, window update) when available.
@@ -1333,7 +1379,9 @@ async fn live_indexing_stream(
                 match guard.on_exex_reorg(fork_block, last_reverted) {
                     Ok(task) => {
                         let reorg_ctx = ReorgContext {
+                            #[cfg(feature = "postgres")]
                             postgres: postgres.as_deref(),
+                            #[cfg(feature = "clickhouse")]
                             clickhouse: clickhouse.as_ref(),
                             registry: Some(registry),
                             trace_registry,
@@ -1363,14 +1411,6 @@ async fn live_indexing_stream(
         }
 
         let latest_block = cached_provider.get_latest_block().await;
-
-        // The call above can itself trigger the failover (the request died on
-        // the old endpoint and was answered by a replacement), in which case
-        // the block below already comes from the NEW endpoint. Re-check the
-        // switch counter BEFORE any reorg validation - otherwise a lagging
-        // replacement's first block would be compared against a window the
-        // previous endpoint validated, which is exactly the spurious-rollback
-        // shape the suspension exists to prevent.
         if switch_watcher.switched(cached_provider.as_ref()) {
             handle_live_endpoint_switch(
                 &mut log_response_to_large_to_block,
@@ -1379,7 +1419,6 @@ async fn live_indexing_stream(
             )
             .await;
         }
-
         match latest_block {
             Ok(latest_block) => {
                 consecutive_latest_block_errors = 0;
@@ -1408,16 +1447,15 @@ async fn live_indexing_stream(
                         }
                         HeartbeatAction::Stalled => {
                             warn!(
-                                "{} - {} - RPC tip has not advanced past block {} in the last 5 minutes",
+                                "{} - {} - RPC tip has not advanced past block {} in the last {} seconds",
                                 info_log_name,
                                 IndexingEventProgressStatus::live_log(),
-                                latest_tip
+                                latest_tip,
+                                heartbeat.stall_timeout().as_secs()
                             );
-                            // A stalled-but-responsive endpoint never errors at
-                            // the transport level, so the failover transport
-                            // cannot see it - flag it from here.
                             cached_provider.flag_active_endpoint_degraded(&format!(
-                                "chain tip stalled at block {latest_tip} for 5 minutes"
+                                "chain tip stalled at block {latest_tip} for {} seconds",
+                                heartbeat.stall_timeout().as_secs()
                             ));
                         }
                     }
@@ -1430,7 +1468,9 @@ async fn live_indexing_stream(
                             IndexingEventProgressStatus::live_log()
                         );
                         let reorg_ctx = ReorgContext {
+                            #[cfg(feature = "postgres")]
                             postgres: postgres.as_deref(),
+                            #[cfg(feature = "clickhouse")]
                             clickhouse: clickhouse.as_ref(),
                             registry: Some(registry),
                             trace_registry,
@@ -1454,6 +1494,9 @@ async fn live_indexing_stream(
                         .await
                         {
                             Ok(Some(fork_point)) => {
+                                if let Some(tip_logs) = tip_logs.as_deref() {
+                                    tip_logs.invalidate_from(fork_point);
+                                }
                                 current_filter =
                                     current_filter.set_from_block(U64::from(fork_point));
                                 last_seen_block_number = U64::from(fork_point.saturating_sub(1));
@@ -1471,10 +1514,31 @@ async fn live_indexing_stream(
                         }
                     }
 
+                    // Every stream that can read the cache records the header it polled: the
+                    // first to see a block starts its shared fetch, the others compare a hash.
+                    // Networks without a coordinator observe heads too. A stream held behind
+                    // the tip by `reorg_safe_distance` never reads the cache, so it never
+                    // starts a fetch either.
+                    if let Some(tip_logs) =
+                        tip_logs.as_deref().filter(|_| reorg_safe_distance.is_zero())
+                    {
+                        tip_logs.observe_head(
+                            latest_block.header.number,
+                            latest_block.header.hash,
+                            latest_block.header.parent_hash,
+                            latest_block.header.logs_bloom,
+                        );
+                    }
+
                     let latest_block_number = log_response_to_large_to_block
                         .unwrap_or(U64::from(latest_block.header.number));
 
-                    if last_seen_block_number == latest_block_number {
+                    // A reduced retry ceiling can equal `last_seen_block_number` while the
+                    // filter cursor is still behind it. Only declare the stream caught up when
+                    // the next block to fetch is also beyond the effective ceiling.
+                    if last_seen_block_number == latest_block_number
+                        && current_filter.from_block() > latest_block_number
+                    {
                         debug!(
                             "{} - {} - No new blocks to process...",
                             info_log_name,
@@ -1590,15 +1654,47 @@ async fn live_indexing_stream(
                                     current_filter
                                 );
 
-                                let logs_result = cached_provider.get_logs(&current_filter).await;
+                                // A window that ends at the header this stream polled takes
+                                // its logs from the shared cache; any other window (a reduced
+                                // retry ceiling, a safe distance) keeps its own call.
+                                let fetched = match tip_logs
+                                    .as_deref()
+                                    .filter(|_| to_block == U64::from(latest_block.header.number))
+                                {
+                                    Some(tip_logs) => {
+                                        // Register, then look up, then await: no wake-up is lost.
+                                        let notified = tip_logs.notified();
+                                        tokio::pin!(notified);
+                                        notified.as_mut().enable();
+                                        match fetch_tip_window(
+                                            tip_logs,
+                                            cached_provider.as_ref(),
+                                            &current_filter,
+                                            &contract_address,
+                                            latest_block.header.hash,
+                                            info_log_name,
+                                        )
+                                        .await
+                                        {
+                                            TipWindowFetch::Fetched(fetched) => fetched,
+                                            TipWindowFetch::Wait => {
+                                                let pacing = target_iteration_duration
+                                                    .saturating_sub(iteration_start.elapsed())
+                                                    .max(Duration::from_millis(50));
+                                                tokio::select! {
+                                                    _ = &mut notified => {}
+                                                    _ = tokio::time::sleep(pacing) => {}
+                                                }
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                    None => cached_provider.get_logs(&current_filter).await,
+                                };
 
-                                // The range was computed from the tip fetched
-                                // above. If that call failed over, a lagging
-                                // replacement can return an empty set for
-                                // blocks it has not reached — accepting it
-                                // would advance the cursor past them for good.
-                                // Discard either outcome and recompute the
-                                // range from the new endpoint's tip.
+                                // The range was computed from the tip fetched above. A failover
+                                // during the fetch can return an empty set for blocks a lagging
+                                // replacement has not reached. Discard it and retry.
                                 if switch_watcher.switched(cached_provider.as_ref()) {
                                     handle_live_endpoint_switch(
                                         &mut log_response_to_large_to_block,
@@ -1609,7 +1705,7 @@ async fn live_indexing_stream(
                                     continue;
                                 }
 
-                                match logs_result {
+                                match fetched {
                                     Ok(logs) => {
                                         debug!(
                                             "{} - {} - Live topic_id {}, Logs: {} from {} to {}",
@@ -1653,6 +1749,9 @@ async fn live_indexing_stream(
                                             for b in min_removed_block..=to_block.to::<u64>() {
                                                 block_cache.pop(&b);
                                             }
+                                            if let Some(tip_logs) = tip_logs.as_deref() {
+                                                tip_logs.invalidate_from(min_removed_block);
+                                            }
 
                                             // Route through coordinator for full recovery when available
                                             // (event deletion, checkpoint rewind, window update).
@@ -1673,7 +1772,9 @@ async fn live_indexing_stream(
                                                 ) {
                                                     Ok(task) => {
                                                         let reorg_ctx = ReorgContext {
+                                                            #[cfg(feature = "postgres")]
                                                             postgres: postgres.as_deref(),
+                                                            #[cfg(feature = "clickhouse")]
                                                             clickhouse: clickhouse.as_ref(),
                                                             registry: Some(registry),
                                                             trace_registry,
@@ -1856,12 +1957,7 @@ async fn live_indexing_stream(
             }
             Err(e) => {
                 consecutive_latest_block_errors = consecutive_latest_block_errors.saturating_add(1);
-                if consecutive_latest_block_errors == LATEST_BLOCK_ERRORS_BEFORE_FLAG {
-                    // Errors reaching this arm already went through the
-                    // transport-level failover, so persistent failure here
-                    // means the active endpoint (or all of them) is sick -
-                    // flag it so the health gate deprioritises it and the
-                    // prober owns recovery.
+                if consecutive_latest_block_errors == 3 {
                     cached_provider.flag_active_endpoint_degraded(&format!(
                         "get_latest_block failed {consecutive_latest_block_errors} times in a row"
                     ));
@@ -2213,18 +2309,34 @@ fn calculate_process_historic_log_to_block(
 mod tests {
     use super::*;
     use crate::blockclock::BlockClock;
+    use crate::event::callback_registry::EventCallbackRegistry;
+    use crate::event::config::{ContractEventProcessingConfig, EventProcessingConfig};
+    use crate::event::contract_setup::{AddressDetails, IndexingContractSetup, NetworkContract};
     use crate::event::RindexerEventFilter;
+    use crate::indexer::tip_logs::{
+        BlockLinks, BlockLogsSource, FallbackReason, SharedTipLogsSettings,
+    };
+    use crate::indexer::IndexingEventsProgressState;
+    use crate::manifest::config::Config;
+    use crate::manifest::network::AddressFiltering;
+    use crate::metrics::definitions::{
+        SHARED_TIP_LOGS_BLOCKS_TOTAL, SHARED_TIP_LOGS_FALLBACKS_TOTAL, SHARED_TIP_LOGS_SERVED_TOTAL,
+    };
     use crate::provider::mock::MockChainProvider;
-    use crate::provider::ChainProvider;
+    use crate::provider::{ChainProvider, JsonRpcCachedProvider};
     use alloy::network::{AnyHeader, AnyRpcBlock, AnyRpcHeader, AnyTransactionReceipt};
     use alloy::primitives::Log as PrimitiveLog;
-    use alloy::primitives::{Address, Bytes, TxHash};
+    use alloy::primitives::{Address, Bloom, Bytes, LogData, TxHash};
     use alloy::rpc::types::trace::parity::LocalizedTransactionTrace;
-    use alloy::rpc::types::BlockTransactions;
-    use alloy::rpc::types::Log;
+    use alloy::rpc::types::{BlockTransactions, Log, ValueOrArray};
+    use futures::StreamExt;
+    use prometheus::CounterVec;
+    use std::collections::{HashMap, VecDeque};
+    use std::path::PathBuf;
     use std::sync::{Arc, Mutex as StdMutex};
-    use tokio::sync::mpsc;
+    use tokio::sync::{mpsc, Notify};
     use tokio_util::sync::CancellationToken;
+    use tracing_subscriber::fmt::MakeWriter;
 
     #[derive(Debug)]
     struct RecordingLiveProvider {
@@ -2234,6 +2346,14 @@ mod tests {
         // directly.
         queried_ranges: Arc<StdMutex<Vec<(u64, u64)>>>,
         cancel_token: CancellationToken,
+        fail_first_logs_request: bool,
+        fail_first_block_batch: bool,
+        cancel_after_requests: usize,
+        request_count: AtomicUsize,
+        // Head polls answered before `get_latest_block` fails and cancels; `None` never fails.
+        head_polls_before_failure: Option<usize>,
+        head_polls: AtomicUsize,
+        block_batch_count: Arc<AtomicUsize>,
     }
 
     impl RecordingLiveProvider {
@@ -2242,7 +2362,38 @@ mod tests {
             queried_ranges: Arc<StdMutex<Vec<(u64, u64)>>>,
             cancel_token: CancellationToken,
         ) -> Self {
-            Self { inner, queried_ranges, cancel_token }
+            Self {
+                inner,
+                queried_ranges,
+                cancel_token,
+                fail_first_logs_request: false,
+                fail_first_block_batch: false,
+                cancel_after_requests: 1,
+                request_count: AtomicUsize::new(0),
+                head_polls_before_failure: None,
+                head_polls: AtomicUsize::new(0),
+                block_batch_count: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        /// A provider over `inner` with its own range recorder and cancellation token.
+        fn recording(inner: MockChainProvider) -> Self {
+            Self::new(inner, Arc::new(StdMutex::new(Vec::new())), CancellationToken::new())
+        }
+
+        fn with_transient_first_logs_error(mut self) -> Self {
+            self.fail_first_logs_request = true;
+            self.cancel_after_requests = 2;
+            self
+        }
+
+        fn with_head_polls(mut self, answered: usize) -> Self {
+            self.head_polls_before_failure = Some(answered);
+            self
+        }
+
+        fn ranges(&self) -> Vec<(u64, u64)> {
+            self.queried_ranges.lock().expect("recorded ranges mutex poisoned").clone()
         }
     }
 
@@ -2263,7 +2414,16 @@ mod tests {
             self.inner.chain_state_notification()
         }
 
+        fn shared_tip_logs(&self) -> Option<Arc<SharedTipLogs>> {
+            self.inner.shared_tip_logs()
+        }
+
         async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
+            let polls = self.head_polls.fetch_add(1, Ordering::SeqCst) + 1;
+            if self.head_polls_before_failure.is_some_and(|answered| polls > answered) {
+                self.cancel_token.cancel();
+                return Err(ProviderError::CustomError("head unavailable".to_string()));
+            }
             self.inner.get_latest_block().await
         }
 
@@ -2279,10 +2439,19 @@ mod tests {
                 .lock()
                 .expect("recorded ranges mutex poisoned")
                 .push((event_filter.from_block().to::<u64>(), event_filter.to_block().to::<u64>()));
-            // Stop the live loop after the first recorded request. This keeps
-            // the test narrowly focused on the initial live window calculation
-            // instead of letting the polling loop continue indefinitely.
-            self.cancel_token.cancel();
+
+            let request_count = self.request_count.fetch_add(1, Ordering::SeqCst) + 1;
+            if request_count >= self.cancel_after_requests {
+                self.cancel_token.cancel();
+            }
+
+            if self.fail_first_logs_request && request_count == 1 {
+                return Err(ProviderError::CustomError(
+                    "block not found for eth_getLogs, requested toBlock 603 is not yet available"
+                        .to_string(),
+                ));
+            }
+
             self.inner.get_logs(event_filter).await
         }
 
@@ -2291,6 +2460,12 @@ mod tests {
             block_numbers: &[U64],
             include_txs: bool,
         ) -> Result<Vec<AnyRpcBlock>, ProviderError> {
+            let block_call = self.block_batch_count.fetch_add(1, Ordering::SeqCst);
+            if self.fail_first_block_batch && block_call == 0 {
+                return Err(ProviderError::CustomError(
+                    "transient timestamp block RPC failure".to_string(),
+                ));
+            }
             self.inner.get_block_by_number_batch(block_numbers, include_txs).await
         }
 
@@ -2407,6 +2582,134 @@ mod tests {
         }
     }
 
+    fn make_log_at_block_with_index(block_number: u64, log_index: u64) -> Log {
+        let mut log = make_log_at_block(block_number);
+        log.log_index = Some(log_index);
+        log
+    }
+
+    fn make_address_filter() -> RindexerEventFilter {
+        RindexerEventFilter::new_address_filter(
+            &B256::ZERO,
+            "TestEvent",
+            &AddressDetails {
+                address: ValueOrArray::Array(vec![
+                    Address::from([1u8; 20]),
+                    Address::from([2u8; 20]),
+                ]),
+                indexed_filters: None,
+            },
+            U64::from(100),
+            U64::from(500),
+        )
+        .unwrap()
+    }
+
+    async fn make_parallel_worker_config(
+        provider: Arc<JsonRpcCachedProvider>,
+    ) -> Arc<EventProcessingConfig> {
+        let network_contract = Arc::new(NetworkContract {
+            id: "test-network-contract".to_string(),
+            network: "test".to_string(),
+            indexing_contract_setup: IndexingContractSetup::Address(AddressDetails {
+                address: ValueOrArray::Array(vec![
+                    Address::from([1u8; 20]),
+                    Address::from([2u8; 20]),
+                ]),
+                indexed_filters: None,
+            }),
+            cached_provider: provider.clone(),
+            block_clock: BlockClock::new(None, None, provider),
+            decoder: Arc::new(|_, _| Arc::new(()) as Arc<dyn std::any::Any + Send + Sync>),
+            start_block: Some(U64::from(100)),
+            end_block: Some(U64::from(500)),
+            disable_logs_bloom_checks: false,
+        });
+
+        Arc::new(EventProcessingConfig::ContractEventProcessing(ContractEventProcessingConfig {
+            id: "test-event".to_string(),
+            project_path: PathBuf::new(),
+            indexer_name: "test-indexer".to_string(),
+            contract_name: "test-contract".to_string(),
+            topic_id: B256::ZERO,
+            event_name: "TestEvent".to_string(),
+            config: Config::default(),
+            network_contract,
+            timestamps: false,
+            start_block: U64::from(100),
+            end_block: U64::from(500),
+            registry: Arc::new(EventCallbackRegistry::new()),
+            progress: IndexingEventsProgressState::monitor(&[], &[], None).await,
+            postgres: None,
+            clickhouse: None,
+            csv_details: None,
+            stream_last_synced_block_file_path: None,
+            index_event_in_order: false,
+            live_indexing: false,
+            indexing_distance_from_head: U64::ZERO,
+            cancel_token: CancellationToken::new(),
+            tables: Arc::new(vec![]),
+            reorg_sender: None,
+            streams_clients: Arc::new(None),
+            contract_abi: None,
+            providers: Arc::new(HashMap::new()),
+            constants: Arc::new(HashMap::new()),
+            multicall_addresses: Arc::new(HashMap::new()),
+        }))
+    }
+
+    async fn make_live_timestamp_config(
+        provider: Arc<dyn ChainProvider>,
+        block_clock_provider: Arc<dyn ChainProvider>,
+        cancel_token: CancellationToken,
+    ) -> Arc<EventProcessingConfig> {
+        let network_contract = Arc::new(NetworkContract {
+            id: "live-timestamp-test-network-contract".to_string(),
+            network: "test".to_string(),
+            indexing_contract_setup: IndexingContractSetup::Address(AddressDetails {
+                address: ValueOrArray::Array(vec![Address::ZERO]),
+                indexed_filters: None,
+            }),
+            cached_provider: provider,
+            block_clock: BlockClock::new(None, None, block_clock_provider),
+            decoder: Arc::new(|_, _| Arc::new(()) as Arc<dyn std::any::Any + Send + Sync>),
+            start_block: Some(U64::from(100)),
+            end_block: Some(U64::from(110)),
+            disable_logs_bloom_checks: false,
+        });
+
+        Arc::new(EventProcessingConfig::ContractEventProcessing(ContractEventProcessingConfig {
+            id: "live-timestamp-test-event".to_string(),
+            project_path: PathBuf::new(),
+            indexer_name: "test-indexer".to_string(),
+            contract_name: "test-contract".to_string(),
+            topic_id: B256::ZERO,
+            event_name: "TestEvent".to_string(),
+            config: Config { buffer: Some(1), ..Config::default() },
+            network_contract,
+            timestamps: true,
+            start_block: U64::from(100),
+            end_block: U64::from(110),
+            registry: Arc::new(EventCallbackRegistry::new()),
+            progress: IndexingEventsProgressState::monitor(&[], &[], None).await,
+            postgres: None,
+            clickhouse: None,
+            csv_details: None,
+            stream_last_synced_block_file_path: None,
+            index_event_in_order: false,
+            live_indexing: true,
+            indexing_distance_from_head: U64::ZERO,
+            cancel_token,
+            tables: Arc::new(vec![]),
+            reorg_sender: None,
+            streams_clients: Arc::new(None),
+            contract_abi: None,
+            providers: Arc::new(HashMap::new()),
+            constants: Arc::new(HashMap::new()),
+            multicall_addresses: Arc::new(HashMap::new()),
+        }))
+    }
+
     fn make_block(number: u64) -> AnyRpcBlock {
         AnyRpcBlock::new(
             alloy::rpc::types::Block::new(
@@ -2469,6 +2772,259 @@ mod tests {
         let result = result.expect("should return next range");
         // Next from_block should be last_log.block_number + 1 = 176
         assert_eq!(result.next.from_block(), U64::from(176));
+    }
+
+    #[tokio::test]
+    async fn historic_address_chunk_merge_advances_past_highest_log() {
+        let (provider, asserter) = JsonRpcCachedProvider::mock_with_asserter_and_address_filtering(
+            1,
+            AddressFiltering::MaxAddressPerGetLogsRequest(1),
+        );
+        asserter.push_success(&vec![
+            make_log_at_block_with_index(100, 0),
+            make_log_at_block_with_index(500, 1),
+        ]);
+        asserter.push_success(&vec![make_log_at_block_with_index(200, 0)]);
+
+        let (tx, mut rx) = mpsc::channel(4);
+        let result = fetch_historic_logs_stream(
+            false,
+            BlockClock::new(None, None, Arc::new(MockChainProvider::new(1))),
+            provider.as_ref(),
+            &tx,
+            &B256::ZERO,
+            make_address_filter(),
+            None,
+            U64::from(500),
+            "test",
+        )
+        .await
+        .expect("historic fetch should return its next filter");
+
+        let fetched = rx
+            .recv()
+            .await
+            .expect("historic fetch should dispatch its result")
+            .expect("historic fetch should dispatch successful logs");
+        let positions = fetched
+            .logs
+            .iter()
+            .map(|log| (log.block_number.unwrap(), log.log_index.unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(positions, vec![(100, 0), (200, 0), (500, 1)]);
+        assert_eq!(result.next.from_block(), U64::from(501));
+    }
+
+    #[tokio::test]
+    async fn parallel_worker_address_chunk_merge_preserves_log_order() {
+        let (provider, asserter) = JsonRpcCachedProvider::mock_with_asserter_and_address_filtering(
+            1,
+            AddressFiltering::MaxAddressPerGetLogsRequest(1),
+        );
+        asserter.push_success(&vec![
+            make_log_at_block_with_index(100, 0),
+            make_log_at_block_with_index(500, 1),
+        ]);
+        asserter.push_success(&vec![make_log_at_block_with_index(200, 0)]);
+
+        let config = make_parallel_worker_config(provider).await;
+        let (tx, mut rx) = mpsc::channel(4);
+        parallel_worker(
+            config,
+            WorkerState {
+                sequence_id: 0,
+                filter: make_address_filter(),
+                max_block_range_limitation: None,
+                original_max_limit: None,
+            },
+            tx,
+            CancellationToken::new(),
+            Arc::new(AdaptiveConcurrency::new(1, 1, 1)),
+            Arc::new(AtomicUsize::new(1)),
+            Arc::new(Notify::new()),
+        )
+        .await;
+
+        let batch = rx.recv().await.expect("parallel worker should send a final batch");
+        assert!(batch.is_final);
+        let fetched = batch
+            .results
+            .into_iter()
+            .next()
+            .expect("parallel worker should return a result")
+            .expect("parallel worker should fetch logs");
+        let positions = fetched
+            .logs
+            .iter()
+            .map(|log| (log.block_number.unwrap(), log.log_index.unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(positions, vec![(100, 0), (200, 0), (500, 1)]);
+    }
+
+    #[tokio::test]
+    async fn historic_timestamp_omissions_retry_then_stop_at_minimum_range() {
+        for omissions in 1..=3 {
+            let mut batches = vec![vec![]; omissions];
+            if omissions < 3 {
+                let mut block = make_block(100);
+                block.header.inner.timestamp = 2000;
+                batches.push(vec![block]);
+            }
+            let mut provider = RecordingLiveProvider::recording(
+                MockChainProvider::new(1)
+                    .with_logs(vec![make_log_at_block(100)])
+                    .with_block_batches(batches),
+            );
+            provider.cancel_after_requests = usize::MAX;
+            let block_batch_count = Arc::clone(&provider.block_batch_count);
+            let cancel_token = provider.cancel_token.clone();
+            let provider = Arc::new(provider);
+            let mut config =
+                make_live_timestamp_config(provider.clone(), provider, cancel_token.clone()).await;
+            if let EventProcessingConfig::ContractEventProcessing(contract_config) =
+                Arc::get_mut(&mut config).unwrap()
+            {
+                contract_config.live_indexing = false;
+                contract_config.end_block = U64::from(100);
+                Arc::get_mut(&mut contract_config.network_contract).unwrap().end_block =
+                    Some(U64::from(100));
+            }
+
+            let started = Instant::now();
+            let mut stream = fetch_logs_stream(config, false, None, None);
+            let first = tokio::time::timeout(Duration::from_secs(2), stream.next())
+                .await
+                .expect("timestamp retries should be bounded")
+                .expect("the historical stream should report its result");
+            if omissions < 3 {
+                let fetched = first.expect("temporary null blocks should be retried");
+                assert_eq!(fetched.logs.len(), 1);
+                assert_eq!(fetched.logs[0].block_number, Some(100));
+                assert_eq!(fetched.logs[0].block_timestamp, Some(2000));
+            } else {
+                let error = first.err().expect("persistent null blocks should end the stream");
+                assert!(error
+                    .downcast_ref::<crate::blockclock::BlockClockError>()
+                    .is_some_and(|error| error.is_missing_block_in_range()));
+            }
+            let attempts = (omissions + 1).min(3);
+            assert_eq!(block_batch_count.load(Ordering::SeqCst), attempts);
+            assert!(started.elapsed() >= Duration::from_millis(100 * (attempts - 1) as u64));
+            assert!(matches!(
+                tokio::time::timeout(Duration::from_secs(2), stream.next()).await,
+                Ok(None)
+            ));
+            cancel_token.cancel();
+        }
+    }
+
+    #[tokio::test]
+    async fn historic_timestamp_failure_stops_before_live_handoff() {
+        let queried_ranges = Arc::new(StdMutex::new(Vec::new()));
+        let cancel_token = CancellationToken::new();
+        let mut cached_provider = RecordingLiveProvider::new(
+            MockChainProvider::new(1)
+                .with_logs(vec![make_log_at_block(100)])
+                .with_blocks(vec![make_block(111)]),
+            queried_ranges.clone(),
+            cancel_token.clone(),
+        );
+        cached_provider.cancel_after_requests = usize::MAX;
+        let cached_provider: Arc<dyn ChainProvider> = Arc::new(cached_provider);
+        let config = make_live_timestamp_config(
+            cached_provider,
+            Arc::new(MockChainProvider::new(1)),
+            cancel_token.clone(),
+        )
+        .await;
+        let mut stream = fetch_logs_stream(config, false, None, None);
+
+        let first = tokio::time::timeout(Duration::from_secs(2), stream.next()).await;
+        let error_message = match first {
+            Ok(Some(Err(error))) => Some(error.to_string()),
+            _ => None,
+        };
+        let second = tokio::time::timeout(Duration::from_millis(250), stream.next()).await;
+        let second_is_eof = matches!(second, Ok(None));
+        let queried_ranges = queried_ranges.lock().unwrap().clone();
+        let was_cancelled = cancel_token.is_cancelled();
+        cancel_token.cancel();
+
+        assert!(
+            error_message.as_deref().is_some_and(|message| message.contains("missing block 100")),
+            "the terminal historical timestamp error should be reported: {error_message:?}"
+        );
+        assert!(second_is_eof, "a failed historical range must not start a live fetch");
+        assert!(!was_cancelled, "the test must not cancel the producer before its live handoff");
+        assert_eq!(
+            queried_ranges,
+            vec![(100, 110), (100, 105), (100, 102)],
+            "timestamp retry should shrink until the minimum range, then stop"
+        );
+    }
+
+    #[tokio::test]
+    async fn historic_timestamp_provider_error_retries_at_minimum_range() {
+        let queried_ranges = Arc::new(StdMutex::new(Vec::new()));
+        let cancel_token = CancellationToken::new();
+        let mut provider = RecordingLiveProvider::new(
+            MockChainProvider::new(1)
+                .with_logs(vec![make_log_at_block(100)])
+                .with_blocks(vec![make_block(100)]),
+            queried_ranges.clone(),
+            cancel_token.clone(),
+        );
+        provider.fail_first_block_batch = true;
+        provider.cancel_after_requests = usize::MAX;
+        let block_batch_count = Arc::clone(&provider.block_batch_count);
+        let provider = Arc::new(provider);
+        let block_clock = BlockClock::new(None, Some(1.0), provider.clone());
+        let (tx, mut rx) = mpsc::channel(4);
+        let filter = RindexerEventFilter::empty_for_test()
+            .set_from_block(U64::from(100))
+            .set_to_block(U64::from(102));
+
+        let first = fetch_historic_logs_stream(
+            true,
+            block_clock.clone(),
+            provider.as_ref(),
+            &tx,
+            &B256::ZERO,
+            filter,
+            None,
+            U64::from(102),
+            "test",
+        )
+        .await
+        .expect("the one-shot block RPC error should leave a retryable range");
+        assert_eq!(first.next.from_block(), U64::from(100));
+        assert_eq!(first.next.to_block(), U64::from(102));
+        assert!(rx.try_recv().is_err(), "the failed timestamp attempt must not dispatch logs");
+
+        let retry = fetch_historic_logs_stream(
+            true,
+            block_clock,
+            provider.as_ref(),
+            &tx,
+            &B256::ZERO,
+            first.next,
+            None,
+            U64::from(102),
+            "test",
+        )
+        .await
+        .expect("the timestamp retry should advance after the provider recovers");
+        let fetched = rx
+            .try_recv()
+            .expect("the successful retry should dispatch its logs")
+            .expect("the retry should dispatch a successful result");
+
+        assert_eq!(fetched.logs.len(), 1);
+        assert_eq!(fetched.logs[0].block_timestamp, Some(0));
+        assert_eq!(retry.next.from_block(), U64::from(101));
+        assert_eq!(block_batch_count.load(Ordering::SeqCst), 2);
+        assert_eq!(queried_ranges.lock().unwrap().as_slice(), &[(100, 102), (100, 102)]);
+        cancel_token.cancel();
     }
 
     #[tokio::test]
@@ -2633,7 +3189,9 @@ mod tests {
             Some(configured_max_block_range),
             cancel_token,
             None,
+            #[cfg(feature = "postgres")]
             None,
+            #[cfg(feature = "clickhouse")]
             None,
             &EventCallbackRegistry::default(),
             None,
@@ -2650,23 +3208,191 @@ mod tests {
         );
     }
 
-    // --- endpoint switch handling ---
+    #[tokio::test]
+    async fn live_indexing_retries_when_retry_cap_equals_last_seen_block() {
+        let cancel_token = CancellationToken::new();
+        let queried_ranges = Arc::new(StdMutex::new(Vec::new()));
+        let provider = Arc::new(
+            RecordingLiveProvider::new(
+                MockChainProvider::new(1)
+                    .with_blocks(vec![make_block(603)])
+                    .with_max_block_range(500),
+                queried_ranges.clone(),
+                cancel_token.clone(),
+            )
+            .with_transient_first_logs_error(),
+        );
+        let block_clock = BlockClock::new(None, None, provider.clone());
+        let (tx, _rx) = mpsc::channel(4);
 
-    use crate::indexer::reorg::{BlockChainWindow, ReorgBlockHashPersistence};
-    use std::collections::VecDeque;
-    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            live_indexing_stream(
+                false,
+                block_clock,
+                provider,
+                &tx,
+                U64::from(601),
+                &B256::ZERO,
+                &U64::ZERO,
+                RindexerEventFilter::empty_for_test()
+                    .set_from_block(U64::from(600))
+                    .set_to_block(U64::from(601)),
+                "test",
+                "test",
+                true,
+                Some(U64::from(500)),
+                cancel_token,
+                None,
+                #[cfg(feature = "postgres")]
+                None,
+                #[cfg(feature = "clickhouse")]
+                None,
+                &EventCallbackRegistry::default(),
+                None,
+            ),
+        )
+        .await
+        .expect("live indexing stalled instead of retrying the reduced range");
 
-    fn h(n: u64) -> B256 {
-        let mut bytes = [0u8; 32];
-        bytes[24..].copy_from_slice(&n.to_be_bytes());
-        B256::from(bytes)
+        let queried_ranges = queried_ranges.lock().expect("should lock");
+        assert_eq!(
+            queried_ranges.as_slice(),
+            &[(600, 603), (600, 601)],
+            "the transient head error should retry the reduced range even when its cap equals last_seen_block_number",
+        );
     }
 
-    fn make_hashed_block(number: u64, block_hash: B256, parent_hash: B256) -> AnyRpcBlock {
+    // --- shared tip logs: live-loop tests ---
+
+    type TipAnswer = (Duration, Result<Vec<Log>, String>);
+
+    /// Scripted unfiltered answers per block for the shared fetcher. An exhausted queue repeats
+    /// its last answer; a block with no script never answers, so the fetcher's per-call timeout
+    /// is what ends each of its attempts. An unscripted header is not found.
+    #[derive(Debug, Default)]
+    struct ScriptedTipSource {
+        answers: StdMutex<HashMap<u64, VecDeque<TipAnswer>>>,
+        calls: StdMutex<Vec<u64>>,
+        headers: StdMutex<HashMap<B256, BlockLinks>>,
+    }
+
+    impl ScriptedTipSource {
+        fn new() -> Arc<Self> {
+            Arc::new(Self::default())
+        }
+
+        fn script(&self, block: u64, answers: Vec<TipAnswer>) {
+            self.answers.lock().expect("script mutex").insert(block, answers.into());
+        }
+
+        fn calls(&self) -> Vec<u64> {
+            self.calls.lock().expect("calls mutex").clone()
+        }
+
+        /// Block `number` as `hash_of` chains it, with a busy bloom.
+        fn script_header(&self, number: u64) {
+            let links = BlockLinks {
+                number,
+                parent_hash: hash_of(number - 1),
+                logs_bloom: Bloom::repeat_byte(0xff),
+            };
+            self.headers.lock().expect("headers mutex").insert(hash_of(number), links);
+        }
+
+        fn next_answer(&self, block: u64) -> Option<TipAnswer> {
+            let mut answers = self.answers.lock().expect("script mutex");
+            let queue = answers.get_mut(&block)?;
+            if queue.len() > 1 {
+                queue.pop_front()
+            } else {
+                queue.front().cloned()
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl BlockLogsSource for ScriptedTipSource {
+        async fn block_logs(&self, block: u64) -> Result<Vec<Log>, ProviderError> {
+            self.calls.lock().expect("calls mutex").push(block);
+            let Some((delay, answer)) = self.next_answer(block) else {
+                return std::future::pending().await;
+            };
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+            answer.map_err(ProviderError::CustomError)
+        }
+
+        async fn block_header(&self, hash: B256) -> Result<Option<BlockLinks>, ProviderError> {
+            Ok(self.headers.lock().expect("headers mutex").get(&hash).copied())
+        }
+    }
+
+    /// Captures WARN lines; the test runtime is current-thread, so the live loop logs through it.
+    #[derive(Clone, Default)]
+    struct CapturedLogs(Arc<StdMutex<Vec<u8>>>);
+
+    impl CapturedLogs {
+        fn install() -> (Self, tracing::subscriber::DefaultGuard) {
+            let captured = Self::default();
+            let subscriber = tracing_subscriber::fmt()
+                .with_writer(captured.clone())
+                .with_ansi(false)
+                .with_max_level(tracing::Level::WARN)
+                .finish();
+            (captured, tracing::subscriber::set_default(subscriber))
+        }
+
+        fn text(&self) -> String {
+            String::from_utf8_lossy(&self.0.lock().expect("log mutex")).into_owned()
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for CapturedLogs {
+        type Writer = CapturedLogs;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    impl std::io::Write for CapturedLogs {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("log mutex").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    const TIP: u64 = 603;
+
+    /// Block hashes chained by number: block `n` names `hash_of(n - 1)` as its parent.
+    fn hash_of(number: u64) -> B256 {
+        B256::repeat_byte(number as u8)
+    }
+
+    fn tip_hash() -> B256 {
+        hash_of(TIP)
+    }
+
+    fn stream_address() -> Address {
+        Address::repeat_byte(0xaa)
+    }
+
+    fn stream_topic() -> B256 {
+        B256::repeat_byte(0x70)
+    }
+
+    fn tip_block(number: u64, hash: B256, logs_bloom: Bloom) -> AnyRpcBlock {
+        let parent_hash = hash_of(number - 1);
         AnyRpcBlock::new(
             alloy::rpc::types::Block::new(
                 AnyRpcHeader::from_sealed(
-                    AnyHeader { number, parent_hash, ..Default::default() }.seal(block_hash),
+                    AnyHeader { number, parent_hash, logs_bloom, ..Default::default() }.seal(hash),
                 ),
                 BlockTransactions::Full(vec![]),
             )
@@ -2674,511 +3400,487 @@ mod tests {
         )
     }
 
-    /// Drives `live_indexing_stream` through an endpoint switch: serves a
-    /// scripted sequence of `get_latest_block` answers (each step also sets
-    /// the endpoint switch counter visible from the NEXT loop iteration),
-    /// records the `get_logs` ranges the loop requests, delegates canonical
-    /// block lookups (window revalidation, fork point search) to the inner
-    /// mock, and cancels the loop when the script runs out.
-    #[derive(Debug)]
-    struct ScriptedLiveProvider {
-        inner: MockChainProvider,
-        script: StdMutex<VecDeque<(AnyRpcBlock, u64)>>,
-        switches: AtomicU64,
-        queried_ranges: Arc<StdMutex<Vec<(u64, u64)>>>,
-        cancel_token: CancellationToken,
-        /// When set, the next `get_logs` stores this switch counter and
-        /// returns an empty log set — a lagging replacement that successfully
-        /// answered for blocks it has not reached.
-        failover_on_next_logs: StdMutex<Option<u64>>,
+    /// The tip as a busy chain serves it: a saturated bloom, positive for every stream.
+    fn busy_tip() -> AnyRpcBlock {
+        tip_block(TIP, tip_hash(), Bloom::repeat_byte(0xff))
     }
 
-    impl ScriptedLiveProvider {
-        fn new(
-            inner: MockChainProvider,
-            script: Vec<(AnyRpcBlock, u64)>,
-            queried_ranges: Arc<StdMutex<Vec<(u64, u64)>>>,
-            cancel_token: CancellationToken,
-        ) -> Self {
-            Self {
-                inner,
-                script: StdMutex::new(script.into()),
-                switches: AtomicU64::new(0),
-                queried_ranges,
-                cancel_token,
-                failover_on_next_logs: StdMutex::new(None),
-            }
-        }
-
-        fn fail_over_on_next_logs(&self, switches_after: u64) {
-            *self.failover_on_next_logs.lock().expect("failover flag poisoned") =
-                Some(switches_after);
+    fn log_at(block: u64, block_hash: B256, address: Address, topic0: B256, index: u64) -> Log {
+        Log {
+            inner: PrimitiveLog {
+                address,
+                data: LogData::new_unchecked(vec![topic0], Bytes::new()),
+            },
+            block_hash: Some(block_hash),
+            block_number: Some(block),
+            block_timestamp: None,
+            transaction_hash: None,
+            transaction_index: None,
+            log_index: Some(index),
+            removed: false,
         }
     }
 
-    #[async_trait::async_trait]
-    impl ChainProvider for ScriptedLiveProvider {
-        fn chain(&self) -> alloy_chains::Chain {
-            self.inner.chain()
-        }
-
-        fn max_block_range(&self) -> Option<U64> {
-            self.inner.max_block_range()
-        }
-
-        fn chain_state_notification(
-            &self,
-        ) -> Option<tokio::sync::broadcast::Sender<crate::notifications::ChainStateNotification>>
-        {
-            self.inner.chain_state_notification()
-        }
-
-        fn endpoint_switches(&self) -> u64 {
-            self.switches.load(AtomicOrdering::Acquire)
-        }
-
-        async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
-            let next = self.script.lock().expect("script mutex poisoned").pop_front();
-            match next {
-                Some((block, switches_after)) => {
-                    self.switches.store(switches_after, AtomicOrdering::Release);
-                    Ok(Some(Arc::new(block)))
-                }
-                None => {
-                    self.cancel_token.cancel();
-                    Ok(None)
-                }
-            }
-        }
-
-        async fn get_block_number(&self) -> Result<U64, ProviderError> {
-            self.inner.get_block_number().await
-        }
-
-        async fn get_logs(
-            &self,
-            event_filter: &RindexerEventFilter,
-        ) -> Result<Vec<Log>, ProviderError> {
-            self.queried_ranges
-                .lock()
-                .expect("recorded ranges mutex poisoned")
-                .push((event_filter.from_block().to::<u64>(), event_filter.to_block().to::<u64>()));
-            if let Some(switches_after) =
-                self.failover_on_next_logs.lock().expect("failover flag poisoned").take()
-            {
-                self.switches.store(switches_after, AtomicOrdering::Release);
-                return Ok(Vec::new());
-            }
-            self.inner.get_logs(event_filter).await
-        }
-
-        async fn get_block_by_number_batch(
-            &self,
-            block_numbers: &[U64],
-            include_txs: bool,
-        ) -> Result<Vec<AnyRpcBlock>, ProviderError> {
-            self.inner.get_block_by_number_batch(block_numbers, include_txs).await
-        }
-
-        async fn get_block_by_number_batch_with_size(
-            &self,
-            block_numbers: &[U64],
-            include_txs: bool,
-            rpc_batch_size: Option<usize>,
-        ) -> Result<Vec<AnyRpcBlock>, ProviderError> {
-            self.inner
-                .get_block_by_number_batch_with_size(block_numbers, include_txs, rpc_batch_size)
-                .await
-        }
-
-        async fn get_tx_receipts_batch(
-            &self,
-            hashes: &[TxHash],
-        ) -> Result<Vec<AnyTransactionReceipt>, ProviderError> {
-            self.inner.get_tx_receipts_batch(hashes).await
-        }
-
-        async fn trace_block(
-            &self,
-            block_number: U64,
-        ) -> Result<Vec<LocalizedTransactionTrace>, ProviderError> {
-            self.inner.trace_block(block_number).await
-        }
-
-        async fn debug_trace_block_by_number(
-            &self,
-            block_number: U64,
-        ) -> Result<Vec<LocalizedTransactionTrace>, ProviderError> {
-            self.inner.debug_trace_block_by_number(block_number).await
-        }
-
-        async fn eth_call(
-            &self,
-            to: Address,
-            data: Bytes,
-            block_number: u64,
-        ) -> Result<String, ProviderError> {
-            self.inner.eth_call(to, data, block_number).await
-        }
-
-        async fn eth_call_latest(&self, to: Address, data: Bytes) -> Result<String, ProviderError> {
-            self.inner.eth_call_latest(to, data).await
-        }
+    /// A log of the stream's address and topic in the tip block.
+    fn tip_log(index: u64) -> Log {
+        log_at(TIP, tip_hash(), stream_address(), stream_topic(), index)
     }
 
-    /// Coordinator over a window validated up to `latest` (blocks 100..=latest
-    /// with `h(n)` hashes), using `provider` for canonical lookups.
-    fn coordinator_with_window(provider: Arc<dyn ChainProvider>, latest: u64) -> ReorgCoordinator {
-        let mut window = BlockChainWindow::try_new(1000).expect("window size > 0");
-        for n in 100..=latest {
-            window.insert(n, h(n), h(n - 1));
-        }
-        ReorgCoordinator::new(
-            "test".to_string(),
-            window,
-            Arc::new(ReorgBlockHashPersistence::new(None, None)),
-            provider,
-            vec![],
-            vec![],
-            vec![],
+    /// The live loop stamps served logs with the cached header timestamp (0 for test headers).
+    fn stamped(mut log: Log) -> Log {
+        log.block_timestamp = Some(0);
+        log
+    }
+
+    fn block_and_index(logs: &[Log]) -> Vec<(Option<u64>, Option<u64>)> {
+        logs.iter().map(|log| (log.block_number, log.log_index)).collect()
+    }
+
+    fn stream_filter(from_block: u64) -> RindexerEventFilter {
+        RindexerEventFilter::new_address_filter(
+            &stream_topic(),
+            "Ev",
+            &AddressDetails {
+                address: ValueOrArray::Value(stream_address()),
+                indexed_filters: None,
+            },
+            U64::from(from_block),
+            U64::from(from_block),
         )
-        .expect("valid coordinator")
+        .expect("an address filter")
     }
 
-    fn registry_capturing_reorgs() -> (
-        EventCallbackRegistry,
-        Arc<StdMutex<Vec<crate::event::callback_registry::ReorgNotification>>>,
-    ) {
-        let captured = Arc::new(StdMutex::new(Vec::new()));
-        let captured_clone = Arc::clone(&captured);
-        let mut registry = EventCallbackRegistry::new();
-        registry.register_on_reorg(Arc::new(move |notification| {
-            let captured = Arc::clone(&captured_clone);
-            Box::pin(async move {
-                captured.lock().expect("captured mutex poisoned").push(notification);
-            })
-        }));
-        (registry, captured)
+    fn settings() -> SharedTipLogsSettings {
+        SharedTipLogsSettings {
+            empty_retry_deadline_ms: 7000,
+            cache_blocks: 32,
+            bloom_trusted: true,
+        }
     }
 
-    #[tokio::test]
-    async fn endpoint_switch_watcher_fires_once_per_switch() {
-        let mock = MockChainProvider::new(1);
-        let mut watcher = EndpointSwitchWatcher::new(&mock);
-        assert!(!watcher.switched(&mock));
-
-        mock.bump_endpoint_switches();
-        assert!(watcher.switched(&mock));
-        assert!(!watcher.switched(&mock), "a switch must only fire once");
-
-        mock.bump_endpoint_switches();
-        mock.bump_endpoint_switches();
-        assert!(watcher.switched(&mock), "coalesced switches still fire");
-        assert!(!watcher.switched(&mock));
+    fn counter(series: &CounterVec, labels: &[&str]) -> f64 {
+        series.with_label_values(labels).get()
     }
 
-    #[tokio::test]
-    async fn live_get_logs_failover_does_not_skip_unreached_blocks() {
-        // The range is computed from the old endpoint's tip (120). eth_getLogs
-        // then fails over and the lagging replacement returns an empty set
-        // for 111..=120, which it has not synced. Accepting that empty set
-        // would advance the cursor to 121 and those blocks would never be
-        // indexed. The loop must discard it and request 111..=120 again once
-        // the replacement's tip actually covers the range.
-        let cancel_token = CancellationToken::new();
-        let queried_ranges = Arc::new(StdMutex::new(Vec::new()));
-        let provider = Arc::new(ScriptedLiveProvider::new(
-            MockChainProvider::new(1).with_blocks(vec![make_hashed_block(120, h(120), h(119))]),
-            vec![
-                (make_hashed_block(120, h(120), h(119)), 0),
-                (make_hashed_block(120, h(120), h(119)), 1),
-            ],
-            queried_ranges.clone(),
-            cancel_token.clone(),
-        ));
-        provider.fail_over_on_next_logs(1);
-        let block_clock = BlockClock::new(None, None, provider.clone());
-        let (tx, _rx) = mpsc::channel(8);
+    const SERVED_MODES: [&str; 3] = ["tip", "window", "prefix_rpc_plus_tip"];
+    const FALLBACK_REASONS: [&str; 5] =
+        ["gave_up", "error", "hash_mismatch", "wait_timeout", "not_scheduled"];
 
-        live_indexing_stream(
-            false,
-            block_clock,
+    /// Runs `live_indexing_stream` without a reorg coordinator until its first batch, which is
+    /// returned with the instant it arrived; the batch cancels the loop.
+    async fn first_live_batch(
+        provider: &Arc<RecordingLiveProvider>,
+        filter: RindexerEventFilter,
+        last_seen_block: u64,
+        disable_logs_bloom_checks: bool,
+        network: &str,
+    ) -> (FetchLogsResult, Instant) {
+        first_live_batch_at(
             provider,
-            &tx,
-            U64::from(110),
-            &B256::ZERO,
-            &U64::ZERO,
-            RindexerEventFilter::empty_for_test()
-                .set_from_block(U64::from(111))
-                .set_to_block(U64::from(111)),
-            "test",
-            "test",
-            true,
-            None,
-            cancel_token,
-            None,
-            None,
-            None,
-            &EventCallbackRegistry::default(),
-            None,
-        )
-        .await;
-
-        let ranges = queried_ranges.lock().expect("ranges mutex poisoned").clone();
-        assert_eq!(
-            ranges,
-            vec![(111, 120), (111, 120)],
-            "the range covered by the failed-over empty response must be fetched again, got {ranges:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn historic_get_logs_failover_does_not_advance_the_range() {
-        let cancel_token = CancellationToken::new();
-        let queried_ranges = Arc::new(StdMutex::new(Vec::new()));
-        let provider = ScriptedLiveProvider::new(
-            MockChainProvider::new(1),
-            Vec::new(),
-            queried_ranges,
-            cancel_token,
-        );
-        provider.fail_over_on_next_logs(1);
-        let (tx, mut rx) = mpsc::channel(4);
-        let filter = RindexerEventFilter::empty_for_test()
-            .set_from_block(U64::from(10))
-            .set_to_block(U64::from(20));
-
-        let result = fetch_historic_logs_stream(
-            false,
-            BlockClock::new(None, None, Arc::new(MockChainProvider::new(1))),
-            &provider,
-            &tx,
-            &B256::ZERO,
             filter,
-            None,
-            U64::from(100),
-            "test",
+            last_seen_block,
+            disable_logs_bloom_checks,
+            network,
+            0,
         )
-        .await;
-
-        let next = result.expect("the range must be retried, not dropped");
-        assert_eq!(next.next.from_block(), U64::from(10));
-        assert_eq!(next.next.to_block(), U64::from(20));
-        drop(tx);
-        assert!(rx.try_recv().is_err(), "a failed-over empty result must not be published");
+        .await
     }
 
-    #[tokio::test]
-    async fn live_switch_to_lagging_endpoint_triggers_no_spurious_rollback() {
-        // THE failure mode this exists for: the transport fails over near the
-        // tip and the replacement endpoint lags behind blocks the previous
-        // endpoint already validated, reporting different-but-canonical
-        // hashes for them. Pre-mitigation the parent-hash window treated
-        // that as a reorg and rolled back (DB deletes + stream retractions).
-        //
-        // Script (window pre-validated up to 110; the switch counter flips
-        // during the call that returns the replacement endpoint's block):
-        //   iter1: block 111 (canonical, still the old endpoint) - extends
-        //          the window.
-        //   iter2: the transport fails over and the lagging endpoint reports
-        //          block 109 with alien hashes; the loop must notice the
-        //          switch, suspend validation and IGNORE the block.
-        //   iter3: the new endpoint catches up: block 112 building on the
-        //          canonical 111. The window revalidates against the mock's
-        //          canonical blocks (all matching) and indexing continues.
-        let cancel_token = CancellationToken::new();
-        let queried_ranges = Arc::new(StdMutex::new(Vec::new()));
-        let canonical: Vec<AnyRpcBlock> =
-            (100..=111).map(|n| make_hashed_block(n, h(n), h(n - 1))).collect();
-        let provider = Arc::new(ScriptedLiveProvider::new(
-            MockChainProvider::new(1).with_blocks(canonical),
-            vec![
-                (make_hashed_block(111, h(111), h(110)), 0),
-                (make_hashed_block(109, h(9109), h(9108)), 1),
-                (make_hashed_block(112, h(112), h(111)), 1),
-            ],
-            queried_ranges.clone(),
-            cancel_token.clone(),
-        ));
-        let coordinator = Arc::new(Mutex::new(coordinator_with_window(provider.clone(), 110)));
-        let (registry, captured_reorgs) = registry_capturing_reorgs();
+    /// `first_live_batch` with an explicit `reorg_safe_distance`.
+    async fn first_live_batch_at(
+        provider: &Arc<RecordingLiveProvider>,
+        filter: RindexerEventFilter,
+        last_seen_block: u64,
+        disable_logs_bloom_checks: bool,
+        network: &str,
+        reorg_safe_distance: u64,
+    ) -> (FetchLogsResult, Instant) {
+        let reorg_safe_distance = U64::from(reorg_safe_distance);
         let block_clock = BlockClock::new(None, None, provider.clone());
-        let (tx, _rx) = mpsc::channel(8);
-
-        live_indexing_stream(
+        let cancel_token = provider.cancel_token.clone();
+        let (tx, mut rx) = mpsc::channel(4);
+        let topic_id = filter.event_signature();
+        let registry = EventCallbackRegistry::default();
+        let stream = live_indexing_stream(
             false,
             block_clock,
-            provider,
+            provider.clone(),
             &tx,
-            U64::from(110),
-            &B256::ZERO,
-            &U64::ZERO,
-            RindexerEventFilter::empty_for_test()
-                .set_from_block(U64::from(111))
-                .set_to_block(U64::from(111)),
+            U64::from(last_seen_block),
+            &topic_id,
+            &reorg_safe_distance,
+            filter,
             "test",
-            "test",
-            true,
+            network,
+            disable_logs_bloom_checks,
             None,
-            cancel_token,
-            Some(Arc::clone(&coordinator)),
+            cancel_token.clone(),
             None,
+            #[cfg(feature = "postgres")]
+            None,
+            #[cfg(feature = "clickhouse")]
             None,
             &registry,
             None,
-        )
-        .await;
-
-        assert!(
-            captured_reorgs.lock().expect("captured mutex poisoned").is_empty(),
-            "switching to a lagging endpoint must NOT trigger a reorg rollback"
         );
-        let ranges = queried_ranges.lock().expect("ranges mutex poisoned").clone();
-        assert!(
-            ranges.contains(&(112, 112)),
-            "indexing must continue past the switch once the new endpoint catches up, got {ranges:?}"
-        );
+        let first_batch = async {
+            let batch = rx.recv().await.expect("the live loop sends a batch");
+            let batch = batch.expect("a batch rather than an error");
+            cancel_token.cancel();
+            (batch, Instant::now())
+        };
+        let (_, batch) = tokio::time::timeout(Duration::from_secs(60), async {
+            tokio::join!(stream, first_batch)
+        })
+        .await
+        .expect("the live loop stops after its first batch");
+        batch
     }
 
-    #[tokio::test]
-    async fn live_switch_during_get_latest_block_triggers_no_spurious_rollback() {
-        // Sharper variant of the scenario above: the primary dies on the
-        // get_latest_block call itself, so the failover happens MID-ITERATION
-        // and the very block returned by that call already comes from the
-        // lagging replacement endpoint (the scripted provider flips the
-        // switch counter during the call, before returning). The loop must
-        // notice the switch AFTER the call and BEFORE reorg validation -
-        // otherwise the alien-hash block is compared against the previous
-        // endpoint's validated window and rolled back spuriously.
-        //
-        // Script (window pre-validated up to 110):
-        //   iter1: get_latest_block fails over mid-call and returns the
-        //          lagging endpoint's block 109 with alien hashes; the
-        //          switch counter flips during that same call.
-        //   iter2: the new endpoint catches up with the canonical block 111;
-        //          the window revalidates (all hashes match) and indexing
-        //          continues.
-        let cancel_token = CancellationToken::new();
-        let queried_ranges = Arc::new(StdMutex::new(Vec::new()));
-        let canonical: Vec<AnyRpcBlock> =
-            (100..=111).map(|n| make_hashed_block(n, h(n), h(n - 1))).collect();
-        let provider = Arc::new(ScriptedLiveProvider::new(
-            MockChainProvider::new(1).with_blocks(canonical),
-            vec![
-                // Switch counter flips DURING this call - the returned block
-                // is already the lagging replacement's view.
-                (make_hashed_block(109, h(9109), h(9108)), 1),
-                (make_hashed_block(111, h(111), h(110)), 1),
-            ],
-            queried_ranges.clone(),
-            cancel_token.clone(),
+    #[tokio::test(start_paused = true)]
+    async fn live_tip_window_is_served_from_shared_cache() {
+        let net = "live-tip-served";
+        let source = ScriptedTipSource::new();
+        let wanted = tip_log(0);
+        let other_address = log_at(TIP, tip_hash(), Address::repeat_byte(0xbb), stream_topic(), 1);
+        let other_topic = log_at(TIP, tip_hash(), stream_address(), B256::repeat_byte(0x71), 2);
+        source.script(
+            TIP,
+            vec![(Duration::ZERO, Ok(vec![wanted.clone(), other_address, other_topic]))],
+        );
+        let tip_logs = SharedTipLogs::new(net, source.clone(), settings());
+        let provider = Arc::new(RecordingLiveProvider::recording(
+            MockChainProvider::new(1).with_blocks(vec![busy_tip()]).with_shared_tip_logs(tip_logs),
         ));
-        let coordinator = Arc::new(Mutex::new(coordinator_with_window(provider.clone(), 110)));
-        let (registry, captured_reorgs) = registry_capturing_reorgs();
-        let block_clock = BlockClock::new(None, None, provider.clone());
-        let (tx, _rx) = mpsc::channel(8);
 
-        live_indexing_stream(
-            false,
-            block_clock,
-            provider,
-            &tx,
-            U64::from(110),
-            &B256::ZERO,
-            &U64::ZERO,
-            RindexerEventFilter::empty_for_test()
-                .set_from_block(U64::from(111))
-                .set_to_block(U64::from(111)),
-            "test",
-            "test",
-            true,
-            None,
-            cancel_token,
-            Some(Arc::clone(&coordinator)),
-            None,
-            None,
-            &registry,
-            None,
-        )
-        .await;
+        let (batch, _) =
+            first_live_batch(&provider, stream_filter(TIP), TIP - 1, false, "test").await;
 
-        assert!(
-            captured_reorgs.lock().expect("captured mutex poisoned").is_empty(),
-            "a failover during get_latest_block must NOT trigger a reorg rollback"
-        );
-        let ranges = queried_ranges.lock().expect("ranges mutex poisoned").clone();
-        assert!(
-            ranges.contains(&(111, 111)),
-            "indexing must continue once the new endpoint catches up, got {ranges:?}"
-        );
+        assert_eq!((batch.from_block, batch.to_block), (U64::from(TIP), U64::from(TIP)));
+        assert_eq!(batch.logs, vec![stamped(wanted)], "exactly the stream's logs");
+        assert!(provider.ranges().is_empty(), "no per-stream eth_getLogs");
+        assert_eq!(source.calls(), vec![TIP], "one unfiltered call for the block");
+        assert_eq!(counter(&SHARED_TIP_LOGS_SERVED_TOTAL, &[net, "tip"]), 1.0);
     }
 
-    #[tokio::test]
-    async fn live_switch_still_detects_real_reorg_after_window_revalidation() {
-        // The counterpart guarantee: suspension must not mask a REAL reorg.
-        // Here the new endpoint (once past the watermark) disagrees with the
-        // window about blocks 105..=111 - those blocks were orphaned, so the
-        // revalidation on resume must roll back from the divergence point.
-        let cancel_token = CancellationToken::new();
-        let queried_ranges = Arc::new(StdMutex::new(Vec::new()));
-        let canonical: Vec<AnyRpcBlock> = (100..=112)
-            .map(|n| {
-                if n < 105 {
-                    make_hashed_block(n, h(n), h(n - 1))
-                } else {
-                    let parent = if n == 105 { h(104) } else { h(9000 + n - 1) };
-                    make_hashed_block(n, h(9000 + n), parent)
-                }
-            })
-            .collect();
-        let provider = Arc::new(ScriptedLiveProvider::new(
-            MockChainProvider::new(1).with_blocks(canonical),
-            vec![
-                // Old endpoint extends the window to 111, then the switch
-                // lands on the new endpoint whose 112 builds on a different
-                // chain.
-                (make_hashed_block(111, h(111), h(110)), 0),
-                (make_hashed_block(112, h(9112), h(9111)), 1),
-            ],
-            queried_ranges.clone(),
-            cancel_token.clone(),
+    #[tokio::test(start_paused = true)]
+    async fn live_tip_window_wakes_on_ready_not_on_pacing() {
+        let net = "live-tip-wakes";
+        let source = ScriptedTipSource::new();
+        source.script(
+            TIP,
+            vec![(Duration::ZERO, Ok(vec![])), (Duration::ZERO, Ok(vec![tip_log(0)]))],
+        );
+        let tip_logs = SharedTipLogs::new(net, source.clone(), settings());
+        let provider = Arc::new(RecordingLiveProvider::recording(
+            MockChainProvider::new(1).with_blocks(vec![busy_tip()]).with_shared_tip_logs(tip_logs),
         ));
-        let coordinator = Arc::new(Mutex::new(coordinator_with_window(provider.clone(), 110)));
-        let (registry, captured_reorgs) = registry_capturing_reorgs();
-        let block_clock = BlockClock::new(None, None, provider.clone());
-        let (tx, _rx) = mpsc::channel(8);
+        let start = Instant::now();
 
-        live_indexing_stream(
-            false,
-            block_clock,
-            provider,
-            &tx,
-            U64::from(110),
-            &B256::ZERO,
-            &U64::ZERO,
-            RindexerEventFilter::empty_for_test()
-                .set_from_block(U64::from(111))
-                .set_to_block(U64::from(111)),
-            "test",
-            "test",
-            true,
-            None,
-            cancel_token,
-            Some(Arc::clone(&coordinator)),
-            None,
-            None,
-            &registry,
-            None,
-        )
-        .await;
+        let (batch, sent_at) =
+            first_live_batch(&provider, stream_filter(TIP), TIP - 1, false, "test").await;
 
-        let reorgs = captured_reorgs.lock().expect("captured mutex poisoned").clone();
-        assert_eq!(reorgs.len(), 1, "exactly one real reorg must be detected");
         assert_eq!(
-            reorgs[0].fork_block, 105,
-            "rollback must start at the first block the new endpoint disagrees on"
+            sent_at - start,
+            Duration::from_millis(250),
+            "sent at the Ready transition (one 250 ms empty retry), not at a 200 ms pacing tick"
         );
-        assert_eq!(reorgs[0].detection_block, 111, "detected at the suspension watermark");
+        assert_eq!(batch.logs, vec![stamped(tip_log(0))]);
+        assert!(provider.ranges().is_empty());
+        assert_eq!(source.calls(), vec![TIP, TIP]);
+        assert_eq!(counter(&SHARED_TIP_LOGS_BLOCKS_TOTAL, &[net, "ready"]), 1.0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn live_tip_window_falls_back_after_gave_up() {
+        let net = "live-tip-gave-up";
+        let source = ScriptedTipSource::new();
+        source.script(TIP, vec![(Duration::ZERO, Ok(vec![]))]);
+        let tip_logs = SharedTipLogs::new(net, source.clone(), settings());
+        let provider = Arc::new(RecordingLiveProvider::recording(
+            MockChainProvider::new(1)
+                .with_blocks(vec![busy_tip()])
+                .with_logs(vec![tip_log(0)])
+                .with_shared_tip_logs(tip_logs),
+        ));
+        let start = Instant::now();
+
+        let (batch, sent_at) =
+            first_live_batch(&provider, stream_filter(TIP), TIP - 1, false, "test").await;
+
+        assert_eq!(sent_at - start, Duration::from_secs(7), "after the fetcher's budget");
+        assert_eq!(provider.ranges(), vec![(TIP, TIP)], "exactly one own eth_getLogs");
+        assert_eq!(batch.logs, vec![stamped(tip_log(0))], "the own call served the stream");
+        assert_eq!(source.calls().len(), 8);
+        assert_eq!(counter(&SHARED_TIP_LOGS_BLOCKS_TOTAL, &[net, "gave_up"]), 1.0);
+        assert_eq!(counter(&SHARED_TIP_LOGS_FALLBACKS_TOTAL, &[net, "gave_up"]), 1.0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn live_wait_budget_expires_when_fetcher_is_stuck() {
+        let net = "live-tip-wait-timeout";
+        let (logs, _guard) = CapturedLogs::install();
+        let source = ScriptedTipSource::new();
+        let tip_logs = SharedTipLogs::new(net, source.clone(), settings());
+        // Nothing is scripted, so no block ever answers. Four earlier heads hold every fetch
+        // permit until their budgets end at 10.25 s, the tip's own task starts only then, and
+        // the stream's 13 s wait budget, which runs from the tip's first observation, ends first.
+        for number in TIP - 4..TIP {
+            tip_logs.observe_head(
+                number,
+                hash_of(number),
+                hash_of(number - 1),
+                Bloom::repeat_byte(0xff),
+            );
+        }
+        let provider = Arc::new(RecordingLiveProvider::recording(
+            MockChainProvider::new(1)
+                .with_blocks(vec![busy_tip()])
+                .with_logs(vec![tip_log(0)])
+                .with_shared_tip_logs(tip_logs),
+        ));
+        let start = Instant::now();
+
+        let (batch, sent_at) =
+            first_live_batch(&provider, stream_filter(TIP), TIP - 1, false, "test").await;
+
+        let waited = sent_at - start;
+        assert!(
+            waited >= Duration::from_secs(13) && waited < Duration::from_millis(13_250),
+            "fell back at first_seen + 13 s, within one pacing tick: {waited:?}"
+        );
+        assert_eq!(provider.ranges(), vec![(TIP, TIP)]);
+        assert_eq!(batch.logs, vec![stamped(tip_log(0))]);
+        assert_eq!(counter(&SHARED_TIP_LOGS_FALLBACKS_TOTAL, &[net, "wait_timeout"]), 1.0);
+        let text = logs.text();
+        assert_eq!(text.matches("waited").count(), 1, "one WARN: {text}");
+        assert!(
+            text.contains("WARN") && text.contains("block 603"),
+            "the WARN names the block: {text}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn live_multi_block_window_uses_rpc_prefix_plus_cached_tip() {
+        let net = "live-tip-prefix";
+        let source = ScriptedTipSource::new();
+        // The fetcher sorts a block's logs by index; the stream sorts the merged window.
+        source.script(TIP, vec![(Duration::ZERO, Ok(vec![tip_log(1), tip_log(0)]))]);
+        let tip_logs = SharedTipLogs::new(net, source.clone(), settings());
+        let prefix = vec![
+            log_at(TIP - 3, hash_of(TIP - 3), stream_address(), stream_topic(), 0),
+            log_at(TIP - 1, hash_of(TIP - 1), stream_address(), stream_topic(), 0),
+        ];
+        let provider = Arc::new(RecordingLiveProvider::recording(
+            MockChainProvider::new(1)
+                .with_blocks(vec![busy_tip()])
+                .with_logs(prefix)
+                .with_shared_tip_logs(tip_logs),
+        ));
+
+        let (batch, _) =
+            first_live_batch(&provider, stream_filter(TIP - 3), TIP - 4, false, "test").await;
+
+        assert_eq!((batch.from_block, batch.to_block), (U64::from(TIP - 3), U64::from(TIP)));
+        assert_eq!(provider.ranges(), vec![(TIP - 3, TIP - 1)], "own eth_getLogs for the prefix");
+        assert_eq!(
+            block_and_index(&batch.logs),
+            vec![
+                (Some(TIP - 3), Some(0)),
+                (Some(TIP - 1), Some(0)),
+                (Some(TIP), Some(0)),
+                (Some(TIP), Some(1)),
+            ]
+        );
+        assert_eq!(source.calls(), vec![TIP]);
+        assert_eq!(counter(&SHARED_TIP_LOGS_SERVED_TOTAL, &[net, "prefix_rpc_plus_tip"]), 1.0);
+    }
+
+    /// The RPC's head goes from `TIP - 2` straight to `TIP`, so `TIP - 1` is never polled as
+    /// head, and the stream's own filtered `eth_getLogs` answers that block empty. The shared
+    /// unfiltered fetch has the block's logs; the stream must get them from it.
+    #[tokio::test(start_paused = true)]
+    async fn live_window_over_a_skipped_head_is_served_from_shared_cache() {
+        let net = "live-tip-skipped-head";
+        let source = ScriptedTipSource::new();
+        let skipped = log_at(TIP - 1, hash_of(TIP - 1), stream_address(), stream_topic(), 0);
+        source.script(TIP - 1, vec![(Duration::ZERO, Ok(vec![skipped.clone()]))]);
+        source.script(TIP, vec![(Duration::ZERO, Ok(vec![tip_log(0)]))]);
+        source.script_header(TIP - 1);
+        let tip_logs = SharedTipLogs::new(net, source.clone(), settings());
+        // The stream already delivered TIP - 2, read through the shared cache as head.
+        tip_logs.observe_head(TIP - 2, hash_of(TIP - 2), hash_of(TIP - 3), Bloom::ZERO);
+        // No `with_logs`: the stream's own eth_getLogs answers every window empty.
+        let provider = Arc::new(RecordingLiveProvider::recording(
+            MockChainProvider::new(1).with_blocks(vec![busy_tip()]).with_shared_tip_logs(tip_logs),
+        ));
+
+        let (batch, _) =
+            first_live_batch(&provider, stream_filter(TIP - 1), TIP - 2, false, "test").await;
+
+        assert_eq!((batch.from_block, batch.to_block), (U64::from(TIP - 1), U64::from(TIP)));
+        assert_eq!(
+            block_and_index(&batch.logs),
+            vec![(Some(TIP - 1), Some(0)), (Some(TIP), Some(0))],
+            "the skipped block's log is delivered"
+        );
+        assert!(provider.ranges().is_empty(), "no per-stream eth_getLogs");
+        assert_eq!(counter(&SHARED_TIP_LOGS_SERVED_TOTAL, &[net, "prefix_rpc_plus_tip"]), 0.0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn live_reorg_arms_invalidate_shared_cache() {
+        let net = "live-tip-reorg";
+        let source = ScriptedTipSource::new();
+        let mut removed = tip_log(0);
+        removed.removed = true;
+        source.script(TIP, vec![(Duration::from_millis(100), Ok(vec![removed]))]);
+        let tip_logs = SharedTipLogs::new(net, source.clone(), settings());
+        // Two head polls: the one that schedules the block and the one that serves the removed
+        // log; the third fails and stops the loop before it observes the head again.
+        let provider = Arc::new(
+            RecordingLiveProvider::recording(
+                MockChainProvider::new(1)
+                    .with_blocks(vec![busy_tip()])
+                    .with_shared_tip_logs(tip_logs.clone()),
+            )
+            .with_head_polls(2),
+        );
+
+        let (batch, _) =
+            first_live_batch(&provider, stream_filter(TIP), TIP - 1, false, "test").await;
+
+        assert_eq!(
+            batch.reorg.as_ref().map(|reorg| reorg.fork_block),
+            Some(U64::from(TIP)),
+            "the removed log is a reorg signal"
+        );
+        assert!(provider.ranges().is_empty());
+        assert_eq!(
+            tip_logs.lookup(TIP, TIP, tip_hash()),
+            TipLookup::Fallback(FallbackReason::NotScheduled),
+            "the reorg arm dropped the block from the cache"
+        );
+
+        // The next observation of the head schedules the block again.
+        let notified = tip_logs.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        tip_logs.observe_head(TIP, tip_hash(), hash_of(TIP - 1), Bloom::repeat_byte(0xff));
+        notified.await;
+        assert!(matches!(tip_logs.lookup(TIP, TIP, tip_hash()), TipLookup::ServeTip(_)));
+        assert_eq!(source.calls(), vec![TIP, TIP]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn disabled_knob_keeps_per_stream_path() {
+        let net = "live-tip-disabled";
+        let provider = Arc::new(RecordingLiveProvider::recording(
+            MockChainProvider::new(1).with_blocks(vec![busy_tip()]).with_logs(vec![tip_log(0)]),
+        ));
+        assert!(provider.shared_tip_logs().is_none(), "the knob is off: no handle");
+
+        let (batch, _) = first_live_batch(&provider, stream_filter(TIP), TIP - 1, false, net).await;
+
+        assert_eq!(provider.ranges(), vec![(TIP, TIP)], "the stream's own tip eth_getLogs");
+        assert_eq!(batch.logs, vec![stamped(tip_log(0))]);
+        for mode in SERVED_MODES {
+            assert_eq!(counter(&SHARED_TIP_LOGS_SERVED_TOTAL, &[net, mode]), 0.0);
+        }
+        for reason in FALLBACK_REASONS {
+            assert_eq!(counter(&SHARED_TIP_LOGS_FALLBACKS_TOTAL, &[net, reason]), 0.0);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn safe_distance_stream_does_not_observe_heads() {
+        let net = "live-tip-safe-distance";
+        let source = ScriptedTipSource::new();
+        source.script(TIP, vec![(Duration::ZERO, Ok(vec![tip_log(0)]))]);
+        let tip_logs = SharedTipLogs::new(net, source.clone(), settings());
+        let provider = Arc::new(RecordingLiveProvider::recording(
+            MockChainProvider::new(1)
+                .with_blocks(vec![busy_tip()])
+                .with_logs(vec![tip_log(0)])
+                .with_shared_tip_logs(tip_logs.clone()),
+        ));
+
+        let (batch, _) =
+            first_live_batch_at(&provider, stream_filter(TIP - 1), TIP - 2, false, net, 1).await;
+
+        assert_eq!(
+            (batch.from_block, batch.to_block),
+            (U64::from(TIP - 1), U64::from(TIP - 1)),
+            "the window stops one block behind the tip"
+        );
+        assert_eq!(provider.ranges(), vec![(TIP - 1, TIP - 1)], "the stream's own eth_getLogs");
+        assert!(source.calls().is_empty(), "a stream that cannot read the cache starts no fetch");
+        assert!(
+            matches!(
+                tip_logs.lookup(TIP, TIP, tip_hash()),
+                TipLookup::Fallback(FallbackReason::NotScheduled)
+            ),
+            "the tip was never observed"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn bloom_negative_skip_still_wins() {
+        let net = "live-tip-bloom-skip";
+        let source = ScriptedTipSource::new();
+        source.script(TIP, vec![(Duration::ZERO, Ok(vec![tip_log(0)]))]);
+        let tip_logs = SharedTipLogs::new(net, source.clone(), settings());
+        let quiet_tip = tip_block(TIP, tip_hash(), Bloom::repeat_byte(0x01));
+        assert!(
+            !is_relevant_block(
+                &Some(HashSet::from([stream_address()])),
+                &stream_topic(),
+                &quiet_tip
+            ),
+            "the bloom is negative for the stream"
+        );
+        let provider = Arc::new(RecordingLiveProvider::recording(
+            MockChainProvider::new(1).with_blocks(vec![quiet_tip]).with_shared_tip_logs(tip_logs),
+        ));
+
+        let (batch, _) =
+            first_live_batch(&provider, stream_filter(TIP), TIP - 1, false, "test").await;
+
+        assert_eq!((batch.from_block, batch.to_block), (U64::from(TIP), U64::from(TIP)));
+        assert!(batch.logs.is_empty(), "the bloom skip answers the window empty");
+        assert!(provider.ranges().is_empty(), "no own eth_getLogs");
+        for mode in SERVED_MODES {
+            assert_eq!(counter(&SHARED_TIP_LOGS_SERVED_TOTAL, &[net, mode]), 0.0, "no lookup");
+        }
+        for reason in FALLBACK_REASONS {
+            assert_eq!(counter(&SHARED_TIP_LOGS_FALLBACKS_TOTAL, &[net, reason]), 0.0);
+        }
+        // The block's shared fetch belongs to the network, not to this stream: it still ran.
+        assert_eq!(source.calls(), vec![TIP]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn observe_head_runs_without_a_coordinator() {
+        // `first_live_batch` passes `reorg_coordinator = None`: the head is observed, fetched
+        // once and served without one.
+        let net = "live-tip-no-coordinator";
+        let source = ScriptedTipSource::new();
+        source.script(TIP, vec![(Duration::ZERO, Ok(vec![tip_log(0)]))]);
+        let tip_logs = SharedTipLogs::new(net, source.clone(), settings());
+        let provider = Arc::new(RecordingLiveProvider::recording(
+            MockChainProvider::new(1)
+                .with_blocks(vec![busy_tip()])
+                .with_shared_tip_logs(tip_logs.clone()),
+        ));
+
+        let (batch, _) =
+            first_live_batch(&provider, stream_filter(TIP), TIP - 1, false, "test").await;
+
+        assert_eq!(batch.logs, vec![stamped(tip_log(0))]);
+        assert_eq!(source.calls(), vec![TIP]);
+        assert_eq!(counter(&SHARED_TIP_LOGS_BLOCKS_TOTAL, &[net, "ready"]), 1.0);
+        assert!(matches!(tip_logs.lookup(TIP, TIP, tip_hash()), TipLookup::ServeTip(_)));
+        assert!(provider.ranges().is_empty());
     }
 
     // --- retry_with_block_range tests ---

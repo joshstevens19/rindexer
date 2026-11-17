@@ -1,51 +1,58 @@
-use std::{collections::HashMap, path::Path, sync::Arc};
-
-use alloy::primitives::U64;
-use futures::future::try_join_all;
-use futures::stream::FuturesUnordered;
-use futures::StreamExt;
-use tokio::sync::Mutex;
-use tokio::{
-    task::{JoinError, JoinHandle},
-    time::Instant,
-};
-use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
-
+#[cfg(feature = "clickhouse")]
 use crate::database::clickhouse::client::{ClickhouseClient, ClickhouseConnectionError};
-use crate::database::generate::generate_indexer_contract_schema_name;
-use crate::database::postgres::generate::generate_internal_event_table_name;
-use crate::event::config::{ContractEventProcessingConfig, FactoryEventProcessingConfig};
-use crate::helpers::{camel_to_snake, format_duration};
-use crate::indexer::native_transfer::native_transfer_block_processor;
-use crate::indexer::reorg::{
-    reorg_safe_distance_for_chain, BlockChainWindow, DerivedColumnJournal, DerivedColumnRollback,
-    DerivedTableInfo, DerivedTableRollbackOp, EventTableInfo, ReorgBlockHashPersistence,
-    ReorgContext, ReorgCoordinator,
-};
-use crate::indexer::Indexer;
-use crate::manifest::network::ReorgHandlingConfig;
 use crate::{
-    database::postgres::client::PostgresConnectionError,
+    abi::{ABIInput, ABIItem},
+    database::{
+        generate::generate_indexer_contract_schema_name,
+        postgres::generate::generate_internal_event_table_name,
+    },
     event::{
         callback_registry::{EventCallbackRegistry, TraceCallbackRegistry},
-        config::{EventProcessingConfig, TraceProcessingConfig},
+        config::{
+            ContractEventProcessingConfig, EventProcessingConfig, FactoryEventProcessingConfig,
+            TraceProcessingConfig,
+        },
     },
+    helpers::{camel_to_snake, format_duration},
     indexer::{
         dependency::ContractEventsDependenciesConfig,
         last_synced::{get_last_synced_block_number, SyncConfig},
-        native_transfer::{native_transfer_block_fetch, NATIVE_TRANSFER_CONTRACT_NAME},
+        native_transfer::{
+            native_transfer_block_fetch, native_transfer_block_processor, NATIVE_TRANSFER_ABI,
+            NATIVE_TRANSFER_CONTRACT_NAME,
+        },
         process::{
             process_contracts_events_with_dependencies, process_non_blocking_event,
             ProcessContractsEventsWithDependenciesError, ProcessEventError,
         },
         progress::IndexingEventsProgressState,
-        ContractEventDependencies,
+        reorg::{
+            reorg_safe_distance_for_chain, BlockChainWindow, DerivedColumnJournal,
+            DerivedColumnRollback, DerivedTableInfo, DerivedTableRollbackOp,
+            DerivedTableRollbackPlan, EventTableInfo, ReorgBlockHashPersistence, ReorgContext,
+            ReorgCoordinator,
+        },
+        ContractEventDependencies, Indexer,
     },
-    manifest::{contract::ReorgSafeDistance, core::Manifest},
+    manifest::{
+        contract::{ColumnType, ReorgSafeDistance},
+        core::Manifest,
+        network::ReorgHandlingConfig,
+    },
     provider::{ChainProvider, ProviderError},
-    PostgresClient,
 };
+#[cfg(feature = "postgres")]
+use crate::{database::postgres::client::PostgresConnectionError, PostgresClient};
+use alloy::primitives::U64;
+use futures::{future::try_join_all, stream::FuturesUnordered, StreamExt};
+use std::{collections::HashMap, path::Path, sync::Arc};
+use tokio::{
+    sync::Mutex,
+    task::{JoinError, JoinHandle},
+    time::Instant,
+};
+use tokio_util::sync::CancellationToken;
+use tracing::{error, info, warn};
 
 #[derive(thiserror::Error, Debug)]
 pub enum CombinedLogEventProcessingError {
@@ -66,9 +73,11 @@ pub enum StartIndexingError {
     CouldNotRunAllIndexHandlers(#[from] ProcessEventError),
 
     #[error("{0}")]
+    #[cfg(feature = "postgres")]
     PostgresConnectionError(#[from] PostgresConnectionError),
 
     #[error("{0}")]
+    #[cfg(feature = "clickhouse")]
     ClickhouseConnectionError(#[from] ClickhouseConnectionError),
 
     #[error("Could not get block number from provider: {0}")]
@@ -145,7 +154,12 @@ async fn get_start_end_block(
     reorg_safe_distance: Option<ReorgSafeDistance>,
     backfill_downtime: bool,
 ) -> Result<(U64, U64, U64), StartIndexingError> {
-    let latest_block = provider.get_block_number().await?;
+    // Share the live poller's head snapshot: a fresh block-number read can get
+    // ahead of a cached header when block_poll_frequency is long.
+    let latest_block = provider.get_latest_block().await?.ok_or_else(|| {
+        ProviderError::CustomError(format!("Latest block not found for network {network}"))
+    })?;
+    let latest_block = U64::from(latest_block.header.number);
 
     if let Some(start_block) = manifest_start_block {
         if start_block > latest_block {
@@ -215,8 +229,8 @@ async fn get_start_end_block(
 async fn start_indexing_traces(
     manifest: &Manifest,
     project_path: &Path,
-    postgres: Option<Arc<PostgresClient>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    #[cfg(feature = "postgres")] postgres: Option<Arc<PostgresClient>>,
+    #[cfg(feature = "clickhouse")] clickhouse: Option<Arc<ClickhouseClient>>,
     indexer: &Indexer,
     trace_registry: Arc<TraceCallbackRegistry>,
     cancel_token: CancellationToken,
@@ -271,7 +285,9 @@ async fn start_indexing_traces(
 
         let sync_config = SyncConfig {
             project_path,
+            #[cfg(feature = "postgres")]
             postgres: &postgres,
+            #[cfg(feature = "clickhouse")]
             clickhouse: &clickhouse,
             csv_details: &manifest.storage.csv,
             contract_csv_enabled: manifest.contract_csv_enabled(&first_event.contract_name),
@@ -312,6 +328,7 @@ async fn start_indexing_traces(
             event_name: "TraceEvents".to_string(),
             network: network_name.clone(),
             progress: progress.clone(),
+            #[cfg(feature = "postgres")]
             postgres: postgres.clone(),
             csv_details: None,
             registry: network_registry,
@@ -330,9 +347,11 @@ async fn start_indexing_traces(
             indexing_distance_from_head,
             network_name.clone(),
             cancel_token.clone(),
+            #[cfg(feature = "postgres")]
             postgres.clone(),
             first_event.indexer_name.clone(),
             reorg_coordinator,
+            #[cfg(feature = "clickhouse")]
             clickhouse.clone(),
             trace_registry.clone(),
         ));
@@ -466,25 +485,160 @@ fn collect_streams_clients_for_network(
     out
 }
 
+fn collect_source_column_types(
+    inputs: &[ABIInput],
+    prefix: Option<&str>,
+    source_column_types: &mut HashMap<String, ColumnType>,
+) {
+    for input in inputs {
+        let name = camel_to_snake(&input.name);
+        let column = match prefix {
+            Some(prefix) => format!("{}_{}", prefix, name),
+            None => name,
+        };
+
+        if let Some(components) = &input.components {
+            if input.type_.starts_with("tuple[") {
+                collect_jsonb_tuple_element_types(components, &column, source_column_types);
+            } else {
+                collect_source_column_types(components, Some(&column), source_column_types);
+            }
+            continue;
+        }
+
+        if let Some(column_type) = ColumnType::from_solidity_type(&input.type_) {
+            source_column_types.insert(column, column_type);
+        }
+    }
+}
+
+fn collect_jsonb_tuple_element_types(
+    components: &[ABIInput],
+    prefix: &str,
+    source_column_types: &mut HashMap<String, ColumnType>,
+) {
+    for component in components {
+        // JSONB tuple objects retain ABI component names verbatim.
+        let field = format!("{}.{}", prefix, component.name);
+        if let Some(nested) = &component.components {
+            collect_jsonb_tuple_element_types(nested, &field, source_column_types);
+        } else if let Some(column_type) = ColumnType::from_solidity_type(&component.type_) {
+            source_column_types.insert(field, column_type);
+        }
+    }
+}
+
+/// Resolve the manifest contract behind a registry event's contract name.
+///
+/// Chain-wide `filter:` contracts are renamed with a `Filter` suffix when the event
+/// registry is built (`identify_and_modify_filter`), and a filter contract that declares
+/// `tables:` is renamed once more before that by `resolve_table_column_types`, so the
+/// registry may know a contract as `FPMMFilter` or `FPMMFilterFilter` while the manifest
+/// copies returned by `all_contracts()` carry the name with fewer suffixes. Match the exact
+/// name first; otherwise compare filter contracts with every trailing `Filter` removed on
+/// both sides, and refuse an ambiguous match rather than guess.
+fn find_manifest_contract(
+    manifest: &Manifest,
+    contract_name: &str,
+) -> anyhow::Result<Option<crate::manifest::contract::Contract>> {
+    let contracts = manifest.all_contracts();
+    if let Some(contract) = contracts.iter().find(|contract| contract.name == contract_name) {
+        return Ok(Some(contract.clone()));
+    }
+    let wanted = strip_filter_suffixes(contract_name);
+    let candidates: Vec<&crate::manifest::contract::Contract> = contracts
+        .iter()
+        .filter(|contract| contract.is_filter() && strip_filter_suffixes(&contract.name) == wanted)
+        .collect();
+    anyhow::ensure!(
+        candidates.len() <= 1,
+        "ambiguous filter contract for '{}': {:?}",
+        contract_name,
+        candidates.iter().map(|c| c.name.as_str()).collect::<Vec<_>>()
+    );
+    Ok(candidates.first().map(|contract| (*contract).clone()))
+}
+
+/// `FPMMFilterFilter` -> `FPMM`; names without the suffix are returned unchanged.
+pub(crate) fn strip_filter_suffixes(name: &str) -> &str {
+    let mut stripped = name;
+    while let Some(base) = stripped.strip_suffix("Filter") {
+        if base.is_empty() {
+            break;
+        }
+        stripped = base;
+    }
+    stripped
+}
+
+fn event_source_column_types(
+    manifest: &Manifest,
+    project_path: &Path,
+    contract_name: &str,
+    event_name: &str,
+) -> anyhow::Result<HashMap<String, ColumnType>> {
+    let abi_items: Vec<ABIItem> = if contract_name == NATIVE_TRANSFER_CONTRACT_NAME {
+        serde_json::from_str(NATIVE_TRANSFER_ABI)?
+    } else {
+        let contract = find_manifest_contract(manifest, contract_name)?
+            .ok_or_else(|| anyhow::anyhow!("contract '{}' not found in manifest", contract_name))?;
+        ABIItem::read_abi_items(project_path, &contract)?
+    };
+    let event =
+        abi_items.iter().find(|item| item.type_ == "event" && item.name == event_name).ok_or_else(
+            || anyhow::anyhow!("event '{}::{}' not found in ABI", contract_name, event_name),
+        )?;
+
+    let mut source_column_types = HashMap::new();
+    collect_source_column_types(&event.inputs, None, &mut source_column_types);
+    for (field, column) in [
+        ("rindexer_block_number", "block_number"),
+        ("rindexer_block_timestamp", "block_timestamp"),
+        ("rindexer_tx_hash", "tx_hash"),
+        ("rindexer_block_hash", "block_hash"),
+        ("rindexer_contract_address", "contract_address"),
+        ("rindexer_log_index", "log_index"),
+        ("rindexer_tx_index", "tx_index"),
+    ] {
+        if let Some(column_type) = ColumnType::from_tx_metadata_field(field) {
+            source_column_types.insert(column.to_string(), column_type);
+        }
+    }
+    Ok(source_column_types)
+}
+
 /// Build derived-table rollback + journal entries for an event's tables and merge
-/// them into `accumulator` keyed by `network`. Shared between contract events and
-/// native-transfer trace events so both sources contribute to reorg rollback.
+/// them into the per-network maps. Shared between contract events and native-transfer
+/// trace events so both sources contribute to reorg rollback.
+// Keep the two output maps explicit instead of wrapping them in a behaviorless type.
+#[allow(clippy::too_many_arguments)]
 fn build_derived_tables_for_event(
     event_name: &str,
     indexer_name: &str,
     contract_name: &str,
     network: &str,
+    source_column_types: &HashMap<String, ColumnType>,
     tables: &[crate::indexer::tables::TableRuntime],
-    accumulator: &mut HashMap<String, Vec<DerivedTableInfo>>,
+    derived_tables: &mut HashMap<String, Vec<DerivedTableInfo>>,
+    rollback_plans: &mut HashMap<String, DerivedTableRollbackPlan>,
 ) -> anyhow::Result<()> {
     let schema = generate_indexer_contract_schema_name(indexer_name, contract_name);
     let event_table_full = format!("{}.{}", schema, camel_to_snake(event_name));
 
     for tr in tables.iter() {
-        let derived = accumulator.entry(network.to_string()).or_default();
+        let derived = derived_tables.entry(network.to_string()).or_default();
+        let derived_column_types = tr
+            .table
+            .columns
+            .iter()
+            .filter_map(|column| {
+                column.column_type.clone().map(|column_type| (column.name.clone(), column_type))
+            })
+            .collect::<HashMap<_, _>>();
 
         let event_table_name = event_table_full.clone();
         let mut rollback_ops: Vec<DerivedTableRollbackOp> = Vec::new();
+        let mut rollback_metadata = Vec::new();
         let mut journal_columns: Vec<DerivedColumnJournal> = Vec::new();
 
         for table_event in &tr.table.events {
@@ -504,24 +658,31 @@ fn build_derived_tables_for_event(
                     .where_clause
                     .iter()
                     .filter_map(|(col, val)| {
-                        val.strip_prefix('$').map(|field| (col.clone(), camel_to_snake(field)))
+                        val.strip_prefix('$').map(|field| (col.clone(), field.to_string()))
                     })
                     .collect();
                 where_columns.sort_by(|a, b| a.0.cmp(&b.0));
 
-                let where_col_names: Vec<String> =
-                    where_columns.iter().map(|(col, _)| col.clone()).collect();
+                let mut where_col_names =
+                    operation.where_clause.keys().cloned().collect::<Vec<_>>();
+                where_col_names.sort();
 
                 let columns: Vec<DerivedColumnRollback> = operation
                     .set
                     .iter()
                     .filter(|set_col| {
-                        set_col.action.reverse().is_some() && set_col.event_field_name().is_some()
+                        set_col.action.reverse().is_some()
+                            && (set_col.action.is_counter_action()
+                                || set_col.event_field_name().is_some())
                     })
                     .map(|set_col| {
+                        let event_field = set_col
+                            .event_field_name()
+                            .unwrap_or("rindexer_block_number")
+                            .to_string();
                         DerivedColumnRollback::try_new(
                             set_col.column.clone(),
-                            camel_to_snake(set_col.event_field_name().unwrap()),
+                            event_field,
                             set_col.action.clone(),
                         )
                     })
@@ -542,25 +703,38 @@ fn build_derived_tables_for_event(
                 }
 
                 if !columns.is_empty() {
+                    anyhow::ensure!(
+                        where_columns.len() == operation.where_clause.len(),
+                        "reorg rollback for {} requires every WHERE value to be a single event-field reference",
+                        tr.full_table_name,
+                    );
                     rollback_ops.push(DerivedTableRollbackOp::try_new(
                         event_table_name.clone(),
                         where_columns,
                         columns,
                         operation.condition().map(String::from),
                     )?);
+                    rollback_metadata.push((
+                        table_event.iterate.clone(),
+                        source_column_types.clone(),
+                        derived_column_types.clone(),
+                    ));
                 }
             }
         }
 
         // Merge into existing entry or create a new one
-        if let Some(existing) = derived.iter_mut().find(|d| d.full_table_name == tr.full_table_name)
+        let operation_offset = if let Some(existing) =
+            derived.iter_mut().find(|d| d.full_table_name == tr.full_table_name)
         {
+            let operation_offset = existing.rollback_ops.len();
             existing.rollback_ops.extend(rollback_ops);
             for jc in journal_columns {
                 if !existing.journal_columns.iter().any(|e| e.derived_column == jc.derived_column) {
                     existing.journal_columns.push(jc);
                 }
             }
+            operation_offset
         } else {
             derived.push(DerivedTableInfo::try_new(
                 tr.full_table_name.clone(),
@@ -568,6 +742,20 @@ fn build_derived_tables_for_event(
                 rollback_ops,
                 journal_columns,
             )?);
+            0
+        };
+
+        let rollback_plan = rollback_plans.entry(network.to_string()).or_default();
+        for (operation_index, (iterate, source_types, derived_types)) in
+            rollback_metadata.into_iter().enumerate()
+        {
+            rollback_plan.try_add_operation(
+                tr.full_table_name.clone(),
+                operation_offset + operation_index,
+                iterate,
+                source_types,
+                derived_types,
+            )?;
         }
     }
 
@@ -578,8 +766,8 @@ fn build_derived_tables_for_event(
 async fn start_indexing_contract_events(
     manifest: &Manifest,
     project_path: &Path,
-    postgres: Option<Arc<PostgresClient>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    #[cfg(feature = "postgres")] postgres: Option<Arc<PostgresClient>>,
+    #[cfg(feature = "clickhouse")] clickhouse: Option<Arc<ClickhouseClient>>,
     indexer: &Indexer,
     registry: Arc<EventCallbackRegistry>,
     trace_registry: Arc<TraceCallbackRegistry>,
@@ -619,7 +807,9 @@ async fn start_indexing_contract_events(
             let event = event.clone();
             let network_contract = network_contract.clone();
             let project_path = project_path.to_path_buf();
+            #[cfg(feature = "postgres")]
             let postgres = postgres.clone();
+            #[cfg(feature = "clickhouse")]
             let clickhouse = clickhouse.clone();
             let manifest_csv_details = manifest.storage.csv.clone();
             let registry = Arc::clone(&registry);
@@ -629,7 +819,9 @@ async fn start_indexing_contract_events(
             block_tasks.push(async move {
                 let config = SyncConfig {
                     project_path: &project_path,
+                    #[cfg(feature = "postgres")]
                     postgres: &postgres,
+                    #[cfg(feature = "clickhouse")]
                     clickhouse: &clickhouse,
                     csv_details: &manifest_csv_details,
                     contract_csv_enabled: manifest.contract_csv_enabled(&event.contract.name),
@@ -663,8 +855,6 @@ async fn start_indexing_contract_events(
                         stream_details,
                         blocks,
                         project_path,
-                        postgres,
-                        clickhouse,
                         manifest_csv_details,
                         registry,
                         progress,
@@ -694,7 +884,18 @@ async fn start_indexing_contract_events(
     // Build per-network event tables and derived tables for reorg rollback.
     let mut network_event_tables: HashMap<String, Vec<EventTableInfo>> = HashMap::new();
     let mut network_derived_tables: HashMap<String, Vec<DerivedTableInfo>> = HashMap::new();
+    let mut network_rollback_plans: HashMap<String, DerivedTableRollbackPlan> = HashMap::new();
     for event in registry.events.iter() {
+        let source_column_types = if event.tables.is_empty() {
+            HashMap::new()
+        } else {
+            event_source_column_types(
+                manifest,
+                project_path,
+                &event.contract.name,
+                &event.event_name,
+            )?
+        };
         for network_contract in event.contract.details.iter() {
             let schema =
                 generate_indexer_contract_schema_name(&event.indexer_name, &event.contract.name);
@@ -716,8 +917,10 @@ async fn start_indexing_contract_events(
                 &event.indexer_name,
                 &event.contract.name,
                 &network_contract.network,
+                &source_column_types,
                 &event.tables,
                 &mut network_derived_tables,
+                &mut network_rollback_plans,
             )?;
         }
     }
@@ -750,22 +953,38 @@ async fn start_indexing_contract_events(
         // Mirror the contract-events pass for native-transfer derived tables: every
         // trace event contributes rollback ops for each configured network.
         for trace_event in trace_registry.events.iter() {
+            let source_column_types = if trace_event.tables.is_empty() {
+                HashMap::new()
+            } else {
+                event_source_column_types(
+                    manifest,
+                    project_path,
+                    &trace_event.contract_name,
+                    &trace_event.event_name,
+                )?
+            };
             for network_detail in trace_event.trace_information.details.iter() {
                 build_derived_tables_for_event(
                     &trace_event.event_name,
                     &trace_event.indexer_name,
                     &trace_event.contract_name,
                     &network_detail.network,
+                    &source_column_types,
                     &trace_event.tables,
                     &mut network_derived_tables,
+                    &mut network_rollback_plans,
                 )?;
             }
         }
     }
 
     // Shared persistence per invocation (shared across all coordinators)
-    let reorg_persistence =
-        Arc::new(ReorgBlockHashPersistence::new(postgres.clone(), clickhouse.clone()));
+    let reorg_persistence = Arc::new(ReorgBlockHashPersistence::new(
+        #[cfg(feature = "postgres")]
+        postgres.clone(),
+        #[cfg(feature = "clickhouse")]
+        clickhouse.clone(),
+    ));
 
     // Build one ReorgCoordinator per network (shared across all events on that network).
     // The first non-blocking event on each network takes ownership; subsequent events get None.
@@ -813,6 +1032,8 @@ async fn start_indexing_contract_events(
         if let Some(provider) = provider {
             let derived_tables =
                 network_derived_tables.get(network_name).cloned().unwrap_or_default();
+            let rollback_plan =
+                network_rollback_plans.get(network_name).cloned().unwrap_or_default();
             let streams_clients =
                 collect_streams_clients_for_network(&registry, &trace_registry, network_name);
             register_network_reorg_distance_on_streams(
@@ -830,7 +1051,8 @@ async fn start_indexing_contract_events(
                 event_tables,
                 derived_tables,
                 streams_clients,
-            )?;
+            )?
+            .with_rollback_plan(rollback_plan);
 
             // Run startup validation
             match coordinator.validate_on_startup().await {
@@ -842,7 +1064,9 @@ async fn start_indexing_contract_events(
                         startup_task.detection_point.saturating_sub(startup_task.fork_point) + 1,
                     );
                     let reorg_ctx = ReorgContext {
+                        #[cfg(feature = "postgres")]
                         postgres: postgres.as_deref(),
+                        #[cfg(feature = "clickhouse")]
                         clickhouse: clickhouse.as_ref(),
                         registry: Some(&registry),
                         trace_registry: Some(&trace_registry),
@@ -881,8 +1105,6 @@ async fn start_indexing_contract_events(
             stream_details,
             (start_block, end_block, indexing_distance_from_head),
             project_path,
-            postgres,
-            clickhouse,
             manifest_csv_details,
             registry,
             progress,
@@ -890,6 +1112,10 @@ async fn start_indexing_contract_events(
             dependencies,
         ) = res?;
 
+        #[cfg(feature = "postgres")]
+        let postgres = postgres.clone();
+        #[cfg(feature = "clickhouse")]
+        let clickhouse = clickhouse.clone();
         processed_network_contracts.push(ProcessedNetworkContract {
             id: network_contract.id.clone(),
             processed_up_to: end_block,
@@ -938,7 +1164,9 @@ async fn start_indexing_contract_events(
                     end_block,
                     registry: Arc::clone(&registry),
                     progress: Arc::clone(&progress),
+                    #[cfg(feature = "clickhouse")]
                     clickhouse: clickhouse.clone(),
+                    #[cfg(feature = "postgres")]
                     postgres: postgres.clone(),
                     config: manifest.config.clone(),
                     csv_details: manifest_csv_details.clone(),
@@ -978,7 +1206,9 @@ async fn start_indexing_contract_events(
                 end_block,
                 registry: Arc::clone(&registry),
                 progress: Arc::clone(&progress),
+                #[cfg(feature = "postgres")]
                 postgres: postgres.clone(),
+                #[cfg(feature = "clickhouse")]
                 clickhouse: clickhouse.clone(),
                 csv_details: manifest_csv_details.clone(),
                 config: manifest.config.clone(),
@@ -1119,6 +1349,8 @@ async fn start_indexing_contract_events(
                 if let Some(provider) = provider {
                     let derived_tables =
                         network_derived_tables.get(network_name).cloned().unwrap_or_default();
+                    let rollback_plan =
+                        network_rollback_plans.get(network_name).cloned().unwrap_or_default();
                     let streams_clients = collect_streams_clients_for_network(
                         &registry,
                         &trace_registry,
@@ -1139,7 +1371,8 @@ async fn start_indexing_contract_events(
                         event_tables,
                         derived_tables,
                         streams_clients,
-                    )?;
+                    )?
+                    .with_rollback_plan(rollback_plan);
 
                     match coordinator.validate_on_startup().await {
                         Ok(Some(startup_task)) => {
@@ -1150,7 +1383,9 @@ async fn start_indexing_contract_events(
                                 startup_task.detection_point.saturating_sub(startup_task.fork_point) + 1,
                             );
                             let reorg_ctx = ReorgContext {
+                                #[cfg(feature = "postgres")]
                                 postgres: postgres.as_deref(),
+                                #[cfg(feature = "clickhouse")]
                                 clickhouse: clickhouse.as_ref(),
                                 registry: Some(&registry),
                                 trace_registry: Some(&trace_registry),
@@ -1274,7 +1509,9 @@ async fn start_indexing(
     cancel_token: CancellationToken,
     progress: Arc<IndexingEventsProgressState>,
 ) -> Result<Vec<ProcessedNetworkContract>, StartIndexingError> {
+    #[cfg(feature = "postgres")]
     let database = initialize_database(manifest).await?;
+    #[cfg(feature = "clickhouse")]
     let clickhouse = initialize_clickhouse(manifest).await?;
 
     // any events which are non-blocking and can be fired in parallel
@@ -1289,7 +1526,9 @@ async fn start_indexing(
     let contract_events_indexer = start_indexing_contract_events(
         manifest,
         project_path,
+        #[cfg(feature = "postgres")]
         database.clone(),
+        #[cfg(feature = "clickhouse")]
         clickhouse.clone(),
         &indexer,
         registry.clone(),
@@ -1325,7 +1564,9 @@ async fn start_indexing(
     let trace_indexer_handles = start_indexing_traces(
         manifest,
         project_path,
+        #[cfg(feature = "postgres")]
         database.clone(),
+        #[cfg(feature = "clickhouse")]
         clickhouse.clone(),
         &indexer,
         trace_registry.clone(),
@@ -1385,6 +1626,7 @@ async fn start_indexing(
     Ok(processed_network_contracts)
 }
 
+#[cfg(feature = "postgres")]
 pub async fn initialize_database(
     manifest: &Manifest,
 ) -> Result<Option<Arc<PostgresClient>>, StartIndexingError> {
@@ -1401,6 +1643,7 @@ pub async fn initialize_database(
     }
 }
 
+#[cfg(feature = "clickhouse")]
 pub async fn initialize_clickhouse(
     manifest: &Manifest,
 ) -> Result<Option<Arc<ClickhouseClient>>, StartIndexingError> {
@@ -1443,12 +1686,134 @@ mod tests {
     use crate::indexer::last_synced::SyncConfig;
     use crate::manifest::contract::ReorgSafeDistance;
     use crate::provider::mock::MockChainProvider;
+    use alloy::network::{AnyHeader, AnyRpcBlock, AnyRpcHeader};
+    use alloy::primitives::B256;
+    use alloy::rpc::types::{Block, BlockTransactions};
     use std::path::Path;
+
+    const FILTER_TABLES_MANIFEST: &str = r#"
+name: filter_tables
+project_type: no-code
+networks:
+  - name: polygon
+    chain_id: 137
+    rpc: https://polygon.rpc.example.com
+    reorg_handling:
+      enabled: true
+storage:
+  postgres:
+    enabled: true
+contracts:
+  - name: FPMM
+    details:
+      - network: polygon
+        start_block: "4023693"
+        end_block: "87106452"
+        filter:
+          - event_name: FPMMBuy
+    abi: ./abis/fpmm_v1.json
+    include_events:
+      - FPMMBuy
+  - name: Plain
+    details:
+      - network: polygon
+        address: "0x4d97dcd97ec945f40cf65f87097ace5ea0476045"
+        start_block: "4023686"
+    abi: ./abis/conditional_tokens_v1.json
+"#;
+
+    fn filter_tables_manifest() -> Manifest {
+        serde_yaml::from_str(FILTER_TABLES_MANIFEST).expect("test manifest parses")
+    }
+
+    #[test]
+    fn find_manifest_contract_matches_exact_names() {
+        let manifest = filter_tables_manifest();
+        assert_eq!(
+            find_manifest_contract(&manifest, "Plain").unwrap().map(|c| c.name),
+            Some("Plain".to_string())
+        );
+        assert_eq!(
+            find_manifest_contract(&manifest, "FPMM").unwrap().map(|c| c.name),
+            Some("FPMM".to_string())
+        );
+        assert!(find_manifest_contract(&manifest, "Missing").unwrap().is_none());
+    }
+
+    #[test]
+    fn find_manifest_contract_matches_filter_registry_name() {
+        // A filter contract without tables is renamed once when the event registry is
+        // built: the registry knows it as `FPMMFilter` while the manifest still says `FPMM`.
+        let manifest = filter_tables_manifest();
+        let found = find_manifest_contract(&manifest, "FPMMFilter")
+            .unwrap()
+            .expect("filter contract resolves");
+        assert_eq!(found.name, "FPMM");
+        assert!(
+            find_manifest_contract(&manifest, "PlainFilter").unwrap().is_none(),
+            "plain contracts never match a filter-derived name"
+        );
+    }
+
+    #[test]
+    fn find_manifest_contract_matches_twice_renamed_name_against_unrenamed_manifest() {
+        // The manifest handed to the reorg setup may still carry the original name while
+        // the registry already carries two suffixes.
+        let manifest = filter_tables_manifest();
+        let found =
+            find_manifest_contract(&manifest, "FPMMFilterFilter").unwrap().expect("resolves");
+        assert_eq!(found.name, "FPMM");
+        assert!(find_manifest_contract(&manifest, "PlainFilterFilter").unwrap().is_none());
+    }
+
+    #[test]
+    fn find_manifest_contract_refuses_ambiguous_filter_names() {
+        // `Foo` and `FooFilter` as two filter contracts both strip to `Foo`; guessing could
+        // pick the wrong ABI, so the resolver must error instead.
+        let mut manifest = filter_tables_manifest();
+        let mut twin = manifest.contracts[0].clone();
+        twin.name = "FPMMFilter".to_string();
+        manifest.contracts.push(twin);
+        let err = find_manifest_contract(&manifest, "FPMMFilterFilter").unwrap_err();
+        assert!(err.to_string().contains("ambiguous filter contract"), "{err}");
+        // exact matches still win over the fallback
+        assert_eq!(
+            find_manifest_contract(&manifest, "FPMMFilter").unwrap().map(|c| c.name),
+            Some("FPMMFilter".to_string())
+        );
+    }
+
+    #[test]
+    fn strip_filter_suffixes_removes_every_trailing_suffix() {
+        assert_eq!(strip_filter_suffixes("FPMMFilterFilter"), "FPMM");
+        assert_eq!(strip_filter_suffixes("FPMMFilter"), "FPMM");
+        assert_eq!(strip_filter_suffixes("FPMM"), "FPMM");
+        assert_eq!(strip_filter_suffixes("Filter"), "Filter");
+        assert_eq!(strip_filter_suffixes("FilterFilter"), "Filter");
+    }
+
+    #[test]
+    fn find_manifest_contract_matches_twice_renamed_filter_with_tables() {
+        // A filter contract WITH tables is renamed by resolve_table_column_types before the
+        // registry renames it again: manifest `FPMMFilter`, registry `FPMMFilterFilter`
+        // (the production schema polymarket_indexer_fpmm_filter_filter is that name).
+        let mut manifest = filter_tables_manifest();
+        assert!(manifest.contracts[0].identify_and_modify_filter());
+        assert_eq!(manifest.contracts[0].name, "FPMMFilter");
+        let found = find_manifest_contract(&manifest, "FPMMFilterFilter")
+            .unwrap()
+            .expect("twice-renamed filter contract resolves");
+        assert_eq!(found.name, "FPMMFilter");
+        // the fallback only applies to filter contracts
+        assert!(find_manifest_contract(&manifest, "PlainFilterFilter").unwrap().is_none());
+    }
 
     fn empty_sync_config() -> SyncConfig<'static> {
         SyncConfig {
             project_path: Path::new("/tmp/test"),
+            #[cfg(feature = "postgres")]
             postgres: &None,
+            #[cfg(feature = "clickhouse")]
             clickhouse: &None,
             csv_details: &None,
             stream_details: &None,
@@ -1519,9 +1884,62 @@ mod tests {
         assert!(end < U64::from(10000));
     }
 
+    fn provider_at_block(number: u64) -> MockChainProvider {
+        let block = AnyRpcBlock::new(
+            Block::new(
+                AnyRpcHeader::from_sealed(
+                    AnyHeader { number, ..Default::default() }.seal(B256::ZERO),
+                ),
+                BlockTransactions::Full(vec![]),
+            )
+            .into(),
+        );
+        MockChainProvider::new(1).with_block_number(number).with_blocks(vec![block])
+    }
+
+    #[tokio::test]
+    async fn historical_target_uses_live_head_snapshot() {
+        // A long block_poll_frequency can leave the cached header behind a fresh
+        // eth_blockNumber response. Startup must use the same snapshot as live polling.
+        let provider = provider_at_block(28_488_976).with_block_number(28_488_978);
+        let (_, end, _) = get_start_end_block(
+            &provider,
+            Some(U64::from(28_488_000)),
+            None,
+            empty_sync_config(),
+            "Test",
+            "ethereum",
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+        let live_head = provider.get_latest_block().await.unwrap().unwrap();
+        assert_eq!(end, U64::from(live_head.header.number));
+        assert_eq!(end, U64::from(28_488_976));
+    }
+
+    #[tokio::test]
+    async fn missing_latest_block_returns_error() {
+        let result = get_start_end_block(
+            &MockChainProvider::new(1).with_block_number(100),
+            None,
+            None,
+            empty_sync_config(),
+            "Test",
+            "ethereum",
+            None,
+            false,
+        )
+        .await;
+
+        assert!(matches!(result, Err(StartIndexingError::GetBlockNumberError(_))));
+    }
+
     #[tokio::test]
     async fn start_block_higher_than_latest_errors() {
-        let mock = MockChainProvider::new(1).with_block_number(100);
+        let mock = provider_at_block(100);
         let result = get_start_end_block(
             &mock,
             Some(U64::from(200)), // start > latest
@@ -1542,7 +1960,7 @@ mod tests {
 
     #[tokio::test]
     async fn end_block_higher_than_latest_errors() {
-        let mock = MockChainProvider::new(1).with_block_number(100);
+        let mock = provider_at_block(100);
         let result = get_start_end_block(
             &mock,
             Some(U64::from(50)),
@@ -1563,7 +1981,7 @@ mod tests {
 
     #[tokio::test]
     async fn normal_range_returns_start_and_end() {
-        let mock = MockChainProvider::new(1).with_block_number(1000);
+        let mock = provider_at_block(1000);
         let (start, end, distance) = get_start_end_block(
             &mock,
             Some(U64::from(100)),
@@ -1584,7 +2002,7 @@ mod tests {
 
     #[tokio::test]
     async fn end_block_clamped_to_latest() {
-        let mock = MockChainProvider::new(1).with_block_number(1000);
+        let mock = provider_at_block(1000);
         let (_, end, _) = get_start_end_block(
             &mock,
             Some(U64::from(100)),
@@ -1603,7 +2021,7 @@ mod tests {
 
     #[tokio::test]
     async fn reorg_safe_distance_applied() {
-        let mock = MockChainProvider::new(1).with_block_number(1000);
+        let mock = provider_at_block(1000);
         let (start, end, distance) = get_start_end_block(
             &mock,
             Some(U64::from(100)),
@@ -1624,7 +2042,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_start_block_defaults_to_latest() {
-        let mock = MockChainProvider::new(1).with_block_number(500);
+        let mock = provider_at_block(500);
         let (start, end, _) = get_start_end_block(
             &mock,
             None, // no manifest start → defaults to latest
@@ -1697,7 +2115,7 @@ mod tests {
 
     #[tokio::test]
     async fn start_block_equals_end_block_single_block_range() {
-        let mock = MockChainProvider::new(1).with_block_number(1000);
+        let mock = provider_at_block(1000);
         let (start, end, distance) = get_start_end_block(
             &mock,
             Some(U64::from(500)),
@@ -1718,7 +2136,7 @@ mod tests {
 
     #[tokio::test]
     async fn start_block_zero_genesis() {
-        let mock = MockChainProvider::new(1).with_block_number(1000);
+        let mock = provider_at_block(1000);
         let (start, end, _) = get_start_end_block(
             &mock,
             Some(U64::ZERO),
@@ -1739,7 +2157,7 @@ mod tests {
     #[tokio::test]
     async fn very_large_block_numbers() {
         let large = 18_000_000u64;
-        let mock = MockChainProvider::new(1).with_block_number(large);
+        let mock = provider_at_block(large);
         let (start, end, distance) = get_start_end_block(
             &mock,
             Some(U64::from(17_000_000u64)),
@@ -1762,7 +2180,7 @@ mod tests {
     async fn reorg_safe_distance_larger_than_range_clamps_to_zero() {
         // latest=100, distance=200 → safe_block = saturating_sub → 0
         // end (100) > safe_block (0) so end is clamped to 0
-        let mock = MockChainProvider::new(1).with_block_number(100);
+        let mock = provider_at_block(100);
         let (start, end, distance) = get_start_end_block(
             &mock,
             Some(U64::from(10)),
@@ -1960,6 +2378,38 @@ mod tests {
     // source table.
 
     #[test]
+    fn collect_source_column_types_flattens_tuples_and_preserves_arrays() {
+        let inputs: Vec<ABIInput> = serde_json::from_value(serde_json::json!([
+            {"name": "ids", "type": "uint256[]"},
+            {
+                "name": "data",
+                "type": "tuple",
+                "components": [{"name": "amount", "type": "uint256"}]
+            },
+            {
+                "name": "accounts",
+                "type": "tuple[]",
+                "components": [{"name": "owner", "type": "address"}]
+            },
+            {
+                "name": "fixedAccounts",
+                "type": "tuple[2]",
+                "components": [{"name": "tokenAmount", "type": "uint256"}]
+            }
+        ]))
+        .expect("valid ABI inputs");
+        let mut source_column_types = HashMap::new();
+        collect_source_column_types(&inputs, None, &mut source_column_types);
+
+        assert_eq!(source_column_types["ids"], ColumnType::Array(Box::new(ColumnType::Uint256)));
+        assert_eq!(source_column_types["data_amount"], ColumnType::Uint256);
+        assert_eq!(source_column_types["accounts.owner"], ColumnType::Address);
+        assert_eq!(source_column_types["fixed_accounts.tokenAmount"], ColumnType::Uint256);
+        assert!(!source_column_types.contains_key("accounts"));
+        assert!(!source_column_types.contains_key("fixed_accounts"));
+    }
+
+    #[test]
     fn build_derived_tables_for_native_transfer_populates_accumulator() {
         use crate::indexer::tables::TableRuntime;
         use crate::manifest::contract::{
@@ -1976,13 +2426,13 @@ mod tests {
             columns: vec![
                 TableColumn {
                     name: "account".to_string(),
-                    column_type: None,
+                    column_type: Some(ColumnType::Address),
                     nullable: false,
                     default: None,
                 },
                 TableColumn {
                     name: "total_sent".to_string(),
-                    column_type: None,
+                    column_type: Some(ColumnType::Uint256),
                     nullable: false,
                     default: None,
                 },
@@ -2013,15 +2463,22 @@ mod tests {
 
         let runtime = TableRuntime::new(table, "test_indexer", NATIVE_TRANSFER_CONTRACT_NAME);
         let tables = vec![runtime];
+        let source_column_types = HashMap::from([
+            ("from".to_string(), ColumnType::Address),
+            ("value".to_string(), ColumnType::Uint256),
+        ]);
 
         let mut accumulator: HashMap<String, Vec<DerivedTableInfo>> = HashMap::new();
+        let mut rollback_plans = HashMap::new();
         build_derived_tables_for_event(
             "NativeTransfer",
             "test_indexer",
             NATIVE_TRANSFER_CONTRACT_NAME,
             "anvil",
+            &source_column_types,
             &tables,
             &mut accumulator,
+            &mut rollback_plans,
         )
         .expect("build_derived_tables_for_event should succeed");
 
@@ -2047,5 +2504,182 @@ mod tests {
             op.event_table,
         );
         assert!(entry.journal_columns.is_empty(), "no non-reversible columns in this fixture");
+    }
+
+    #[test]
+    fn build_derived_tables_preserves_transfer_batch_iteration() {
+        use crate::indexer::tables::TableRuntime;
+        use crate::manifest::contract::Table;
+
+        let table: Table = serde_yaml::from_str(
+            r#"
+name: custody_balances
+columns:
+  - name: user
+    type: address
+  - name: token_id
+    type: uint256
+  - name: balance
+    type: uint256
+events:
+  - event: TransferBatch
+    iterate:
+      - "$ids as token_id"
+      - "$values as amount"
+    operations:
+      - type: upsert
+        where:
+          user: $to
+          token_id: $token_id
+        if: "$to != 0x0000000000000000000000000000000000000000"
+        set:
+          - column: balance
+            action: add
+            value: $amount
+"#,
+        )
+        .expect("TransferBatch table YAML should parse");
+
+        let runtime = TableRuntime::new(table, "test_indexer", "ConditionalTokens");
+        let mut accumulator = HashMap::new();
+        let mut rollback_plans = HashMap::new();
+        let source_column_types = HashMap::from([
+            ("to".to_string(), ColumnType::Address),
+            ("ids".to_string(), ColumnType::Array(Box::new(ColumnType::Uint256))),
+            ("values".to_string(), ColumnType::Array(Box::new(ColumnType::Uint256))),
+        ]);
+        build_derived_tables_for_event(
+            "TransferBatch",
+            "test_indexer",
+            "ConditionalTokens",
+            "polygon",
+            &source_column_types,
+            &[runtime],
+            &mut accumulator,
+            &mut rollback_plans,
+        )
+        .expect("TransferBatch rollback metadata should compile");
+
+        let rollback = &accumulator["polygon"][0].rollback_ops[0];
+        assert_eq!(rollback.where_columns[0].1, "token_id");
+        assert_eq!(rollback.columns[0].event_column, "amount");
+        let rollback_metadata = rollback_plans["polygon"]
+            .operation(&accumulator["polygon"][0].full_table_name, 0)
+            .expect("iterate rollback metadata should be registered");
+        assert_eq!(rollback_metadata.iterate.len(), 2);
+        assert_eq!(rollback_metadata.iterate[0].array_field, "ids");
+        assert_eq!(rollback_metadata.iterate[0].alias, "token_id");
+        assert_eq!(rollback_metadata.iterate[1].array_field, "values");
+        assert_eq!(rollback_metadata.iterate[1].alias, "amount");
+        assert_eq!(rollback_metadata.source_column_types["token_id"], ColumnType::Uint256);
+        assert_eq!(rollback_metadata.source_column_types["amount"], ColumnType::Uint256);
+        assert_eq!(rollback_metadata.derived_column_types["token_id"], ColumnType::Uint256);
+        assert_eq!(rollback_metadata.derived_column_types["balance"], ColumnType::Uint256);
+    }
+
+    #[test]
+    fn build_derived_tables_preserves_operand_accessors() {
+        use crate::indexer::tables::TableRuntime;
+        use crate::manifest::contract::Table;
+
+        let table: Table = serde_yaml::from_str(
+            r#"
+name: indexed_balances
+columns:
+  - name: account
+    type: address
+  - name: token_id
+    type: uint256
+  - name: balance
+    type: uint256
+events:
+  - event: ComplexTransfer
+    operations:
+      - type: upsert
+        where:
+          account: $data.owner
+          token_id: $ids[0]
+        set:
+          - column: balance
+            action: add
+            value: $values[0]
+"#,
+        )
+        .expect("accessor table YAML should parse");
+
+        let runtime = TableRuntime::new(table, "test_indexer", "ComplexTokens");
+        let source_column_types = HashMap::from([
+            ("data_owner".to_string(), ColumnType::Address),
+            ("ids".to_string(), ColumnType::Array(Box::new(ColumnType::Uint256))),
+            ("values".to_string(), ColumnType::Array(Box::new(ColumnType::Uint256))),
+        ]);
+        let mut accumulator = HashMap::new();
+        let mut rollback_plans = HashMap::new();
+
+        build_derived_tables_for_event(
+            "ComplexTransfer",
+            "test_indexer",
+            "ComplexTokens",
+            "polygon",
+            &source_column_types,
+            &[runtime],
+            &mut accumulator,
+            &mut rollback_plans,
+        )
+        .expect("accessor rollback metadata should compile");
+
+        let rollback = &accumulator["polygon"][0].rollback_ops[0];
+        assert_eq!(
+            rollback.where_columns,
+            vec![
+                ("account".to_string(), "data.owner".to_string()),
+                ("token_id".to_string(), "ids[0]".to_string()),
+            ]
+        );
+        assert_eq!(rollback.columns[0].event_column, "values[0]");
+    }
+
+    #[test]
+    fn build_derived_tables_includes_global_counter_operations() {
+        use crate::indexer::tables::TableRuntime;
+        use crate::manifest::contract::Table;
+
+        let table: Table = serde_yaml::from_str(
+            r#"
+name: transfer_count
+global: true
+columns:
+  - name: count
+    type: uint256
+events:
+  - event: Transfer
+    operations:
+      - type: upsert
+        set:
+          - column: count
+            action: increment
+"#,
+        )
+        .expect("global counter table YAML should parse");
+
+        let runtime = TableRuntime::new(table, "test_indexer", "Token");
+        let mut accumulator = HashMap::new();
+        let mut rollback_plans = HashMap::new();
+        build_derived_tables_for_event(
+            "Transfer",
+            "test_indexer",
+            "Token",
+            "polygon",
+            &HashMap::new(),
+            &[runtime],
+            &mut accumulator,
+            &mut rollback_plans,
+        )
+        .expect("global counter rollback metadata should compile");
+
+        let rollback = &accumulator["polygon"][0].rollback_ops[0];
+        assert!(rollback.where_columns.is_empty());
+        assert_eq!(rollback.columns.len(), 1);
+        assert_eq!(rollback.columns[0].action, crate::manifest::contract::SetAction::Increment);
     }
 }

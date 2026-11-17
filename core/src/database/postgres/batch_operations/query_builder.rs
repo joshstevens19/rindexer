@@ -201,7 +201,8 @@ pub fn build_delete_body(formatted_table_name: &str) -> String {
 /// # Arguments
 /// * `formatted_table_name` - The fully qualified table name
 /// * `all_columns` - All columns to insert/update
-/// * `conflict_columns` - Columns for ON CONFLICT detection (primary key)
+/// * `conflict_columns` - Columns for ON CONFLICT detection (primary key). The
+///   INSERT's SELECT is ordered by them so concurrent upserts lock rows in one order.
 /// * `update_clauses` - SET clauses for the update
 /// * `sequence_col` - Optional sequence column for ordering (adds WHERE EXCLUDED.seq > table.seq)
 /// * `custom_where` - Optional custom WHERE condition (e.g., for @table references)
@@ -240,6 +241,17 @@ pub fn build_upsert_body(
     );
 
     if !conflict_columns.is_empty() {
+        // Deterministic conflict-key ordering: concurrent statements touching
+        // overlapping keys take their row locks in the same order, so two
+        // writers of one table cannot deadlock ABBA-style. `to_process` is
+        // already one row per key, so this cannot change which duplicate wins.
+        let order_cols = conflict_columns
+            .iter()
+            .map(|col| format!("tp.{}", quote_identifier(col)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        query.push_str(&format!("\nORDER BY {}", order_cols));
+
         let conflict_cols_str =
             conflict_columns.iter().map(|col| quote_identifier(col)).collect::<Vec<_>>().join(", ");
 
@@ -631,5 +643,33 @@ mod tests {
 
         assert!(body.contains("SELECT tp.holder, tp.name, tp.seq"), "{body}");
         assert!(body.contains("WHERE EXCLUDED.seq > COALESCE(t.seq, 0)"), "{body}");
+    }
+
+    #[test]
+    fn upsert_body_orders_by_conflict_columns_before_on_conflict() {
+        // Reserved-word keys prove the ORDER BY reuses the conflict list's quoting.
+        let body = build_upsert_body(
+            "t",
+            &["user", "order", "balance"],
+            &["user", "order"],
+            vec!["balance = EXCLUDED.balance".to_string()],
+            None,
+            None,
+            &[],
+        );
+
+        let order_by =
+            body.find("\nORDER BY tp.\"user\", tp.\"order\"\n").expect("ORDER BY on conflict keys");
+        let on_conflict = body.find("ON CONFLICT (\"user\", \"order\")").expect("ON CONFLICT");
+        assert!(order_by < on_conflict, "ORDER BY must precede ON CONFLICT: {body}");
+        assert_eq!(body.matches("ORDER BY").count(), 1, "{body}");
+    }
+
+    #[test]
+    fn upsert_body_without_conflict_columns_has_no_order_by() {
+        let body = build_upsert_body("t", &["holder", "name"], &[], vec![], None, None, &[]);
+
+        assert!(!body.contains("ORDER BY"), "{body}");
+        assert!(body.ends_with("\nON CONFLICT DO NOTHING"), "{body}");
     }
 }

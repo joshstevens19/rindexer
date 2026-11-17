@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 pub mod cron_scheduler;
 mod dependency;
 pub mod tables;
+#[cfg(test)]
+mod tables_atomic_tests;
 pub use dependency::ContractEventDependenciesMapFromRelationshipsError;
 mod fetch_logs;
 pub use fetch_logs::FetchLogsResult;
@@ -17,6 +19,7 @@ pub mod no_code;
 pub mod reorg;
 pub mod start;
 pub mod task_tracker;
+pub mod tip_logs;
 
 pub use dependency::{ContractEventDependencies, EventDependencies, EventsDependencyTree};
 

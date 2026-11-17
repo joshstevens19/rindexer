@@ -79,8 +79,11 @@ rindexer_rpc_request_duration_seconds_count{method="eth_getLogs",network="mainne
 | `rindexer_db_operations_total` | Counter | `operation`, `status` | Total database operations |
 | `rindexer_db_operation_duration_seconds` | Histogram | `operation` | Database operation latency |
 | `rindexer_db_pool_connections` | Gauge | `database`, `state` | Connection pool size (active/idle) |
+| `rindexer_atomic_batches_total` | Counter | `status`, `reason` | Atomic no-code batches (custom-table operations, journal, raw rows and cursor in one transaction) by outcome |
 
 **Operation types:** `query`, `insert`, `update`, `delete`, `batch_insert`, `batch_execute`
+
+**Atomic batch labels:** `status` is `committed` or `rolled_back`; `reason` is `ok` on commit and otherwise `deadlock`, `cursor_missing` or `error`. A `rolled_back` batch is harmless (nothing was written and the batch is retried), so alert on the rate of `reason="deadlock"` rather than on rollbacks as such. Recorded only on the Postgres-only custom-tables path (see [Delivery Semantics](/docs/start-building/tables#delivery-semantics)).
 
 **Histogram buckets:** 1ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s
 
@@ -99,6 +102,26 @@ rindexer_rpc_request_duration_seconds_count{method="eth_getLogs",network="mainne
 |--------|------|--------|-------------|
 | `rindexer_reorgs_detected_total` | Counter | `network` | Chain reorganizations detected |
 | `rindexer_reorg_depth` | Gauge | `network` | Depth of last detected reorg |
+
+### Shared Tip Logs Metrics
+
+Live indexing reads each new tip block once per network with an unfiltered `eth_getLogs` and serves every stream from that answer (see [`shared_tip_logs`](/docs/start-building/yaml-config/networks#shared_tip_logs)). `rindexer_rpc_requests_total{method="eth_getLogs"}` keeps counting both the shared and the per-stream calls.
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `rindexer_shared_tip_logs_requests_total` | Counter | `network`, `status` | Unfiltered calls issued by the fetcher: `success`, `error` or `timeout` |
+| `rindexer_shared_tip_logs_blocks_total` | Counter | `network`, `outcome` | Terminal state per scheduled block: `ready`, `empty_bloom_zero` (zero header bloom, no call), `empty_unverified` (bloom checks disabled, empty answer accepted), `gave_up` (still empty after the retry budget), `error`, `hash_mismatch` or `invalidated` (dropped by a reorg signal while pending) |
+| `rindexer_shared_tip_logs_empty_retries_total` | Counter | `network` | Retries issued because a block with a non-zero logs bloom answered empty |
+| `rindexer_shared_tip_logs_recovered_total` | Counter | `network` | Blocks that became `ready` on a retry after an empty answer |
+| `rindexer_shared_tip_logs_served_total` | Counter | `network`, `mode` | Stream windows served from the cache: `window`, `tip` or `prefix_rpc_plus_tip` |
+| `rindexer_shared_tip_logs_fallbacks_total` | Counter | `network`, `reason` | Stream windows that used their own `eth_getLogs`: `gave_up`, `error`, `hash_mismatch`, `wait_timeout` or `not_scheduled` |
+| `rindexer_shared_tip_logs_fetch_seconds` | Histogram | `network` | Seconds from the first observation of a head block to its terminal state |
+| `rindexer_shared_tip_logs_cache_blocks` | Gauge | `network` | Head blocks resident in the per-network cache (at most `cache_blocks`) |
+
+The `network` label of these series is the chain name, the same label `rindexer_rpc_requests_total` carries
+(`polygon` for chain id 137), so the two can be subtracted to count the per-stream tip calls that remain.
+
+**Histogram buckets:** 50ms, 100ms, 250ms, 500ms, 1s, 2s, 3s, 5s, 8s, 12s
 
 ### Build Info
 
@@ -182,6 +205,9 @@ histogram_quantile(0.95, rate(rindexer_db_operation_duration_seconds_bucket[5m])
 
 # Database error rate
 rate(rindexer_db_operations_total{status="error"}[5m])
+
+# Atomic batch deadlock rate (each one is a rolled back, retried batch)
+rate(rindexer_atomic_batches_total{reason="deadlock"}[5m])
 ```
 
 ### Stream Delivery

@@ -24,7 +24,7 @@ ClickHouse (no CSV)
 ## Getting started
 
 1. Copy `.env.example` to `.env` and configure your connection
-2. Run `docker-compose up -d` to start the ClickHouse instance in the `docker-compose.yml` file
+2. Run `docker compose up -d` to start the ClickHouse instance in the `docker-compose.yml` file
 3. Run `cargo run`. You can access the ClickHouse playground with your created data at http://localhost:8123. Run the lines individually in the Web SQL UI.
     ```SQL
     SHOW DATABASES;

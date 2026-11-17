@@ -1,40 +1,35 @@
-use alloy::primitives::{B256, U64};
-
-use futures::future::join_all;
-use futures::stream::FuturesUnordered;
-use futures::{poll, FutureExt, StreamExt};
-use std::{collections::HashMap, sync::Arc, time::Duration};
-use tokio::sync::Semaphore;
-use tokio::{
-    sync::Mutex,
-    task::{JoinError, JoinHandle},
-    time::Instant,
-};
-use tracing::{debug, error, info, warn};
-
-use crate::helpers::is_relevant_block;
-use crate::indexer::heartbeat::{HeartbeatAction, HeartbeatTracker};
-use crate::indexer::reorg::{
-    detect_and_handle_reorg, reorg_safe_distance_for_chain, ReorgContext, ReorgCoordinator,
-};
-use crate::metrics::indexing as metrics;
-use crate::provider::ChainProvider;
 use crate::{
     event::{
         callback_registry::{EventResult, TraceCallbackRegistry},
         config::EventProcessingConfig,
         BuildRindexerFilterError, RindexerEventFilter,
     },
+    helpers::is_relevant_block,
     indexer::{
         dependency::{ContractEventsDependenciesConfig, EventDependencies},
         fetch_logs::{fetch_logs_stream, EndpointSwitchWatcher, FetchLogsResult},
+        heartbeat::{HeartbeatAction, HeartbeatTracker},
         last_synced::update_progress_and_last_synced_task,
         progress::IndexingEventProgressStatus,
+        reorg::{
+            detect_and_handle_reorg, event_writer_barrier, reorg_safe_distance_for_chain,
+            ReorgContext, ReorgCoordinator,
+        },
         task_tracker::{indexing_event_processed, indexing_event_processing},
     },
     is_running,
-    provider::ProviderError,
+    metrics::indexing as metrics,
+    provider::{ChainProvider, ProviderError},
 };
+use alloy::primitives::{B256, U64};
+use futures::{future::join_all, poll, stream::FuturesUnordered, FutureExt, StreamExt};
+use std::{collections::HashMap, sync::Arc, time::Duration};
+use tokio::{
+    sync::{Mutex, Semaphore},
+    task::{JoinError, JoinHandle},
+    time::Instant,
+};
+use tracing::{debug, error, info, warn};
 
 #[derive(thiserror::Error, Debug)]
 pub enum ProcessEventError {
@@ -484,7 +479,7 @@ async fn live_indexing_for_contract_event_dependencies(
         );
     }
 
-    let mut heartbeat = HeartbeatTracker::new(Duration::from_secs(300));
+    let mut heartbeat = HeartbeatTracker::new(cached_provider.block_poll_frequency());
     let mut switch_watcher = EndpointSwitchWatcher::new(cached_provider.as_ref());
     let target_iteration_duration = Duration::from_millis(200);
     let callback_permits = Arc::new(Semaphore::new(1));
@@ -493,11 +488,16 @@ async fn live_indexing_for_contract_event_dependencies(
     let generation_cancel = events.first().map(|(config, _)| config.cancel_token().clone());
 
     let reorg_coordinator = reorg_coordinator;
+    let writer_barrier = event_writer_barrier(&network);
 
-    let (pg_client, ch_client, event_registry) = events
+    let (config, _) = events
         .first()
-        .map(|(config, _)| (config.postgres(), config.clickhouse(), config.registry()))
         .expect("live_indexing_for_contract_event_dependencies called with no events");
+    #[cfg(feature = "postgres")]
+    let pg_client = config.postgres();
+    #[cfg(feature = "clickhouse")]
+    let ch_client = config.clickhouse();
+    let event_registry = config.registry();
 
     loop {
         if !is_running() {
@@ -562,7 +562,9 @@ async fn live_indexing_for_contract_event_dependencies(
         if let Some(coordinator) = reorg_coordinator.as_ref() {
             let log_prefix = format!("{} - {}", network, IndexingEventProgressStatus::live_log());
             let reorg_ctx = ReorgContext {
+                #[cfg(feature = "postgres")]
                 postgres: pg_client.as_deref(),
+                #[cfg(feature = "clickhouse")]
                 clickhouse: ch_client.as_ref(),
                 registry: Some(&event_registry),
                 trace_registry: trace_registry.as_deref(),
@@ -620,10 +622,11 @@ async fn live_indexing_for_contract_event_dependencies(
             }
             HeartbeatAction::Stalled => {
                 warn!(
-                    "{} - {} - RPC tip has not advanced past block {} in the last 5 minutes",
+                    "{} - {} - RPC tip has not advanced past block {} in the last {} seconds",
                     network,
                     IndexingEventProgressStatus::live_log(),
-                    latest_block_number
+                    latest_block_number,
+                    heartbeat.stall_timeout().as_secs()
                 );
                 cached_provider.flag_active_endpoint_degraded(&format!(
                     "chain tip stalled at block {latest_block_number} for 5 minutes"
@@ -740,6 +743,7 @@ async fn live_indexing_for_contract_event_dependencies(
 
                 // No event task spawns on this skip path, but the checkpoint write below
                 // must still be tracked so graceful shutdown waits for it.
+                let _writer_guard = writer_barrier.read().await;
                 indexing_event_processing();
                 update_progress_and_last_synced_task(
                     Arc::clone(config),
@@ -952,6 +956,9 @@ async fn handle_logs_result(
                 return Ok(tokio::spawn(async {}));
             }
 
+            let writer_guard =
+                event_writer_barrier(&config.network_contract().network).read_owned().await;
+
             debug!("{} - Processing {} logs", config.info_log_name(), result.logs.len());
 
             let fn_data = result
@@ -969,12 +976,14 @@ async fn handle_logs_result(
 
             if let Ok(permit) = callback_permits.clone().acquire_owned().await {
                 let task = tokio::spawn(async move {
+                    let _writer_guard = writer_guard;
                     trigger_event(config, fn_data, result.to_block).await;
                     drop(permit)
                 });
 
                 Ok(task)
             } else {
+                let _writer_guard = writer_guard;
                 trigger_event(config, fn_data, result.to_block).await;
                 Ok(tokio::spawn(async {}))
             }

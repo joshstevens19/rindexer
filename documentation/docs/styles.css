@@ -1,0 +1,136 @@
+/*
+ * Mobile layout fixes for the Vocs docs site.
+ *
+ * 1. Landing hero. HomePage is a centered column (align-items: center), so the
+ *    install command's nowrap line sizes the code block to ~420px. Below 720px
+ *    the docs column clips overflow, which chops the command off both edges.
+ *    Keep the block in the column and wrap the line at spaces. The pre still
+ *    scrolls if a token is wider than the column.
+ *
+ * 2. Vocs sets overflow-x: hidden on the docs column only at max-width: 720px.
+ *    From 721px to 1080px the mobile drawer is still the sidebar, and a wide
+ *    code block, table, or 100vw bar can widen the page. Clip the layout (not
+ *    the portaled menu) and cap those elements so the document never scrolls
+ *    sideways.
+ *
+ * 3. The mobile sidebar / top-nav / outline menus are modal Radix popovers.
+ *    Opening one sets pointer-events: none on body. The popper wrapper inherits
+ *    that, is position: fixed, and is shifted with a transform; only the inner
+ *    dialog sets pointer-events: auto. Keep the dialog an explicit hit target
+ *    above the sticky header, and keep it inside the visual viewport so items
+ *    are not laid out past the screen.
+ */
+
+.vocs_DocsLayout {
+  max-width: 100%;
+  overflow-x: clip;
+}
+
+.vocs_DocsLayout_content,
+.vocs_Content {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.vocs_DocsLayout_gutterTop,
+.vocs_DocsLayout_gutterTopCurtain {
+  width: 100%;
+  max-width: 100%;
+}
+
+[data-layout='landing'] .vocs_HomePage {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+[data-layout='landing'] .vocs_CodeBlock,
+[data-layout='landing'] .vocs_Callout {
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+[data-layout='landing'] .vocs_CodeBlock {
+  width: max-content;
+}
+
+/* Vocs pulls code blocks and callouts out by the content padding below 720px.
+   That slides a max-content code block off the left edge. Keep it in the column. */
+@media (max-width: 720px) {
+  [data-layout='landing'] .vocs_CodeBlock {
+    align-self: stretch;
+    width: 100%;
+    margin-left: 0;
+    margin-right: 0;
+  }
+
+  [data-layout='landing'] .vocs_CodeBlock code {
+    display: block;
+    width: 100%;
+  }
+
+  [data-layout='landing'] .vocs_CodeBlock .line {
+    display: block;
+    min-width: 0;
+    white-space: pre-wrap;
+  }
+
+  [data-layout='landing'] .vocs_Callout {
+    max-width: calc(100% + 2rem);
+  }
+}
+
+[data-layout='landing'] .vocs_CodeBlock .vocs_Pre_wrapper,
+[data-layout='landing'] .vocs_CodeBlock pre {
+  max-width: 100%;
+  min-width: 0;
+}
+
+[data-layout='landing'] .vocs_CodeBlock pre {
+  overflow-x: auto;
+}
+
+[data-layout='landing'] .vocs_CodeBlock code {
+  min-width: 0;
+}
+
+.vocs_Content .vocs_CodeBlock,
+.vocs_Content .vocs_Pre_wrapper,
+.vocs_Content pre,
+.vocs_Content .vocs_Callout,
+.vocs_Content table {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.vocs_Content pre {
+  overflow-x: auto;
+}
+
+.vocs_Content table {
+  display: block;
+  overflow-x: auto;
+}
+
+[data-radix-popper-content-wrapper]:has(.vocs_MobileTopNav_sidebarPopover),
+[data-radix-popper-content-wrapper]:has(.vocs_MobileTopNav_topNavPopover),
+[data-radix-popper-content-wrapper]:has(.vocs_MobileTopNav_outlinePopover) {
+  /* The wrapper inherits pointer-events: none from the modal body lock.
+     Leave the wrapper itself transparent to hits; the dialog opts back in. */
+  pointer-events: none;
+  max-width: 100vw;
+  z-index: 100000;
+}
+
+.vocs_MobileTopNav_sidebarPopover,
+.vocs_MobileTopNav_topNavPopover,
+.vocs_MobileTopNav_outlinePopover {
+  pointer-events: auto;
+  position: relative;
+  z-index: 1;
+  max-width: min(300px, calc(100vw - 16px));
+  max-height: min(80vh, calc(100dvh - 6.5rem));
+  box-sizing: border-box;
+}

@@ -1,16 +1,3 @@
-use std::{
-    collections::HashSet,
-    env,
-    fs::File,
-    io::{Read, Write},
-    path::{Path, PathBuf},
-};
-
-use alloy::rpc::types::ValueOrArray;
-use regex::{Captures, Regex};
-use serde::{Deserialize, Serialize};
-use tracing::error;
-
 use crate::{
     abi::ABIItem,
     event::{parse_arithmetic_expression, parse_filter_expression},
@@ -21,6 +8,17 @@ use crate::{
     },
     StringOrArray,
 };
+use alloy::rpc::types::ValueOrArray;
+use regex::{Captures, Regex};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashSet,
+    env,
+    fs::File,
+    io::{Read, Write},
+    path::{Path, PathBuf},
+};
+use tracing::error;
 
 pub const YAML_CONFIG_NAME: &str = "rindexer.yaml";
 
@@ -180,6 +178,9 @@ fn substitute_env_variables(contents: &str) -> Result<String, regex::Error> {
 
 #[derive(thiserror::Error, Debug)]
 pub enum ValidateManifestError {
+    #[error("{0}")]
+    MissingFeature(String),
+
     #[error("Contract names {0} must be unique")]
     ContractNameMustBeUnique(String),
 
@@ -267,6 +268,7 @@ fn validate_manifest(
     project_path: &Path,
     manifest: &Manifest,
 ) -> Result<(), ValidateManifestError> {
+    super::features::validate(manifest).map_err(ValidateManifestError::MissingFeature)?;
     let mut seen = HashSet::new();
     let duplicates_contract_names: Vec<String> = manifest
         .contracts
@@ -916,16 +918,32 @@ pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError>
             serde_yaml::from_str(&contents_before_transform)?;
 
         for network in &mut manifest_after_transform.networks {
-            let raw_rpc = manifest_networks_only
-                .networks
-                .iter()
-                .find(|n| n.name == network.name)
-                .map_or(&network.rpc, |n| &n.rpc);
+            let raw_network =
+                manifest_networks_only.networks.iter().find(|n| n.name == network.name);
+            let raw_rpc = raw_network.map_or(&network.rpc, |n| &n.rpc);
 
+            // Multi-url rpc stays a list. Each url is restored to its
+            // pre-substitution form so generated Rust does not embed secrets.
             network.rpc = RpcUrls::try_new(
                 raw_rpc.iter().map(|url| replace_env_variable_to_raw_name(url)).collect(),
             )
             .expect("rpc urls already validated as non-empty at deserialization");
+
+            // the hypersync url and api token follow the same rules as the rpc url so
+            // secrets are never embedded into generated code
+            if let Some(hypersync) = &mut network.hypersync {
+                let raw_hypersync = raw_network.and_then(|n| n.hypersync.as_ref());
+
+                hypersync.url = raw_hypersync
+                    .and_then(|h| h.url.as_ref())
+                    .or(hypersync.url.as_ref())
+                    .map(|url| replace_env_variable_to_raw_name(url));
+
+                hypersync.api_token = raw_hypersync
+                    .and_then(|h| h.api_token.as_ref())
+                    .or(hypersync.api_token.as_ref())
+                    .map(|token| replace_env_variable_to_raw_name(token));
+            }
         }
     }
 

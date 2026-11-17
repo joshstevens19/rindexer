@@ -29,6 +29,7 @@ use crate::database::batch_operations::{
     BatchOperationType, DynamicColumnDefinition,
 };
 use crate::database::postgres::client::PostgresClient;
+use crate::database::postgres::write_mode::PgWriteMode;
 use crate::{rindexer_error, EthereumSqlTypeWrapper};
 
 const NETWORK: &str = "ethereum";
@@ -93,7 +94,7 @@ async fn apply_transfer_batch(
         .collect();
     if !credits.is_empty() {
         execute_dynamic_batch_operation(
-            db,
+            PgWriteMode::Eager(db),
             table,
             BatchOperationType::Upsert,
             credits,
@@ -113,7 +114,7 @@ async fn apply_transfer_batch(
         .collect();
     if !debits.is_empty() {
         execute_dynamic_batch_operation(
-            db,
+            PgWriteMode::Eager(db),
             table,
             BatchOperationType::Upsert,
             debits,
@@ -244,7 +245,7 @@ async fn arithmetic_upsert_honors_nonzero_column_default() {
 
     // New row via subtract: 100 - 30 = 70
     execute_dynamic_batch_operation(
-        &db,
+        PgWriteMode::Eager(&db),
         "scores",
         BatchOperationType::Upsert,
         upsert("0xx", 30, 1, BatchOperationAction::Subtract),
@@ -255,7 +256,7 @@ async fn arithmetic_upsert_honors_nonzero_column_default() {
     .unwrap();
     // Existing row via add: 70 + 10 = 80
     execute_dynamic_batch_operation(
-        &db,
+        PgWriteMode::Eager(&db),
         "scores",
         BatchOperationType::Upsert,
         upsert("0xx", 10, 2, BatchOperationAction::Add),
@@ -266,7 +267,7 @@ async fn arithmetic_upsert_honors_nonzero_column_default() {
     .unwrap();
     // New row via add: 100 + 5 = 105
     execute_dynamic_batch_operation(
-        &db,
+        PgWriteMode::Eager(&db),
         "scores",
         BatchOperationType::Upsert,
         upsert("0xy", 5, 3, BatchOperationAction::Add),
@@ -336,7 +337,7 @@ async fn set_upsert_still_honors_sequence_guard() {
     // if the sequence guard blocks it — last-write-wins would leave "b".
     for (name, seq) in [("a", 10), ("c", 20), ("b", 5)] {
         execute_dynamic_batch_operation(
-            &db,
+            PgWriteMode::Eager(&db),
             "latest_names",
             BatchOperationType::Upsert,
             set_row(name, seq),
@@ -378,7 +379,7 @@ async fn custom_where_on_subtract_column_keeps_raw_delta_semantics() {
 
     // Seed the account with 50.
     execute_dynamic_batch_operation(
-        &db,
+        PgWriteMode::Eager(&db),
         "guarded_balances",
         BatchOperationType::Upsert,
         vec![balance_row("0xg1", 50, 1, BatchOperationAction::Add, Some("0"))],
@@ -390,7 +391,7 @@ async fn custom_where_on_subtract_column_keeps_raw_delta_semantics() {
 
     // Sufficient funds: 30 <= 50, debit applies: 50 - 30 = 20
     execute_dynamic_batch_operation(
-        &db,
+        PgWriteMode::Eager(&db),
         "guarded_balances",
         BatchOperationType::Upsert,
         vec![balance_row("0xg1", 30, 2, BatchOperationAction::Subtract, Some("0"))],
@@ -402,7 +403,7 @@ async fn custom_where_on_subtract_column_keeps_raw_delta_semantics() {
 
     // Insufficient funds: 100 <= 20 is false, debit must be skipped
     execute_dynamic_batch_operation(
-        &db,
+        PgWriteMode::Eager(&db),
         "guarded_balances",
         BatchOperationType::Upsert,
         vec![balance_row("0xg1", 100, 3, BatchOperationAction::Subtract, Some("0"))],
@@ -437,7 +438,7 @@ async fn custom_where_on_subtract_column_keeps_raw_delta_semantics() {
 
     // First touch via unguarded subtract: 25 - 5 = 20
     execute_dynamic_batch_operation(
-        &db,
+        PgWriteMode::Eager(&db),
         "guarded_scores",
         BatchOperationType::Upsert,
         vec![balance_row("0xg2", 5, 1, BatchOperationAction::Subtract, Some("25"))],
@@ -448,7 +449,7 @@ async fn custom_where_on_subtract_column_keeps_raw_delta_semantics() {
     .unwrap();
     // Guarded debit of 30: raw delta 30 <= 20 is false, must be skipped
     execute_dynamic_batch_operation(
-        &db,
+        PgWriteMode::Eager(&db),
         "guarded_scores",
         BatchOperationType::Upsert,
         vec![balance_row("0xg2", 30, 2, BatchOperationAction::Subtract, Some("25"))],
@@ -487,7 +488,7 @@ async fn max_upsert_keeps_greater_value() {
     // Max semantics — last-write-wins (Set) would leave 5.
     for (value, seq) in [(10u64, 1u128), (20, 2), (5, 3)] {
         execute_dynamic_batch_operation(
-            &db,
+            PgWriteMode::Eager(&db),
             "high_water",
             BatchOperationType::Upsert,
             vec![balance_row("0xw", value, seq, BatchOperationAction::Max, None)],

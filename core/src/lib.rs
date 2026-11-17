@@ -20,22 +20,22 @@ mod health;
 pub use health::{start_health_server, HealthServer, HealthServerState, HealthStatus};
 
 mod database;
-pub use database::{
-    clickhouse::{
-        client::ClickhouseClient,
-        schema_sync::{
-            apply_schema_change as apply_clickhouse_schema_change,
-            detect_schema_changes as detect_clickhouse_schema_changes,
-            SchemaChange as ClickhouseSchemaChange,
-        },
-        setup::setup_clickhouse,
+#[cfg(feature = "clickhouse")]
+pub use database::clickhouse::{
+    client::ClickhouseClient,
+    schema_sync::{
+        apply_schema_change as apply_clickhouse_schema_change,
+        detect_schema_changes as detect_clickhouse_schema_changes,
+        SchemaChange as ClickhouseSchemaChange,
     },
-    generate::drop_tables_for_indexer_sql,
-    postgres::{
-        client::{BulkCursorUpdate, PostgresClient, ToSql},
-        schema_sync::{apply_schema_change, detect_schema_changes, SchemaChange},
-        setup::setup_postgres,
-    },
+    setup::setup_clickhouse,
+};
+pub use database::generate::drop_tables_for_indexer_sql;
+#[cfg(feature = "postgres")]
+pub use database::postgres::{
+    client::{BulkCursorUpdate, PostgresClient, ToSql},
+    schema_sync::{apply_schema_change, detect_schema_changes, SchemaChange},
+    setup::setup_postgres,
 };
 
 mod simple_file_formatters;
@@ -59,9 +59,12 @@ pub mod notifications;
 pub use endpoint_failover::{
     subscribe_rpc_endpoint_events, EndpointHealthSnapshot, RpcEndpointEvent,
 };
-pub use indexer::reorg::ReorgEvent;
+pub use indexer::{reorg::ReorgEvent, tip_logs::SharedTipLogsSettings};
 pub use notifications::ChainStateNotification;
 pub mod blockclock;
+#[cfg(feature = "hypersync")]
+pub mod hypersync;
+#[cfg(feature = "phantom")]
 pub mod phantom;
 pub mod provider;
 mod start;
@@ -87,6 +90,7 @@ pub use start::{
     StartNoCodeDetails,
 };
 pub use tokio::main as rindexer_main;
+#[cfg(feature = "postgres")]
 pub use tokio_postgres::types::Type as PgType;
 pub use tracing::{error as rindexer_error, info as rindexer_info};
 pub use types::core::{LogParam, ParsedLog};

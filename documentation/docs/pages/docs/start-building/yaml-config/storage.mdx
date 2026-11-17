@@ -34,6 +34,23 @@ DATABASE_URL=postgresql://[user[:password]@][host][:port][/dbname]
 `sslmode=require` is supported as well just include it in the connection string. If you are using AWS RDS, you will need to include the RDS certificates in your connection configuration. You can find the necessary certificates in the [AWS RDS SSL documentation](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.SSL.html).
 :::
 
+### TLS connections
+
+PostgreSQL uses OpenSSL with certificate-chain and hostname verification and TLS 1.2 or later.
+Use `sslmode=require` to prevent plaintext fallback. Trusted CAs come from OpenSSL's
+system paths; set `SSL_CERT_FILE` to a PEM CA bundle or `SSL_CERT_DIR` to a hashed CA directory.
+An IP connection must match an IP SAN in the certificate. For a DNS-only certificate,
+use its DNS name as the host and `hostaddr` to select the server IP without DNS resolution:
+
+```bash
+DATABASE_URL=postgresql://USER:PASSWORD@INSTANCE_DNS_NAME/DATABASE?hostaddr=SERVER_IP&sslmode=require
+SSL_CERT_FILE=/path/to/server-ca-bundle.pem
+```
+
+For Cloud SQL shared-CA instances, use the instance's `dnsName` exactly as returned
+(including its trailing dot) and its CA bundle. No Cloud SQL proxy is required.
+`sslmode=disable` remains available for local PostgreSQL.
+
 ### enabled
 
 If postgres is enabled or not, if you do not wish to use postgres you can set this to false or remove postgres from the storage completely.

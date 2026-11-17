@@ -3,26 +3,42 @@ pub mod persistence;
 pub mod task;
 pub mod window;
 
+#[cfg(feature = "clickhouse")]
+use crate::database::clickhouse::client::ClickhouseClient;
+#[cfg(feature = "postgres")]
+use crate::database::postgres::client::PostgresClient;
+use crate::{
+    event::callback_registry::{EventCallbackRegistry, TraceCallbackRegistry},
+    indexer::fetch_logs::ReorgInfo,
+    metrics::indexing as metrics,
+    notifications::ChainStateNotification,
+};
 use alloy::primitives::{B256, U64};
 use anyhow::Context;
-use serde::Serialize;
-use std::sync::Arc;
-use tracing::{debug, warn};
-
-use crate::database::clickhouse::client::ClickhouseClient;
-use crate::database::postgres::client::PostgresClient;
-use crate::event::callback_registry::{EventCallbackRegistry, TraceCallbackRegistry};
-use crate::indexer::fetch_logs::ReorgInfo;
-use crate::metrics::indexing as metrics;
-use crate::notifications::ChainStateNotification;
-
 pub use coordinator::ReorgCoordinator;
 pub use persistence::ReorgBlockHashPersistence;
+use serde::Serialize;
+use std::{
+    collections::HashMap,
+    sync::{Arc, LazyLock, Mutex as StdMutex},
+};
 pub use task::{
     AffectedTable, DerivedColumnJournal, DerivedColumnRollback, DerivedTableInfo,
-    DerivedTableRollbackOp, EventTableInfo,
+    DerivedTableRollbackOp, DerivedTableRollbackPlan, EventTableInfo,
 };
+use tokio::sync::RwLock;
+use tracing::{debug, warn};
 pub use window::BlockChainWindow;
+
+static EVENT_WRITER_BARRIERS: LazyLock<StdMutex<HashMap<String, Arc<RwLock<()>>>>> =
+    LazyLock::new(|| StdMutex::new(HashMap::new()));
+
+/// One read/write barrier per network: event callbacks hold a read guard while
+/// writing, and reorg recovery holds the write guard from snapshot through rollback.
+pub(crate) fn event_writer_barrier(network: &str) -> Arc<RwLock<()>> {
+    let mut barriers = EVENT_WRITER_BARRIERS.lock().unwrap_or_else(|e| e.into_inner());
+    barriers.entry(network.to_string()).or_default().clone()
+}
 
 /// Validates that a string is safe to use as a SQL identifier (table name, column name, schema).
 /// Rejects anything that doesn't match `[a-zA-Z_][a-zA-Z0-9_]*`.
@@ -80,7 +96,9 @@ pub fn validate_sql_value(value: &str, kind: &str) -> anyhow::Result<()> {
 /// `ReorgCoordinator` itself so a single detection covers every pipeline on
 /// the network.
 pub struct ReorgContext<'a> {
+    #[cfg(feature = "postgres")]
     pub postgres: Option<&'a PostgresClient>,
+    #[cfg(feature = "clickhouse")]
     pub clickhouse: Option<&'a Arc<ClickhouseClient>>,
     pub registry: Option<&'a EventCallbackRegistry>,
     pub trace_registry: Option<&'a TraceCallbackRegistry>,

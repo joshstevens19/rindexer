@@ -69,6 +69,14 @@ impl AnvilInstance {
         Ok(())
     }
 
+    /// Set the interval-mining period in seconds; `0` stops the `--block-time` miner so blocks
+    /// are produced only by explicit `mine_block()` calls. `evm_setAutomine(false)` does not
+    /// stop interval mining, this does.
+    pub async fn set_interval_mining(&self, seconds: u64) -> Result<()> {
+        self.rpc_call("evm_setIntervalMining", serde_json::json!([seconds])).await?;
+        Ok(())
+    }
+
     async fn start_with_args(extra_args: &[&str], chain_id: u64) -> Result<Self> {
         let port = allocate_free_port()?;
         info!("Starting local Anvil instance on port {} (chain_id={})", port, chain_id);
@@ -259,9 +267,19 @@ impl AnvilInstance {
     /// Trigger a chain reorganization of the given depth.
     /// Uses Anvil's `anvil_reorg` RPC method — block hashes change for the
     /// last `depth` blocks, simulating a real chain reorg.
+    ///
+    /// Anvil 1.9 rebuilds the replaced blocks deterministically, so a replaced block with
+    /// unchanged contents keeps its hash and no reorg happens. A one-wei transfer from the
+    /// dev account into the first replaced block forces new hashes; it emits no logs, so no
+    /// indexed event changes.
     pub async fn trigger_reorg(&self, depth: u64) -> Result<()> {
         info!("Triggering anvil_reorg (depth={})", depth);
-        self.rpc_call("anvil_reorg", serde_json::json!([depth, []])).await?;
+        let fork_tx = serde_json::json!({
+            "from": ANVIL_DEPLOYER_ADDRESS,
+            "to": "0x000000000000000000000000000000000000dEaD",
+            "value": "0x1",
+        });
+        self.rpc_call("anvil_reorg", serde_json::json!([depth, [[fork_tx, 0]]])).await?;
         Ok(())
     }
 

@@ -1,6 +1,7 @@
 // Types are used by exported macros, not internally
 #![allow(dead_code)]
 use crate::EthereumSqlTypeWrapper;
+#[cfg(feature = "postgres")]
 use tokio_postgres::types::Type as PgType;
 
 /// The type of batch operation to perform.
@@ -64,6 +65,7 @@ impl BatchOperationSqlType {
     }
 
     /// Returns the ClickHouse type string representation.
+    #[cfg(feature = "clickhouse")]
     pub fn as_clickhouse_str(&self) -> &'static str {
         match self {
             BatchOperationSqlType::Bytea => "String",
@@ -91,6 +93,7 @@ impl BatchOperationSqlType {
     }
 
     /// Returns the PostgreSQL type for binary COPY operations.
+    #[cfg(feature = "postgres")]
     pub fn to_pg_type(self) -> PgType {
         match self {
             BatchOperationSqlType::Bytea => PgType::BYTEA,

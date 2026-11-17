@@ -1,11 +1,22 @@
+#[cfg(feature = "rabbitmq")]
+use lapin::ExchangeKind;
 use std::path::Path;
 
-use lapin::ExchangeKind;
+use crate::types::aws_config::AwsConfig;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 use tokio::fs;
 
-use crate::types::aws_config::AwsConfig;
+// Keep RabbitMQ configuration readable without linking its runtime client.
+#[cfg(not(feature = "rabbitmq"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExchangeKind {
+    Direct,
+    Fanout,
+    Headers,
+    Topic,
+    Custom(String),
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "lowercase")]

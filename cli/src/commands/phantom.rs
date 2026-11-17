@@ -550,6 +550,8 @@ async fn handle_phantom_deploy(
                         reth: None,
                         multicall3_address: None,
                         reorg_handling: None,
+                        hypersync: None,
+                        shared_tip_logs: None,
                     });
                 }
 

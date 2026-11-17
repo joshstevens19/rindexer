@@ -1,66 +1,78 @@
-use alloy::{
-    dyn_abi::DynSolValue,
-    json_abi::{Event, JsonAbi},
+#[cfg(feature = "postgres")]
+use super::tables::{apply_table_operations, prepare_table_operations, PreparedTableOps};
+use super::{
+    cron_scheduler::{manifest_has_cron_tables, CronScheduler},
+    native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME},
+    tables::{process_table_operations, ProgressCheckpointConfig, TableRuntime, TxMetadata},
 };
-use serde_json::Value;
-use std::collections::HashMap;
-use std::{
-    io,
-    path::{Path, PathBuf},
-    sync::Arc,
+#[cfg(feature = "clickhouse")]
+use crate::database::clickhouse::{
+    client::ClickhouseClient,
+    setup::{setup_clickhouse, SetupClickhouseError},
 };
-use tokio_postgres::types::Type as PgType;
-use tracing::{debug, error, info, warn};
-
-use super::cron_scheduler::{manifest_has_cron_tables, CronScheduler};
-use super::native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME};
-use super::tables::{process_table_operations, ProgressCheckpointConfig, TableRuntime, TxMetadata};
-use crate::database::clickhouse::client::ClickhouseClient;
-use crate::database::clickhouse::setup::{setup_clickhouse, SetupClickhouseError};
-use crate::database::generate::{
-    generate_event_table_full_name, generate_indexer_contract_schema_name,
-};
-use crate::database::postgres::client::BulkCursorUpdate;
-use crate::database::postgres::generate::generate_internal_event_table_name;
-use crate::database::sql_type_wrapper::{
-    map_ethereum_wrapper_to_json, map_log_params_to_ethereum_wrapper, EthereumSqlTypeWrapper,
-};
-use crate::manifest::contract::{Contract, Table};
-use crate::manifest::core::Constants;
-use crate::provider::ChainProvider;
 use crate::{
     abi::{ABIItem, CreateCsvFileForEvent, EventInfo, ParamTypeError, ReadAbiError},
     chat::ChatClients,
-    database::postgres::{
-        client::PostgresClient,
-        generate::generate_column_names_only_with_base_properties,
-        setup::{setup_postgres, SetupPostgresError},
+    database::{
+        generate::generate_event_table_full_name,
+        postgres::generate::generate_column_names_only_with_base_properties,
+        sql_type_wrapper::{
+            map_ethereum_wrapper_to_json, map_log_params_to_ethereum_wrapper,
+            EthereumSqlTypeWrapper,
+        },
     },
     event::{
         callback_registry::{
             noop_decoder, CallbackResult, EventCallbackRegistry, EventCallbackRegistryInformation,
             EventCallbackType, TraceCallbackRegistry, TraceCallbackRegistryInformation,
-            TraceCallbackType, TxInformation,
+            TraceCallbackType, TraceResult, TxInformation,
         },
         contract_setup::{ContractInformation, CreateContractInformationError, TraceInformation},
         EventMessage,
     },
     generate_random_id,
+    helpers::{map_log_params_to_raw_values, parse_log},
     manifest::{
-        contract::ParseAbiError,
-        core::Manifest,
+        contract::{Contract, ParseAbiError, Table},
+        core::{Constants, Manifest},
         yaml::{read_manifest, ReadManifestError},
     },
-    provider::{validate_manifest_network_rpc_urls, CreateNetworkProvider, RetryClientError},
+    provider::{
+        validate_manifest_network_rpc_urls, ChainProvider, CreateNetworkProvider, RetryClientError,
+    },
     setup_info_logger,
     streams::StreamsClients,
     types::core::LogParam,
     AsyncCsvAppender, FutureExt, IndexingDetails, StartDetails, StartNoCodeDetails,
 };
+#[cfg(feature = "postgres")]
 use crate::{
-    event::callback_registry::TraceResult,
-    helpers::{map_log_params_to_raw_values, parse_log},
+    database::{
+        generate::generate_indexer_contract_schema_name,
+        postgres::{
+            client::{pg_error_to_string, BulkCursorUpdate, CursorAdvance, PostgresClient},
+            generate::generate_internal_event_table_name,
+            setup::{setup_postgres, SetupPostgresError},
+            write_mode::PgWriteMode,
+        },
+    },
+    metrics::database as db_metrics,
+    system_state::is_running,
 };
+use alloy::{
+    dyn_abi::DynSolValue,
+    json_abi::{Event, JsonAbi},
+};
+use serde_json::Value;
+use std::{
+    collections::HashMap,
+    io,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+#[cfg(feature = "postgres")]
+use tokio_postgres::types::Type as PgType;
+use tracing::{debug, error, info, warn};
 
 #[derive(thiserror::Error, Debug)]
 pub enum SetupNoCodeError {
@@ -71,6 +83,7 @@ pub enum SetupNoCodeError {
     CouldNotReadManifest(#[from] ReadManifestError),
 
     #[error("Could not setup postgres: {0}")]
+    #[cfg(feature = "postgres")]
     SetupPostgresError(#[from] SetupPostgresError),
 
     #[error("{0}")]
@@ -80,6 +93,7 @@ pub enum SetupNoCodeError {
     ProcessIndexersError(#[from] ProcessIndexersError),
 
     #[error("Could not setup clickhouse: {0}")]
+    #[cfg(feature = "clickhouse")]
     SetupClickhouseError(#[from] SetupClickhouseError),
 
     #[error("You have graphql disabled as well as indexer so nothing can startup")]
@@ -174,6 +188,7 @@ fn resolve_tables_against_abi(
     Ok(())
 }
 
+#[allow(clippy::result_large_err, reason = "preserve existing error API")]
 pub async fn setup_no_code(
     details: StartNoCodeDetails<'_>,
 ) -> Result<StartDetails<'_>, SetupNoCodeError> {
@@ -201,12 +216,16 @@ pub async fn setup_no_code(
             // Resolve table column types from ABI before database setup
             resolve_table_column_types(project_path, &mut manifest)?;
 
+            #[cfg(feature = "postgres")]
             let mut postgres: Option<Arc<PostgresClient>> = None;
+            #[cfg(feature = "postgres")]
             if manifest.storage.postgres_enabled() {
                 postgres = Some(Arc::new(setup_postgres(project_path, &manifest).await?));
             }
 
+            #[cfg(feature = "clickhouse")]
             let mut clickhouse: Option<Arc<ClickhouseClient>> = None;
+            #[cfg(feature = "clickhouse")]
             if manifest.storage.clickhouse_enabled() {
                 clickhouse = Some(Arc::new(setup_clickhouse(project_path, &manifest).await?));
             }
@@ -237,7 +256,9 @@ pub async fn setup_no_code(
             let events = process_events(
                 project_path,
                 &manifest,
+                #[cfg(feature = "postgres")]
                 postgres.clone(),
+                #[cfg(feature = "clickhouse")]
                 clickhouse.clone(),
                 &network_providers,
             )
@@ -257,7 +278,9 @@ pub async fn setup_no_code(
             let trace_events = process_trace_events(
                 project_path,
                 &mut manifest,
+                #[cfg(feature = "postgres")]
                 postgres.clone(),
+                #[cfg(feature = "clickhouse")]
                 clickhouse.clone(),
                 &network_providers,
             )
@@ -290,7 +313,9 @@ pub async fn setup_no_code(
 
                 let scheduler = CronScheduler::new(
                     &manifest,
+                    #[cfg(feature = "postgres")]
                     postgres.clone(),
+                    #[cfg(feature = "clickhouse")]
                     clickhouse.clone(),
                     providers_map,
                 );
@@ -350,9 +375,11 @@ struct NoCodeCallbackParams {
     event: Event,
     index_event_in_order: bool,
     csv: Option<Arc<AsyncCsvAppender>>,
+    #[cfg(feature = "postgres")]
     postgres: Option<Arc<PostgresClient>>,
     sql_event_table_name: String,
     sql_column_names: Vec<String>,
+    #[cfg(feature = "clickhouse")]
     clickhouse: Option<Arc<ClickhouseClient>>,
     streams_clients: Arc<Option<StreamsClients>>,
     chat_clients: Arc<Option<ChatClients>>,
@@ -447,7 +474,17 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
             };
 
             let mut indexed_count = 0;
+            #[cfg(feature = "clickhouse")]
+            let has_clickhouse = params.clickhouse.is_some();
+            #[cfg(not(feature = "clickhouse"))]
+            let has_clickhouse = false;
+            let has_database = [
+                #[cfg(feature = "postgres")]
+                params.postgres.is_some(),
+                has_clickhouse,
+            ].into_iter().any(|enabled| enabled);
             let mut sql_bulk_data: Vec<Vec<EthereumSqlTypeWrapper>> = Vec::new();
+            #[cfg(feature = "postgres")]
             let mut sql_bulk_column_types: Vec<PgType> = Vec::new();
             let mut csv_bulk_data: Vec<Vec<String>> = Vec::new();
 
@@ -619,12 +656,13 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                 all_params.extend(end_global_parameters);
 
                 // Set column types dynamically based on first result
+                #[cfg(feature = "postgres")]
                 if sql_bulk_column_types.is_empty() {
                     sql_bulk_column_types =
                         all_params.iter().map(|param| param.to_type()).collect();
                 }
 
-                if params.postgres.is_some() || params.clickhouse.is_some() {
+                if has_database {
                     sql_bulk_data.push(all_params);
                 }
 
@@ -671,9 +709,10 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
             // the whole callback succeeds). The exactly-once contract additionally
             // requires a SINGLE writer process and effective callback concurrency 1
             // (the default; see trigger_event in process.rs).
+            #[cfg(feature = "postgres")]
             let atomic_pg_cursor = params.store_raw_events
                 && params.postgres.is_some()
-                && params.clickhouse.is_none()
+                && !has_clickhouse
                 && params.csv.is_none()
                 // streams/chat dispatch AFTER the storage write — with the
                 // cursor already committed, a crash in that window would skip
@@ -690,104 +729,234 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
 
             // ORDERING CONTRACT (two arms):
             //   ATOMIC arm (postgres sole raw sink, non-factory, serialized
-            //   commits): table operations FIRST — their shutdown checkpoint is
-            //   suppressed because it advances the SAME rindexer_internal row the
-            //   atomic commit owns (a SIGTERM mid-table-ops would otherwise skip
-            //   un-inserted raw rows on restart) — then the atomic
-            //   [batch + cursor] commit LAST: a crash anywhere earlier re-runs
-            //   the whole batch; a crash after it never re-fetches committed
-            //   raw rows.
-            //   Table operations commit their own transaction, which also
-            //   inserts rindexer_internal.table_op_claim. A crash before the
-            //   raw insert and cursor retries the log, the claim conflicts,
-            //   and the arithmetic is not applied again. The raw insert and
-            //   the cursor still commit together afterwards.
+            //   commits): table operations are PREPARED first (RPC prefetch,
+            //   iterate fan-out, value resolution; no database access), then
+            //   ONE shutdown check, then ONE Postgres transaction covers, in
+            //   order: the per-log claim, every custom-table statement, its
+            //   reorg journal row (under a savepoint, best-effort), the raw
+            //   event rows and the last_synced_block cursor. A retried log
+            //   whose claim is already committed is not applied again.
+            //   No checkpoint and no shutdown check sits inside the
+            //   transaction: once BEGIN happened the batch either commits
+            //   whole or rolls back whole. A failure anywhere before COMMIT
+            //   (crash, SIGTERM, deadlock, pool timeout, missing cursor row)
+            //   leaves nothing behind, so trigger_event's whole-batch retry
+            //   is exactly-once. Documented residual: a COMMIT whose
+            //   acknowledgement is lost on the wire (the server committed,
+            //   the client saw an error and retries) is at-least-once for
+            //   that window only, and the claim keeps the arithmetic from
+            //   applying twice.
             //   LEGACY arm (CH/CSV alongside PG, factory discovery events,
-            //   concurrency > 1, or no PG): the ORIGINAL ordering — raw sinks
-            //   first, table ops after — so a transient raw-sink failure retries
-            //   BEFORE table ops ran. Insert-type table ops are append-only (no
-            //   dedup) and arithmetic upserts are not idempotent, so re-running
-            //   them on every callback retry would duplicate/double-apply.
-            //   Cursor advance stays with the async task after the callback
-            //   succeeds (at-least-once, pre-existing semantics).
+            //   concurrency > 1, or no PG): the ORIGINAL ordering, raw sinks
+            //   first and table ops after, so a transient raw-sink failure
+            //   retries BEFORE table ops ran. Insert-type table ops are
+            //   append-only (no dedup) and arithmetic upserts are not
+            //   idempotent, so re-running them on every callback retry would
+            //   duplicate/double-apply. Cursor advance stays with the async
+            //   task after the callback succeeds (at-least-once, pre-existing
+            //   semantics).
             // Streams/chat run after either arm and deliberately never propagate
             // errors (see the stream error arm below).
             let run_table_ops = !params.tables.is_empty() && !table_events_data.is_empty();
 
-            if atomic_pg_cursor {
-                if run_table_ops {
-                    if let Err(e) = process_table_operations(
+            #[cfg(not(feature = "postgres"))]
+            let atomic_pg_cursor = false;
+            match atomic_pg_cursor {
+            #[cfg(feature = "postgres")]
+            true => {
+                // Prepare (RPC, fan-out, value resolution); nothing is written yet.
+                let prepared = if run_table_ops {
+                    match prepare_table_operations(
                         &params.tables,
                         &params.event_info.name,
                         &table_events_data,
-                        params.postgres.clone(),
-                        params.clickhouse.clone(),
                         params.providers.clone(),
                         &params.constants,
                         &params.multicall_addresses,
-                        None,
                     )
                     .await
                     {
-                        // Don't log as error if it's a graceful shutdown
-                        if e.contains("Shutdown") {
-                            info!(
-                                "{}::{} - Graceful shutdown during table processing",
-                                params.contract_name, params.event_info.name
-                            );
-                        } else {
+                        Ok(prepared) => prepared,
+                        Err(e) => {
+                            // Don't log as error if it's a graceful shutdown
+                            if e.contains("Shutdown") {
+                                info!(
+                                    "{}::{} - Graceful shutdown during table processing",
+                                    params.contract_name, params.event_info.name
+                                );
+                            } else {
+                                error!(
+                                    "{}::{} - Error processing table operations: {}",
+                                    params.contract_name, params.event_info.name, e
+                                );
+                            }
+                            return Err(e);
+                        }
+                    }
+                } else {
+                    PreparedTableOps { ops: Vec::new() }
+                };
+
+                let write_raw_rows = params.store_raw_events && !sql_bulk_data.is_empty();
+
+                if !prepared.ops.is_empty() || write_raw_rows {
+                    // The ONLY shutdown check after prepare; none after BEGIN.
+                    if !is_running() {
+                        return Err("Shutdown requested".to_string());
+                    }
+
+                    // Never expect()/unwrap() here: a panic skips
+                    // indexing_event_processed() and hangs shutdown.
+                    let Some(postgres) = params.postgres.as_ref() else {
+                        return Err("atomic arm requires a Postgres client".to_string());
+                    };
+
+                    let schema = generate_indexer_contract_schema_name(
+                        &params.indexer_name,
+                        &params.contract_name,
+                    );
+                    let cursor = BulkCursorUpdate {
+                        internal_table_name: generate_internal_event_table_name(
+                            &schema,
+                            &params.event_info.name,
+                        ),
+                        network: network.clone(),
+                        to_block: to_block.to(),
+                    };
+
+                    // `conn` is declared before `tx`: the transaction drops first
+                    // (enqueuing ROLLBACK) and only then does bb8 get the
+                    // connection back.
+                    let mut conn = postgres.raw_connection().await.map_err(|e| e.to_string())?;
+                    let tx = conn.transaction().await.map_err(|e| pg_error_to_string(&e))?;
+
+                    // The crash-test hook needs the table transaction committed
+                    // and the cursor not yet advanced. Production leaves the
+                    // env var unset and keeps table effects, raw rows and the
+                    // cursor in this one transaction.
+                    let pause_between_table_ops_and_cursor = !prepared.ops.is_empty()
+                        && std::env::var("RINDEXER_TEST_ONLY_PAUSE_AFTER_TABLE_OPS")
+                            .ok()
+                            .is_some_and(|path| !path.is_empty());
+                    if pause_between_table_ops_and_cursor {
+                        if let Err(e) = apply_table_operations(
+                            &prepared,
+                            Some(PgWriteMode::Tx(&tx)),
+                            #[cfg(feature = "clickhouse")]
+                            None,
+                            None,
+                        )
+                        .await
+                        {
+                            drop(tx);
+                            return Err(e);
+                        }
+                        tx.commit().await.map_err(|e| pg_error_to_string(&e))?;
+                        pause_after_table_ops().await?;
+                        if write_raw_rows {
+                            let mut cursor_conn =
+                                postgres.raw_connection().await.map_err(|e| e.to_string())?;
+                            let cursor_tx = cursor_conn
+                                .transaction()
+                                .await
+                                .map_err(|e| pg_error_to_string(&e))?;
+                            let advance = PostgresClient::insert_bulk_with_cursor_in(
+                                &cursor_tx,
+                                &params.sql_event_table_name,
+                                &params.sql_column_names,
+                                &sql_bulk_data,
+                                &cursor,
+                            )
+                            .await
+                            .map_err(|e| e.to_string())?;
+                            cursor_tx.commit().await.map_err(|e| pg_error_to_string(&e))?;
+                            let _ = advance;
+                        }
+                    } else {
+
+                    let staged: Result<Option<CursorAdvance>, String> = async {
+                        if let Err(e) = apply_table_operations(
+                            &prepared,
+                            #[cfg(feature = "postgres")]
+Some(PgWriteMode::Tx(&tx)),
+                            #[cfg(feature = "clickhouse")]
+                            None,
+                            None,
+                        )
+                        .await
+                        {
                             error!(
                                 "{}::{} - Error processing table operations: {}",
                                 params.contract_name, params.event_info.name, e
                             );
+                            return Err(e);
                         }
-                        return Err(e);
-                    }
-                    // Test hook: the arithmetic has committed and the cursor
-                    // has not. A crash here is the window the claim closes.
-                    pause_after_table_ops().await?;
-                }
 
-                if params.store_raw_events {
-                    if let Some(postgres) = &params.postgres {
-                        if !sql_bulk_data.is_empty() {
-                            // Atomic [batch + last-synced cursor] commit: closes the
-                            // double-index race (crash between batch insert and the
-                            // async cursor task re-fetched and re-inserted the logs).
-                            let schema = generate_indexer_contract_schema_name(
-                                &params.indexer_name,
-                                &params.contract_name,
-                            );
-                            let cursor = BulkCursorUpdate {
-                                internal_table_name: generate_internal_event_table_name(
-                                    &schema,
-                                    &params.event_info.name,
-                                ),
-                                network: network.clone(),
-                                to_block: to_block.to(),
-                            };
-                            if let Err(e) = postgres
-                                .insert_bulk_with_cursor(
-                                    &params.sql_event_table_name,
-                                    &params.sql_column_names,
-                                    &sql_bulk_data,
-                                    &cursor,
-                                )
-                                .await
-                            {
-                                error!(
-                                    "{}::{} - Error performing postgres bulk insert: {}",
-                                    params.contract_name, params.event_info.name, e
-                                );
-                                return Err(e.to_string());
-                            }
+                        if !write_raw_rows {
+                            return Ok(None);
                         }
+
+                        // Raw rows + last-synced cursor in the same transaction
+                        // as the table effects staged above.
+                        PostgresClient::insert_bulk_with_cursor_in(
+                            &tx,
+                            &params.sql_event_table_name,
+                            &params.sql_column_names,
+                            &sql_bulk_data,
+                            &cursor,
+                        )
+                        .await
+                        .map(Some)
+                        .map_err(|e| {
+                            error!(
+                                "{}::{} - Error performing postgres bulk insert: {}",
+                                params.contract_name, params.event_info.name, e
+                            );
+                            e
+                        })
+                    }
+                    .await;
+
+                    let (committed, advance) = match staged {
+                        Ok(advance) => {
+                            (tx.commit().await.map_err(|e| pg_error_to_string(&e)), advance)
+                        }
+                        Err(e) => {
+                            // Dropping an uncommitted transaction enqueues ROLLBACK.
+                            drop(tx);
+                            (Err(e), None)
+                        }
+                    };
+                    db_metrics::record_atomic_batch(&committed);
+                    committed?;
+
+                    match advance {
+                        Some(CursorAdvance::Advanced { updated_rows }) => debug!(
+                            "ATOMIC-CURSOR commit: {} rows={} cursor[{}]={} (updated={})",
+                            params.sql_event_table_name,
+                            sql_bulk_data.len(),
+                            cursor.internal_table_name,
+                            cursor.to_block,
+                            updated_rows
+                        ),
+                        Some(CursorAdvance::AlreadyAhead { current }) => debug!(
+                            "ATOMIC-CURSOR commit: {} rows={} cursor[{}] to_block={} not advanced (already at {} — concurrent live/historic loop ahead)",
+                            params.sql_event_table_name,
+                            sql_bulk_data.len(),
+                            cursor.internal_table_name,
+                            cursor.to_block,
+                            current
+                        ),
+                        None => {}
+                    }
                     }
                 }
-            } else {
+            }
+            _ => {
                 // LEGACY arm — original ordering + original semantics.
                 if params.store_raw_events {
-                    if let Some(postgres) = &params.postgres {
+                    #[cfg(feature = "postgres")]
+if let Some(postgres) = &params.postgres {
                         if !sql_bulk_data.is_empty() {
                             if let Err(e) = postgres
                                 .insert_bulk(
@@ -806,7 +975,8 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                         }
                     }
 
-                    if let Some(clickhouse) = &params.clickhouse {
+                    #[cfg(feature = "clickhouse")]
+if let Some(clickhouse) = &params.clickhouse {
                         if !sql_bulk_data.is_empty() {
                             if let Err(e) = clickhouse
                                 .insert_bulk(
@@ -840,14 +1010,17 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                         params.indexer_name.clone(),
                         params.contract_name.clone(),
                         params.event_info.name.clone(),
-                        params.postgres.clone(),
+                        #[cfg(feature = "postgres")]
+params.postgres.clone(),
                     );
                     if let Err(e) = process_table_operations(
                         &params.tables,
                         &params.event_info.name,
                         &table_events_data,
-                        params.postgres.clone(),
-                        params.clickhouse.clone(),
+                        #[cfg(feature = "postgres")]
+params.postgres.clone(),
+                        #[cfg(feature = "clickhouse")]
+params.clickhouse.clone(),
                         params.providers.clone(),
                         &params.constants,
                         &params.multicall_addresses,
@@ -870,6 +1043,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                         return Err(e);
                     }
                 }
+            }
             }
             // Build the cross-block chat payload first (one clone per event)
             // so the streams path can consume `event_message_data` into
@@ -1120,8 +1294,8 @@ async fn pause_after_table_ops() -> Result<(), String> {
 pub async fn process_events(
     project_path: &Path,
     manifest: &Manifest,
-    postgres: Option<Arc<PostgresClient>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    #[cfg(feature = "postgres")] postgres: Option<Arc<PostgresClient>>,
+    #[cfg(feature = "clickhouse")] clickhouse: Option<Arc<ClickhouseClient>>,
     network_providers: &[CreateNetworkProvider],
 ) -> Result<Vec<EventCallbackRegistryInformation>, ProcessIndexersError> {
     // Rust hosts (rflow) read the manifest straight off disk, where column
@@ -1138,7 +1312,9 @@ pub async fn process_events(
         let contract_events = process_contract(
             project_path,
             &manifest,
+            #[cfg(feature = "postgres")]
             postgres.clone(),
+            #[cfg(feature = "clickhouse")]
             clickhouse.clone(),
             network_providers,
             &mut contract,
@@ -1183,8 +1359,8 @@ fn tables_need_column_types(tables: &[crate::manifest::contract::Table]) -> bool
 async fn process_contract(
     project_path: &Path,
     manifest: &Manifest,
-    postgres: Option<Arc<PostgresClient>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    #[cfg(feature = "postgres")] postgres: Option<Arc<PostgresClient>>,
+    #[cfg(feature = "clickhouse")] clickhouse: Option<Arc<ClickhouseClient>>,
     network_providers: &[CreateNetworkProvider],
     contract: &mut Contract,
 ) -> Result<Vec<EventCallbackRegistryInformation>, ProcessIndexersError> {
@@ -1313,7 +1489,9 @@ async fn process_contract(
                 event: event.clone(),
                 index_event_in_order,
                 csv,
+                #[cfg(feature = "postgres")]
                 postgres: postgres.clone(),
+                #[cfg(feature = "clickhouse")]
                 clickhouse: clickhouse.clone(),
                 sql_event_table_name,
                 sql_column_names,
@@ -1345,8 +1523,8 @@ async fn process_contract(
 pub async fn process_trace_events(
     project_path: &Path,
     manifest: &mut Manifest,
-    postgres: Option<Arc<PostgresClient>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    #[cfg(feature = "postgres")] postgres: Option<Arc<PostgresClient>>,
+    #[cfg(feature = "clickhouse")] clickhouse: Option<Arc<ClickhouseClient>>,
     network_providers: &[CreateNetworkProvider],
 ) -> Result<Vec<TraceCallbackRegistryInformation>, ProcessIndexersError> {
     let mut events: Vec<TraceCallbackRegistryInformation> = vec![];
@@ -1463,7 +1641,9 @@ pub async fn process_trace_events(
             event: event.clone(),
             index_event_in_order: false,
             csv,
+            #[cfg(feature = "postgres")]
             postgres: postgres.clone(),
+            #[cfg(feature = "clickhouse")]
             clickhouse: clickhouse.clone(),
             sql_event_table_name,
             sql_column_names,

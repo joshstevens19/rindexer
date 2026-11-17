@@ -23,7 +23,12 @@ jobs:
   e2e:
     name: E2E Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # A fresh pull request branch restores no build cache (PR caches are not
+    # shared across PRs, and master never runs this workflow), and the cold
+    # release build of the reth-featured binary alone takes ~25 minutes — a
+    # 30-minute cap killed healthy test runs two minutes in. Warm runs finish
+    # in ~11 minutes; this bound is for the cold first run of a new PR.
+    timeout-minutes: 45
 
     services:
       postgres:
@@ -60,6 +65,21 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y libssl-dev pkg-config
+
+      # The container-backed tests docker-run these images lazily, so the first
+      # test needing one pays for the pull inside its own timeout — and Docker
+      # Hub throttles anonymous pulls from the runners' shared IPs, which has
+      # eaten a test's entire 180s budget before it logged a single line. Pull
+      # up front, with retries, where slowness is visible and costs nothing.
+      - name: Pre-pull Docker images
+        run: |
+          for image in postgres:16 clickhouse/clickhouse-server:24.8; do
+            for i in 1 2 3; do
+              docker pull "$image" && break
+              echo "pull $image attempt $i failed; retrying..." >&2
+              sleep $((i * 10))
+            done
+          done
 
       - name: Build rindexer binary
         run: cargo build --release -p rindexer_cli --features jemalloc,reth
