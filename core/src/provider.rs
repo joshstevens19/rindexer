@@ -51,8 +51,8 @@ use url::Url;
 use async_trait::async_trait;
 
 use crate::endpoint_failover::{
-    rpc_endpoint_event_sender, spawn_lag_prober, EndpointHealth, EndpointHealthSnapshot,
-    FailoverService, FailoverState, PROBE_INTERVAL,
+    redact_rpc_url, rpc_endpoint_event_sender, spawn_lag_prober, EndpointHealth,
+    EndpointHealthSnapshot, FailoverService, FailoverState, PROBE_INTERVAL,
 };
 use crate::helpers::chunk_hashset;
 use crate::indexer::reorg::reorg_safe_distance_for_chain;
@@ -1314,7 +1314,7 @@ pub async fn create_client(
         }
 
         let ipc = IpcConnect::new(primary_url.to_string());
-        let logging_layer = RpcLoggingLayer::new(chain_id, primary_url.to_string());
+        let logging_layer = RpcLoggingLayer::new(chain_id, redact_rpc_url(primary_url));
 
         let rpc_client =
             RpcClient::builder().layer(retry_layer).layer(logging_layer).ipc(ipc.clone()).await?;
@@ -1342,17 +1342,23 @@ pub async fn create_client(
             if rpc_url.ends_with(".ipc") {
                 warn!(
                     "network {} mixes an IPC url into its rpc fallbacks; ignoring {} - IPC endpoints are excluded from failover pools",
-                    network, rpc_url
+                    network,
+                    redact_rpc_url(rpc_url)
                 );
                 continue;
             }
 
             let parsed_url = Url::parse(rpc_url).map_err(|e| {
-                RetryClientError::ProviderCantBeCreated(rpc_url.to_string(), e.to_string())
+                RetryClientError::ProviderCantBeCreated(redact_rpc_url(rpc_url), e.to_string())
             })?;
 
             let health = Arc::new(EndpointHealth::new(rpc_url));
-            let transport = RpcLoggingLayer::new(chain_id, rpc_url.to_string())
+            // The logging layer must not see the raw url. Fallback endpoints
+            // are probed continuously, so a key in the path or query would
+            // otherwise land in slow-call and error logs even when the
+            // endpoint never serves indexing traffic. `with_health` also
+            // scrubs transport errors, which embed the request url.
+            let transport = RpcLoggingLayer::new(chain_id, health.redacted_url().to_string())
                 .with_health(Arc::clone(&health))
                 .layer(Http::with_client(client_with_auth.clone(), parsed_url));
 
@@ -1412,7 +1418,7 @@ pub async fn create_client(
 
     if real_rpc_chain_id != chain_id {
         return Err(RetryClientError::InvalidClientChainId(
-            primary_url.to_string(),
+            redact_rpc_url(primary_url),
             chain_id,
             real_rpc_chain_id,
         ));

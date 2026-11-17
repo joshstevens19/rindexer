@@ -230,6 +230,22 @@ impl EndpointHealth {
         self.chain_status.store(status, Ordering::Release);
     }
 
+    /// Record a successful chain-id check. A mismatch is sticky: a racing
+    /// probe that already excluded the endpoint must not be overwritten by
+    /// a success observed concurrently. Returns false when the endpoint is
+    /// excluded.
+    fn mark_chain_ok(&self) -> bool {
+        match self.chain_status.compare_exchange(
+            CHAIN_UNVERIFIED,
+            CHAIN_OK,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => true,
+            Err(current) => current == CHAIN_OK,
+        }
+    }
+
     pub(crate) fn record_tip(&self, tip: u64) {
         self.observed_tip.store(tip, Ordering::Release);
         self.has_observed_tip.store(true, Ordering::Release);
@@ -542,7 +558,14 @@ pub(crate) fn spawn_lag_prober(
                     )
                     .await
                     {
-                        Ok(Ok(Ok(()))) => health.set_chain_status(CHAIN_OK),
+                        Ok(Ok(Ok(()))) => {
+                            // A dispatch in flight may have already excluded
+                            // this endpoint. Don't resurrect it.
+                            if !health.mark_chain_ok() {
+                                tips.push(None);
+                                continue;
+                            }
+                        }
                         Ok(Ok(Err(actual))) => {
                             health.set_chain_status(CHAIN_MISMATCH);
                             health.set_healthy(false);
@@ -658,12 +681,23 @@ where
         for index in order {
             let health = &state.endpoints[index];
 
+            // `candidate_order` can include an endpoint that a concurrent
+            // probe (or an earlier attempt in this loop) has since excluded.
+            // Re-check immediately — the snapshot is not a permit to serve.
+            if health.chain_status() == CHAIN_MISMATCH {
+                continue;
+            }
+
             // Lazily verify the endpoint's chain id before its first use so a
             // wrong-chain endpoint never serves data and a down fallback
             // never blocks boot.
             if health.chain_status() == CHAIN_UNVERIFIED {
                 match verify_chain_id(&self.verifiers[index], state.chain_id).await {
-                    Ok(Ok(())) => health.set_chain_status(CHAIN_OK),
+                    Ok(Ok(())) => {
+                        if !health.mark_chain_ok() {
+                            continue;
+                        }
+                    }
                     Ok(Err(actual)) => {
                         health.set_chain_status(CHAIN_MISMATCH);
                         health.set_healthy(false);
@@ -702,8 +736,24 @@ where
                 }
             }
 
+            // The verify await (or a failing earlier candidate) is wide
+            // enough for a probe to exclude this endpoint. Check again
+            // immediately before the request is sent.
+            if health.chain_status() == CHAIN_MISMATCH {
+                continue;
+            }
+
             match self.transports[index].clone().oneshot(req.clone()).await {
                 Ok(response) => {
+                    if health.chain_status() == CHAIN_MISMATCH {
+                        // Excluded while this request was in flight. The
+                        // payload may be from the wrong chain — drop it.
+                        last_error = Some(TransportErrorKind::custom_str(&format!(
+                            "{} was excluded from the failover pool (wrong chain id) while the request was in flight",
+                            health.redacted_url
+                        )));
+                        continue;
+                    }
                     if index != active_at_start {
                         let reason = switch_reason
                             .unwrap_or_else(|| "active endpoint gated unhealthy".to_string());
@@ -867,13 +917,24 @@ pub(crate) mod test_support {
     /// A programmable mock endpoint transport. Answers `eth_chainId` and
     /// `eth_blockNumber` with configured values and any other method with a
     /// generic success payload; fails every call when `fail` is set.
-    #[derive(Debug, Clone)]
+    #[derive(Clone)]
     pub(crate) struct MockEndpoint {
         pub chain_id: Arc<AtomicU64>,
         pub block_number: Arc<AtomicU64>,
         pub fail: Arc<AtomicBool>,
         pub fail_error: Arc<std::sync::Mutex<String>>,
         pub calls: Arc<AtomicUsize>,
+        /// Invoked at the start of every call. Tests use it to flip shared
+        /// health state while a request is in flight.
+        on_call: Arc<OnCall>,
+    }
+
+    /// Test hook storage. Wrapped so the nested `Arc<dyn Fn>` does not trip
+    /// clippy's type-complexity lint on the mock struct.
+    #[derive(Clone, Default)]
+    struct OnCall {
+        #[allow(clippy::type_complexity)]
+        hook: Arc<std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
     }
 
     impl MockEndpoint {
@@ -884,9 +945,30 @@ pub(crate) mod test_support {
                 fail: Arc::new(AtomicBool::new(false)),
                 fail_error: Arc::new(std::sync::Mutex::new("mock endpoint down".to_string())),
                 calls: Arc::new(AtomicUsize::new(0)),
+                on_call: Arc::new(OnCall::default()),
             }
         }
 
+        pub(crate) fn set_on_call<F>(&self, hook: F)
+        where
+            F: Fn() + Send + Sync + 'static,
+        {
+            *self.on_call.hook.lock().expect("on_call mutex poisoned") = Some(Arc::new(hook));
+        }
+    }
+
+    impl std::fmt::Debug for MockEndpoint {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("MockEndpoint")
+                .field("chain_id", &self.chain_id.load(Ordering::SeqCst))
+                .field("block_number", &self.block_number.load(Ordering::SeqCst))
+                .field("fail", &self.fail.load(Ordering::SeqCst))
+                .field("calls", &self.calls.load(Ordering::SeqCst))
+                .finish()
+        }
+    }
+
+    impl MockEndpoint {
         pub(crate) fn set_fail_error(&self, message: &str) {
             *self.fail_error.lock().expect("fail_error mutex poisoned") = message.to_string();
         }
@@ -922,6 +1004,11 @@ pub(crate) mod test_support {
             self.calls.fetch_add(1, Ordering::SeqCst);
             let this = self.clone();
             Box::pin(async move {
+                if let Some(hook) =
+                    this.on_call.hook.lock().expect("on_call mutex poisoned").clone()
+                {
+                    hook();
+                }
                 if this.fail.load(Ordering::SeqCst) {
                     let message =
                         this.fail_error.lock().expect("fail_error mutex poisoned").clone();
@@ -1078,6 +1165,55 @@ mod tests {
 
         send_request(&service).await.expect("an unhealthy endpoint beats no endpoint at all");
         assert_eq!(state.endpoint_switches(), 0, "active endpoint answered, no switch");
+    }
+
+    #[tokio::test]
+    async fn mismatch_discovered_during_an_earlier_attempt_is_not_dispatched() {
+        // candidate_order() snapshots the fallback while it is still
+        // unverified. The primary's chain-id check then overlaps a probe
+        // that excludes the fallback. The data request must not fall through
+        // to that excluded endpoint.
+        let mocks = [MockEndpoint::new(1), MockEndpoint::new(1)];
+        mocks[0].fail.store(true, Ordering::SeqCst);
+        let (service, state, _events) = failover_over_mocks("ethereum", 1, &mocks);
+
+        let fallback = Arc::clone(&state.endpoints[1]);
+        mocks[0].set_on_call(move || {
+            fallback.set_chain_status(CHAIN_MISMATCH);
+            fallback.set_healthy(false);
+        });
+
+        let result = send_request(&service).await;
+        assert!(result.is_err(), "an excluded fallback must not serve the request, got {result:?}");
+        assert_eq!(
+            mocks[1].call_count(),
+            0,
+            "wrong-chain endpoint must not be dialled after a concurrent exclusion"
+        );
+    }
+
+    #[tokio::test]
+    async fn chain_ok_does_not_clobber_a_concurrent_mismatch() {
+        // eth_chainId answers with the expected id, but a concurrent probe
+        // has already recorded a mismatch. The success must not clear that
+        // exclusion, and the endpoint must not then serve the data request.
+        let mocks = [MockEndpoint::new(1), MockEndpoint::new(1)];
+        let (service, state, _events) = failover_over_mocks("ethereum", 1, &mocks);
+
+        let primary = Arc::clone(&state.endpoints[0]);
+        mocks[0].set_on_call(move || {
+            primary.set_chain_status(CHAIN_MISMATCH);
+        });
+
+        send_request(&service).await.expect("the other endpoint is on the right chain");
+
+        assert_eq!(
+            mocks[0].call_count(),
+            1,
+            "the excluded endpoint should only have been asked for eth_chainId, not served traffic"
+        );
+        assert_eq!(state.endpoints[0].chain_status(), CHAIN_MISMATCH);
+        assert!(state.snapshot()[1].active, "traffic must move to the chain-correct endpoint");
     }
 
     #[tokio::test]

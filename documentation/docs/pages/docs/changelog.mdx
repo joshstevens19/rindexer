@@ -6,6 +6,7 @@
 
 ### Bug fixes
 -------------------------------------------------
+- fix: **RPC failover near the tip, wrong-chain dispatch, and log redaction** — an `eth_getLogs` that fails over mid-request is discarded and retried (live indexing, historic backfill, and dependency-ordered live indexing), so a lagging replacement cannot advance the cursor past blocks it has not synced. Native-transfer indexing and dependency-ordered live indexing also suspend reorg validation when the active endpoint switches. An endpoint a concurrent probe has marked as the wrong chain is never dispatched, and fallback urls plus transport errors are redacted before `RpcLoggingLayer` writes them to the log.
 
 ### Features
 -------------------------------------------------

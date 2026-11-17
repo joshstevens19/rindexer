@@ -38,23 +38,29 @@ use tracing::{debug, error, info, warn};
 /// enough evidence.
 const LATEST_BLOCK_ERRORS_BEFORE_FLAG: u32 = 3;
 
+/// How many times a single historic range may be discarded because the
+/// transport failed over mid-fetch before that range is given up. Sticky
+/// failover normally settles in one retry; the cap stops a flapping pair
+/// of endpoints from spinning the historic loop forever.
+const MAX_ENDPOINT_SWITCH_DISCARDS: usize = 10;
+
 /// Polls a provider's endpoint switch counter so the indexing loops can
 /// notice transport failovers and reset endpoint-specific state: the
 /// per-endpoint block range shrink state, and - critically - the reorg
 /// coordinator's parent-hash window, which must not compare a lagging
 /// replacement endpoint's view against blocks the previous endpoint
 /// validated (that shape triggers a spurious rollback).
-struct EndpointSwitchWatcher {
+pub(crate) struct EndpointSwitchWatcher {
     last_seen: u64,
 }
 
 impl EndpointSwitchWatcher {
-    fn new<P: ChainProvider + ?Sized>(provider: &P) -> Self {
+    pub(crate) fn new<P: ChainProvider + ?Sized>(provider: &P) -> Self {
         Self { last_seen: provider.endpoint_switches() }
     }
 
     /// Returns true when the provider failed over since the last check.
-    fn switched<P: ChainProvider + ?Sized>(&mut self, provider: &P) -> bool {
+    pub(crate) fn switched<P: ChainProvider + ?Sized>(&mut self, provider: &P) -> bool {
         let current = provider.endpoint_switches();
         if current == self.last_seen {
             return false;
@@ -328,6 +334,7 @@ pub fn fetch_logs_stream(
 
         let mut switch_watcher =
             EndpointSwitchWatcher::new(&config.network_contract().cached_provider);
+        let mut endpoint_switch_discards: usize = 0;
 
         while current_filter.from_block() <= snapshot_to_block {
             if !is_running() || config.cancel_token().is_cancelled() {
@@ -352,6 +359,34 @@ pub fn fetch_logs_stream(
                 &config.info_log_name(),
             )
             .await;
+
+            // A failover during the fetch means the result (often an empty
+            // log set from a node that has not reached `to_block`) must not
+            // advance the cursor. `fetch_historic_logs_stream` also withholds
+            // the batch in that case; retry the same range on the endpoint
+            // that is active now.
+            if switch_watcher.switched(&config.network_contract().cached_provider) {
+                endpoint_switch_discards = endpoint_switch_discards.saturating_add(1);
+                if endpoint_switch_discards >= MAX_ENDPOINT_SWITCH_DISCARDS {
+                    error!(
+                        "{} - RPC endpoint failed over {} times during historic eth_getLogs for blocks {}-{}; giving up on this range",
+                        config.info_log_name(),
+                        endpoint_switch_discards,
+                        current_filter.from_block(),
+                        current_filter.to_block()
+                    );
+                    break;
+                }
+                info!(
+                    "{} - RPC endpoint switched during historic eth_getLogs for blocks {}-{}; discarding the result and retrying the range",
+                    config.info_log_name(),
+                    current_filter.from_block(),
+                    current_filter.to_block()
+                );
+                max_block_range_limitation = original_max_limit;
+                continue;
+            }
+            endpoint_switch_discards = 0;
 
             // This check can be very noisy. We want to only sample this warning to notify
             // the user, rather than warn on every log fetch.
@@ -477,8 +512,20 @@ async fn fetch_historic_logs_stream<P: ChainProvider>(
         );
     }
 
+    let switches_before = cached_provider.endpoint_switches();
     match cached_provider.get_logs(&current_filter).await {
         Ok(logs) => {
+            // The range was chosen against the previous endpoint's tip. A
+            // lagging replacement can answer this successfully with no logs
+            // for blocks it has not synced; publishing that would advance the
+            // cursor past them. The caller retries the same range.
+            if cached_provider.endpoint_switches() != switches_before {
+                return Some(ProcessHistoricLogsStreamResult {
+                    next: current_filter,
+                    max_block_range_limitation,
+                });
+            }
+
             debug!(
                 "{} - {} - topic_id {}, Logs: {} from {} to {}",
                 info_log_name,
@@ -582,6 +629,16 @@ async fn fetch_historic_logs_stream<P: ChainProvider>(
             }
         }
         Err(err) => {
+            // Same hazard as the success path: the error (or the suggested
+            // smaller range inside it) may belong to a different endpoint
+            // than the one the range was sized for. Retry unchanged.
+            if cached_provider.endpoint_switches() != switches_before {
+                return Some(ProcessHistoricLogsStreamResult {
+                    next: current_filter,
+                    max_block_range_limitation,
+                });
+            }
+
             // This is fundamental to the rindexer flow. We intentionally fetch a large block range
             // to get information on what the ideal block range should be.
             if let Some(retry_result) = retry_with_block_range(
@@ -853,6 +910,7 @@ async fn parallel_worker(
 
         controller.wait_for_backoff().await;
 
+        let switches_before = cached_provider.endpoint_switches();
         let (maybe_result, next_state, error_kind) = fetch_logs_once(
             timestamps,
             &block_clock,
@@ -863,6 +921,39 @@ async fn parallel_worker(
             &info_log_name,
         )
         .await;
+
+        // Drop the batch when the transport failed over mid-fetch. The range
+        // was computed against the previous endpoint; a lagging replacement
+        // can return an empty log set for blocks it has not reached.
+        if cached_provider.endpoint_switches() != switches_before {
+            stuck_iterations = stuck_iterations.saturating_add(1);
+            if stuck_iterations >= MAX_STUCK_ITERATIONS {
+                error!(
+                    "{} - worker for sid={} failed over {} times on range {}-{}; \
+                     failing this sub-range so downstream can advance",
+                    info_log_name,
+                    state.sequence_id,
+                    stuck_iterations,
+                    current_filter.from_block(),
+                    current_filter.to_block()
+                );
+                results.push(Err(Box::new(std::io::Error::other(format!(
+                    "fetch_logs: endpoint failed over {} times on range {}-{}",
+                    stuck_iterations,
+                    current_filter.from_block(),
+                    current_filter.to_block()
+                ))) as Box<dyn Error + Send>));
+                break;
+            }
+            info!(
+                "{} - RPC endpoint switched during historic eth_getLogs for blocks {}-{}; discarding the result and retrying the range",
+                info_log_name,
+                current_filter.from_block(),
+                current_filter.to_block()
+            );
+            state.max_block_range_limitation = state.original_max_limit;
+            continue;
+        }
 
         match maybe_result {
             Some(fetch_result) => {
@@ -1499,7 +1590,26 @@ async fn live_indexing_stream(
                                     current_filter
                                 );
 
-                                match cached_provider.get_logs(&current_filter).await {
+                                let logs_result = cached_provider.get_logs(&current_filter).await;
+
+                                // The range was computed from the tip fetched
+                                // above. If that call failed over, a lagging
+                                // replacement can return an empty set for
+                                // blocks it has not reached — accepting it
+                                // would advance the cursor past them for good.
+                                // Discard either outcome and recompute the
+                                // range from the new endpoint's tip.
+                                if switch_watcher.switched(cached_provider.as_ref()) {
+                                    handle_live_endpoint_switch(
+                                        &mut log_response_to_large_to_block,
+                                        reorg_coordinator.as_ref(),
+                                        info_log_name,
+                                    )
+                                    .await;
+                                    continue;
+                                }
+
+                                match logs_result {
                                     Ok(logs) => {
                                         debug!(
                                             "{} - {} - Live topic_id {}, Logs: {} from {} to {}",
@@ -2577,6 +2687,10 @@ mod tests {
         switches: AtomicU64,
         queried_ranges: Arc<StdMutex<Vec<(u64, u64)>>>,
         cancel_token: CancellationToken,
+        /// When set, the next `get_logs` stores this switch counter and
+        /// returns an empty log set — a lagging replacement that successfully
+        /// answered for blocks it has not reached.
+        failover_on_next_logs: StdMutex<Option<u64>>,
     }
 
     impl ScriptedLiveProvider {
@@ -2592,7 +2706,13 @@ mod tests {
                 switches: AtomicU64::new(0),
                 queried_ranges,
                 cancel_token,
+                failover_on_next_logs: StdMutex::new(None),
             }
+        }
+
+        fn fail_over_on_next_logs(&self, switches_after: u64) {
+            *self.failover_on_next_logs.lock().expect("failover flag poisoned") =
+                Some(switches_after);
         }
     }
 
@@ -2643,6 +2763,12 @@ mod tests {
                 .lock()
                 .expect("recorded ranges mutex poisoned")
                 .push((event_filter.from_block().to::<u64>(), event_filter.to_block().to::<u64>()));
+            if let Some(switches_after) =
+                self.failover_on_next_logs.lock().expect("failover flag poisoned").take()
+            {
+                self.switches.store(switches_after, AtomicOrdering::Release);
+                return Ok(Vec::new());
+            }
             self.inner.get_logs(event_filter).await
         }
 
@@ -2749,6 +2875,97 @@ mod tests {
         mock.bump_endpoint_switches();
         assert!(watcher.switched(&mock), "coalesced switches still fire");
         assert!(!watcher.switched(&mock));
+    }
+
+    #[tokio::test]
+    async fn live_get_logs_failover_does_not_skip_unreached_blocks() {
+        // The range is computed from the old endpoint's tip (120). eth_getLogs
+        // then fails over and the lagging replacement returns an empty set
+        // for 111..=120, which it has not synced. Accepting that empty set
+        // would advance the cursor to 121 and those blocks would never be
+        // indexed. The loop must discard it and request 111..=120 again once
+        // the replacement's tip actually covers the range.
+        let cancel_token = CancellationToken::new();
+        let queried_ranges = Arc::new(StdMutex::new(Vec::new()));
+        let provider = Arc::new(ScriptedLiveProvider::new(
+            MockChainProvider::new(1).with_blocks(vec![make_hashed_block(120, h(120), h(119))]),
+            vec![
+                (make_hashed_block(120, h(120), h(119)), 0),
+                (make_hashed_block(120, h(120), h(119)), 1),
+            ],
+            queried_ranges.clone(),
+            cancel_token.clone(),
+        ));
+        provider.fail_over_on_next_logs(1);
+        let block_clock = BlockClock::new(None, None, provider.clone());
+        let (tx, _rx) = mpsc::channel(8);
+
+        live_indexing_stream(
+            false,
+            block_clock,
+            provider,
+            &tx,
+            U64::from(110),
+            &B256::ZERO,
+            &U64::ZERO,
+            RindexerEventFilter::empty_for_test()
+                .set_from_block(U64::from(111))
+                .set_to_block(U64::from(111)),
+            "test",
+            "test",
+            true,
+            None,
+            cancel_token,
+            None,
+            None,
+            None,
+            &EventCallbackRegistry::default(),
+            None,
+        )
+        .await;
+
+        let ranges = queried_ranges.lock().expect("ranges mutex poisoned").clone();
+        assert_eq!(
+            ranges,
+            vec![(111, 120), (111, 120)],
+            "the range covered by the failed-over empty response must be fetched again, got {ranges:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn historic_get_logs_failover_does_not_advance_the_range() {
+        let cancel_token = CancellationToken::new();
+        let queried_ranges = Arc::new(StdMutex::new(Vec::new()));
+        let provider = ScriptedLiveProvider::new(
+            MockChainProvider::new(1),
+            Vec::new(),
+            queried_ranges,
+            cancel_token,
+        );
+        provider.fail_over_on_next_logs(1);
+        let (tx, mut rx) = mpsc::channel(4);
+        let filter = RindexerEventFilter::empty_for_test()
+            .set_from_block(U64::from(10))
+            .set_to_block(U64::from(20));
+
+        let result = fetch_historic_logs_stream(
+            false,
+            BlockClock::new(None, None, Arc::new(MockChainProvider::new(1))),
+            &provider,
+            &tx,
+            &B256::ZERO,
+            filter,
+            None,
+            U64::from(100),
+            "test",
+        )
+        .await;
+
+        let next = result.expect("the range must be retried, not dropped");
+        assert_eq!(next.next.from_block(), U64::from(10));
+        assert_eq!(next.next.to_block(), U64::from(20));
+        drop(tx);
+        assert!(rx.try_recv().is_err(), "a failed-over empty result must not be published");
     }
 
     #[tokio::test]
