@@ -1074,16 +1074,31 @@ pub enum ProcessIndexersError {
     TableColumnTypeResolutionError(String),
 }
 
-/// When `RINDEXER_PAUSE_AFTER_TABLE_OPS` is a path, write that file after
-/// the table-operation transaction commits and wait until it is removed.
-/// The e2e suite kills the process in that gap. Unset in production.
+/// Test-only crash-recovery hook. Exists only so crash-recovery tests can
+/// kill the process after a custom-table transaction commits and before the
+/// cursor advances. Must never be set in production.
+///
+/// When `RINDEXER_TEST_ONLY_PAUSE_AFTER_TABLE_OPS` is a file path, write that
+/// file after the table-operation transaction commits and block until the
+/// file is removed. Unset, this returns immediately and does no other work.
 async fn pause_after_table_ops() -> Result<(), String> {
-    let Ok(path) = std::env::var("RINDEXER_PAUSE_AFTER_TABLE_OPS") else {
+    // Production path: the variable is unset. Return before any other work.
+    let Ok(path) = std::env::var("RINDEXER_TEST_ONLY_PAUSE_AFTER_TABLE_OPS") else {
         return Ok(());
     };
     if path.is_empty() {
         return Ok(());
     }
+
+    // The hook stalls indexing on purpose. Say so once, loudly, if it is on.
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    WARNED.call_once(|| {
+        warn!(
+            "TEST-ONLY HOOK ACTIVE: RINDEXER_TEST_ONLY_PAUSE_AFTER_TABLE_OPS is set to '{}'. Indexing pauses after each custom-table commit until that file is removed. This exists only for crash-recovery tests and must never be set in production.",
+            path
+        );
+    });
+
     let flag = std::path::PathBuf::from(&path);
     if let Some(parent) = flag.parent() {
         if !parent.as_os_str().is_empty() {
