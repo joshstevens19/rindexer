@@ -54,7 +54,11 @@ pub fn generate_reorg_block_hashes_table_sql() -> String {
 /// `block_number` is not part of the key; a reorg deletes the range so the
 /// same log can be applied again if it is re-included.
 pub fn generate_table_op_claim_table_sql() -> String {
-    r#"CREATE TABLE IF NOT EXISTS rindexer_internal.table_op_claim (
+    // `setup_postgres` also creates the schema. The claim path runs on its
+    // own in tests and on a database created before custom tables existed,
+    // so the schema has to be created here too.
+    r#"CREATE SCHEMA IF NOT EXISTS rindexer_internal;
+    CREATE TABLE IF NOT EXISTS rindexer_internal.table_op_claim (
         network VARCHAR(50) NOT NULL,
         tx_hash CHAR(66) NOT NULL,
         log_index BIGINT NOT NULL,
