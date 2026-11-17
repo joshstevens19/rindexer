@@ -86,6 +86,12 @@ impl BlockChainWindow {
         self.entries.retain(|&block_number, _| block_number < from);
     }
 
+    /// Removes every entry. Used when the window must be rebuilt from
+    /// scratch (e.g. it could not be revalidated after an endpoint switch).
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
     /// Returns all block numbers >= `from`, in ascending order.
     pub fn block_numbers_from(&self, from: u64) -> Vec<u64> {
         self.entries.range(from..).map(|(&n, _)| n).collect()

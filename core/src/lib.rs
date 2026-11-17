@@ -1,5 +1,6 @@
 // public
 pub mod adaptive_concurrency;
+pub mod endpoint_failover;
 pub mod generator;
 pub mod hot_reload;
 pub use hot_reload::RELOAD_EXIT_CODE;
@@ -42,7 +43,7 @@ pub use simple_file_formatters::csv::AsyncCsvAppender;
 
 mod helpers;
 pub use helpers::{
-    format_all_files_for_project, generate_random_id, load_env_from_project_path,
+    format_all_files_for_project, generate_random_id, load_env_from_project_path, parse_log,
     public_read_env_value, write_file, WriteFileError,
 };
 mod api;
@@ -55,6 +56,9 @@ pub use abi::ABIItem;
 mod chat;
 pub mod event;
 pub mod notifications;
+pub use endpoint_failover::{
+    subscribe_rpc_endpoint_events, EndpointHealthSnapshot, RpcEndpointEvent,
+};
 pub use indexer::{reorg::ReorgEvent, tip_logs::SharedTipLogsSettings};
 pub use notifications::ChainStateNotification;
 pub mod blockclock;
@@ -74,7 +78,9 @@ pub use events::{RindexerEvent, RindexerEventStream};
 // export 3rd party dependencies
 pub use async_trait::async_trait;
 pub use colored::Colorize as RindexerColorize;
-pub use database::sql_type_wrapper::EthereumSqlTypeWrapper;
+pub use database::sql_type_wrapper::{
+    map_ethereum_wrapper_to_json, map_log_params_to_ethereum_wrapper, EthereumSqlTypeWrapper,
+};
 pub use futures::FutureExt;
 pub use indexer::no_code::resolve_table_column_types;
 pub use lazy_static::lazy_static;
@@ -87,4 +93,5 @@ pub use tokio::main as rindexer_main;
 #[cfg(feature = "postgres")]
 pub use tokio_postgres::types::Type as PgType;
 pub use tracing::{error as rindexer_error, info as rindexer_info};
+pub use types::core::{LogParam, ParsedLog};
 pub use types::single_or_array::StringOrArray;

@@ -107,7 +107,8 @@ mod tests {
 
         let blocks_req = blocks.iter().map(|&n| U64::from(n)).collect::<Vec<_>>();
         let block_time = create_client(
-            rpc,
+            "blockclock-spotcheck",
+            &[rpc.to_string()],
             network.inner().id(),
             None,
             None,

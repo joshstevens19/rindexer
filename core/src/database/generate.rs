@@ -6,7 +6,8 @@ use crate::{
     database::postgres::generate::{
         generate_columns_with_data_types, generate_derived_op_log_table_sql,
         generate_internal_cron_table_name, generate_internal_event_table_name,
-        generate_reorg_block_hashes_table_sql, GenerateInternalFactoryEventTableNameParams,
+        generate_reorg_block_hashes_table_sql, generate_table_op_claim_table_sql,
+        GenerateInternalFactoryEventTableNameParams,
     },
     helpers::{camel_to_snake, snake_to_camel},
     indexer::{
@@ -367,6 +368,7 @@ pub fn generate_tables_for_indexer_sql(
     let mut sql = "CREATE SCHEMA IF NOT EXISTS rindexer_internal;".to_string();
     sql.push_str(&generate_reorg_block_hashes_table_sql());
     sql.push_str(&generate_derived_op_log_table_sql());
+    sql.push_str(&generate_table_op_claim_table_sql());
 
     for contract in &indexer.contracts {
         let contract_name = contract.before_modify_name_if_filter_readonly();

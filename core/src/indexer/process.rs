@@ -7,7 +7,7 @@ use crate::{
     helpers::is_relevant_block,
     indexer::{
         dependency::{ContractEventsDependenciesConfig, EventDependencies},
-        fetch_logs::{fetch_logs_stream, FetchLogsResult},
+        fetch_logs::{fetch_logs_stream, EndpointSwitchWatcher, FetchLogsResult},
         heartbeat::{HeartbeatAction, HeartbeatTracker},
         last_synced::update_progress_and_last_synced_task,
         progress::IndexingEventProgressStatus,
@@ -480,6 +480,7 @@ async fn live_indexing_for_contract_event_dependencies(
     }
 
     let mut heartbeat = HeartbeatTracker::new(cached_provider.block_poll_frequency());
+    let mut switch_watcher = EndpointSwitchWatcher::new(cached_provider.as_ref());
     let target_iteration_duration = Duration::from_millis(200);
     let callback_permits = Arc::new(Semaphore::new(1));
 
@@ -509,6 +510,19 @@ async fn live_indexing_for_contract_event_dependencies(
 
         let iteration_start = Instant::now();
 
+        // A probe can fail the transport over between iterations. Suspend
+        // parent-hash validation before the next tip is compared against the
+        // window the previous endpoint built.
+        if switch_watcher.switched(cached_provider.as_ref()) {
+            if let Some(coordinator) = reorg_coordinator.as_ref() {
+                coordinator.lock().await.suspend_for_endpoint_switch();
+            }
+            info!(
+                "{} - RPC endpoint switched - suspending reorg window validation until the new endpoint catches up",
+                network
+            );
+        }
+
         // a consistent latest block number across all events in the batch is required to avoid race conditions
         let latest_block = match cached_provider.get_latest_block().await {
             Ok(Some(block)) => block,
@@ -530,6 +544,19 @@ async fn live_indexing_for_contract_event_dependencies(
                 continue;
             }
         };
+
+        // The call above can itself fail over. Suspend before reorg
+        // validation so a lagging replacement's tip is not compared against
+        // the previous endpoint's window.
+        if switch_watcher.switched(cached_provider.as_ref()) {
+            if let Some(coordinator) = reorg_coordinator.as_ref() {
+                coordinator.lock().await.suspend_for_endpoint_switch();
+            }
+            info!(
+                "{} - RPC endpoint switched during latest-block fetch - suspending reorg window validation until the new endpoint catches up",
+                network
+            );
+        }
 
         // Reorg detection: validate parent hash via coordinator
         if let Some(coordinator) = reorg_coordinator.as_ref() {
@@ -601,6 +628,9 @@ async fn live_indexing_for_contract_event_dependencies(
                     latest_block_number,
                     heartbeat.stall_timeout().as_secs()
                 );
+                cached_provider.flag_active_endpoint_degraded(&format!(
+                    "chain tip stalled at block {latest_block_number} for 5 minutes"
+                ));
             }
         }
 
@@ -734,7 +764,28 @@ async fn live_indexing_for_contract_event_dependencies(
                 ordering_live_indexing_details.filter
             );
 
-            match cached_provider.get_logs(&ordering_live_indexing_details.filter).await {
+            let logs_result =
+                cached_provider.get_logs(&ordering_live_indexing_details.filter).await;
+            // The range was sized from the tip at the start of this iteration.
+            // A failover inside get_logs can return an empty set for blocks the
+            // replacement has not reached. Discard it and leave every event's
+            // cursor where it is; the next iteration recomputes from the new tip.
+            // Breaking also stops later events in this batch from accepting a
+            // range that was computed against the old tip after the switch.
+            if switch_watcher.switched(cached_provider.as_ref()) {
+                if let Some(coordinator) = reorg_coordinator.as_ref() {
+                    coordinator.lock().await.suspend_for_endpoint_switch();
+                }
+                info!(
+                    "{} - RPC endpoint switched during eth_getLogs for blocks {}-{}; discarding the result and retrying",
+                    config.info_log_name(),
+                    from_block,
+                    to_block
+                );
+                break;
+            }
+
+            match logs_result {
                 Ok(logs) => {
                     debug!(
                         "{} - {} - Live id {} topic_id {}, Logs: {} from {} to {}",

@@ -237,6 +237,9 @@ pub async fn setup_no_code(
                     graphql_details: details.graphql_details,
                     cron_scheduler_handle: None,
                     watch: details.watch,
+                    manage_process_signals: true,
+                    disable_health_server: false,
+                    rpc_endpoint_events: details.rpc_endpoint_events,
                 });
             }
 
@@ -339,6 +342,9 @@ pub async fn setup_no_code(
                     graphql_details: details.graphql_details,
                     cron_scheduler_handle,
                     watch: details.watch,
+                    manage_process_signals: true,
+                    disable_health_server: false,
+                    rpc_endpoint_events: details.rpc_endpoint_events,
                 });
             }
 
@@ -352,6 +358,9 @@ pub async fn setup_no_code(
                 graphql_details: details.graphql_details,
                 cron_scheduler_handle: None,
                 watch: details.watch,
+                manage_process_signals: true,
+                disable_health_server: false,
+                rpc_endpoint_events: details.rpc_endpoint_events,
             })
         }
         None => Err(SetupNoCodeError::NoProjectPathFoundUsingParentOfManifestPath),
@@ -723,17 +732,20 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
             //   commits): table operations are PREPARED first (RPC prefetch,
             //   iterate fan-out, value resolution; no database access), then
             //   ONE shutdown check, then ONE Postgres transaction covers, in
-            //   order: every custom-table statement, its reorg journal row
-            //   (under a savepoint, best-effort), the raw event rows and the
-            //   last_synced_block cursor. No checkpoint and no shutdown check
-            //   sits inside the transaction: once BEGIN happened the batch
-            //   either commits whole or rolls back whole. A failure anywhere
-            //   before COMMIT (crash, SIGTERM, deadlock, pool timeout, missing
-            //   cursor row) leaves nothing behind, so trigger_event's
-            //   whole-batch retry is exactly-once. Documented residual: a
-            //   COMMIT whose acknowledgement is lost on the wire (the server
-            //   committed, the client saw an error and retries) is
-            //   at-least-once for that window only.
+            //   order: the per-log claim, every custom-table statement, its
+            //   reorg journal row (under a savepoint, best-effort), the raw
+            //   event rows and the last_synced_block cursor. A retried log
+            //   whose claim is already committed is not applied again.
+            //   No checkpoint and no shutdown check sits inside the
+            //   transaction: once BEGIN happened the batch either commits
+            //   whole or rolls back whole. A failure anywhere before COMMIT
+            //   (crash, SIGTERM, deadlock, pool timeout, missing cursor row)
+            //   leaves nothing behind, so trigger_event's whole-batch retry
+            //   is exactly-once. Documented residual: a COMMIT whose
+            //   acknowledgement is lost on the wire (the server committed,
+            //   the client saw an error and retries) is at-least-once for
+            //   that window only, and the claim keeps the arithmetic from
+            //   applying twice.
             //   LEGACY arm (CH/CSV alongside PG, factory discovery events,
             //   concurrency > 1, or no PG): the ORIGINAL ordering, raw sinks
             //   first and table ops after, so a transient raw-sink failure
@@ -818,6 +830,50 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                     let mut conn = postgres.raw_connection().await.map_err(|e| e.to_string())?;
                     let tx = conn.transaction().await.map_err(|e| pg_error_to_string(&e))?;
 
+                    // The crash-test hook needs the table transaction committed
+                    // and the cursor not yet advanced. Production leaves the
+                    // env var unset and keeps table effects, raw rows and the
+                    // cursor in this one transaction.
+                    let pause_between_table_ops_and_cursor = !prepared.ops.is_empty()
+                        && std::env::var("RINDEXER_TEST_ONLY_PAUSE_AFTER_TABLE_OPS")
+                            .ok()
+                            .is_some_and(|path| !path.is_empty());
+                    if pause_between_table_ops_and_cursor {
+                        if let Err(e) = apply_table_operations(
+                            &prepared,
+                            Some(PgWriteMode::Tx(&tx)),
+                            #[cfg(feature = "clickhouse")]
+                            None,
+                            None,
+                        )
+                        .await
+                        {
+                            drop(tx);
+                            return Err(e);
+                        }
+                        tx.commit().await.map_err(|e| pg_error_to_string(&e))?;
+                        pause_after_table_ops().await?;
+                        if write_raw_rows {
+                            let mut cursor_conn =
+                                postgres.raw_connection().await.map_err(|e| e.to_string())?;
+                            let cursor_tx = cursor_conn
+                                .transaction()
+                                .await
+                                .map_err(|e| pg_error_to_string(&e))?;
+                            let advance = PostgresClient::insert_bulk_with_cursor_in(
+                                &cursor_tx,
+                                &params.sql_event_table_name,
+                                &params.sql_column_names,
+                                &sql_bulk_data,
+                                &cursor,
+                            )
+                            .await
+                            .map_err(|e| e.to_string())?;
+                            cursor_tx.commit().await.map_err(|e| pg_error_to_string(&e))?;
+                            let _ = advance;
+                        }
+                    } else {
+
                     let staged: Result<Option<CursorAdvance>, String> = async {
                         if let Err(e) = apply_table_operations(
                             &prepared,
@@ -892,6 +948,7 @@ Some(PgWriteMode::Tx(&tx)),
                             current
                         ),
                         None => {}
+                    }
                     }
                 }
             }
@@ -1191,6 +1248,49 @@ pub enum ProcessIndexersError {
     TableColumnTypeResolutionError(String),
 }
 
+/// Test-only crash-recovery hook. Exists only so crash-recovery tests can
+/// kill the process after a custom-table transaction commits and before the
+/// cursor advances. Must never be set in production.
+///
+/// When `RINDEXER_TEST_ONLY_PAUSE_AFTER_TABLE_OPS` is a file path, write that
+/// file after the table-operation transaction commits and block until the
+/// file is removed. Unset, this returns immediately and does no other work.
+async fn pause_after_table_ops() -> Result<(), String> {
+    // Production path: the variable is unset. Return before any other work.
+    let Ok(path) = std::env::var("RINDEXER_TEST_ONLY_PAUSE_AFTER_TABLE_OPS") else {
+        return Ok(());
+    };
+    if path.is_empty() {
+        return Ok(());
+    }
+
+    // The hook stalls indexing on purpose. Say so once, loudly, if it is on.
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    WARNED.call_once(|| {
+        warn!(
+            "TEST-ONLY HOOK ACTIVE: RINDEXER_TEST_ONLY_PAUSE_AFTER_TABLE_OPS is set to '{}'. Indexing pauses after each custom-table commit until that file is removed. This exists only for crash-recovery tests and must never be set in production.",
+            path
+        );
+    });
+
+    let flag = std::path::PathBuf::from(&path);
+    if let Some(parent) = flag.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+    }
+    std::fs::write(&flag, b"table-ops-committed").map_err(|e| e.to_string())?;
+    loop {
+        if !crate::system_state::is_running() {
+            return Err("Shutdown requested".to_string());
+        }
+        if !flag.exists() {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
 pub async fn process_events(
     project_path: &Path,
     manifest: &Manifest,
@@ -1198,12 +1298,20 @@ pub async fn process_events(
     #[cfg(feature = "clickhouse")] clickhouse: Option<Arc<ClickhouseClient>>,
     network_providers: &[CreateNetworkProvider],
 ) -> Result<Vec<EventCallbackRegistryInformation>, ProcessIndexersError> {
+    // Rust hosts (rflow) read the manifest straight off disk, where column
+    // types are still inferred. Fill those before the storage callbacks clone
+    // the tables. No-code already resolved on this manifest, so this is a
+    // no-op there — and it must NOT rename filter contracts (that rename
+    // already happened, and doing it again would double the `Filter` suffix).
+    let mut manifest = manifest.clone();
+    ensure_table_column_types(project_path, &mut manifest)?;
+
     let mut events: Vec<EventCallbackRegistryInformation> = vec![];
 
     for mut contract in manifest.all_contracts().clone() {
         let contract_events = process_contract(
             project_path,
-            manifest,
+            &manifest,
             #[cfg(feature = "postgres")]
             postgres.clone(),
             #[cfg(feature = "clickhouse")]
@@ -1217,6 +1325,35 @@ pub async fn process_events(
     }
 
     Ok(events)
+}
+
+/// Fills custom-table column types that the yaml left for ABI inference.
+/// Does not rename contracts.
+fn ensure_table_column_types(
+    project_path: &Path,
+    manifest: &mut Manifest,
+) -> Result<(), ProcessIndexersError> {
+    for contract in &mut manifest.contracts {
+        let needs = contract.tables.as_ref().is_some_and(|tables| tables_need_column_types(tables));
+        if !needs {
+            continue;
+        }
+        let is_filter = contract.is_filter();
+        let abi_items = ABIItem::get_abi_items(project_path, contract, is_filter)?;
+        let event_abi_types = build_event_abi_types(abi_items).map_err(|error| {
+            ProcessIndexersError::TableColumnTypeResolutionError(error.to_string())
+        })?;
+        if let Some(tables) = &mut contract.tables {
+            resolve_tables_against_abi(tables, &event_abi_types).map_err(|error| {
+                ProcessIndexersError::TableColumnTypeResolutionError(error.to_string())
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn tables_need_column_types(tables: &[crate::manifest::contract::Table]) -> bool {
+    tables.iter().any(|table| table.columns.iter().any(|column| column.column_type.is_none()))
 }
 
 async fn process_contract(

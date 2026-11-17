@@ -1019,7 +1019,7 @@ use std::env;
 
 use self::rindexer_lib::indexers::all_handlers::register_all_handlers;
 use rindexer::{
-    event::callback_registry::TraceCallbackRegistry, start_rindexer, GraphQLServerDetails, GraphQLServerSettings, IndexingDetails, StartDetails,
+    event::callback_registry::TraceCallbackRegistry, start_rindexer, GraphqlOverrideSettings, IndexingDetails, StartDetails,
 };
 
 mod rindexer_lib;
@@ -1074,6 +1074,8 @@ async fn main() {
                 },
                 cron_scheduler_handle: None,
                 watch: false,
+                manage_process_signals: true,
+                disable_health_server: false,
             })
             .await;
 
@@ -1091,6 +1093,8 @@ async fn main() {
 }
 
 ```
+
+`manage_process_signals: true` and `disable_health_server: false` preserve the default standalone rindexer runtime behavior. Embedding hosts can set `manage_process_signals: false` when they own process shutdown handling, and `disable_health_server: true` when they expose health checks outside rindexer.
 
 ### Running
 
@@ -1183,6 +1187,8 @@ async fn main() {
                 },
                 cron_scheduler_handle: None,
                 watch: false,
+                manage_process_signals: true,
+                disable_health_server: false,
             })
             .await;
 

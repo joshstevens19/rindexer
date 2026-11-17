@@ -532,12 +532,12 @@ async fn handle_phantom_deploy(
 
                 if let Some(index) = network_index {
                     let net = &mut manifest.networks[index];
-                    net.rpc = rpc_url.to_string();
+                    net.rpc = rpc_url.to_string().into();
                 } else {
                     manifest.networks.push(Network {
                         name: name.to_string(),
                         chain_id: network.unwrap().chain_id,
-                        rpc: rpc_url.to_string(),
+                        rpc: rpc_url.to_string().into(),
                         compute_units_per_second: None,
                         block_poll_frequency: None,
                         max_block_range: if phantom.dyrpc_enabled() {

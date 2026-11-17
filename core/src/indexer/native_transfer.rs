@@ -8,6 +8,7 @@ use crate::{
         config::TraceProcessingConfig,
     },
     indexer::{
+        fetch_logs::EndpointSwitchWatcher,
         last_synced::evm_trace_update_progress_and_last_synced_task,
         process::ProcessEventError,
         reorg::{detect_and_handle_reorg, event_writer_barrier, ReorgContext, ReorgCoordinator},
@@ -247,6 +248,7 @@ pub async fn native_transfer_block_fetch(
     trace_registry: Arc<TraceCallbackRegistry>,
 ) -> Result<(), ProcessEventError> {
     let mut last_seen_block = start_block;
+    let mut switch_watcher = EndpointSwitchWatcher::new(publisher.as_ref());
 
     loop {
         if !is_running() || cancel_token.is_cancelled() {
@@ -259,7 +261,30 @@ pub async fn native_transfer_block_fetch(
         // `target_iteration_duration` used in the contract-event fetch loop.
         sleep(Duration::from_millis(200)).await;
 
+        if switch_watcher.switched(publisher.as_ref()) {
+            if let Some(coordinator) = reorg_coordinator.as_ref() {
+                coordinator.lock().await.suspend_for_endpoint_switch();
+            }
+            info!(
+                network = %network,
+                "RPC endpoint switched - suspending native-transfer reorg validation until the new endpoint catches up"
+            );
+        }
+
         let latest_block = publisher.get_latest_block().await;
+
+        // A failover inside get_latest_block means `latest_block` already
+        // comes from the replacement. Suspend before parent-hash validation
+        // so a lagging endpoint cannot force a spurious rollback.
+        if switch_watcher.switched(publisher.as_ref()) {
+            if let Some(coordinator) = reorg_coordinator.as_ref() {
+                coordinator.lock().await.suspend_for_endpoint_switch();
+            }
+            info!(
+                network = %network,
+                "RPC endpoint switched during latest-block fetch - suspending native-transfer reorg validation until the new endpoint catches up"
+            );
+        }
 
         match latest_block {
             Ok(Some(latest_block)) => {

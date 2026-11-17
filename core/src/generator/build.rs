@@ -580,6 +580,9 @@ serde = {{ version = "1.0", features = ["derive"] }}
                             },
                             cron_scheduler_handle: None,
                             watch: false,
+                            manage_process_signals: true,
+                            disable_health_server: false,
+                            rpc_endpoint_events: None,
                         })
                         .await;
 
@@ -641,7 +644,7 @@ mod tests {
         let network = Network {
             name: "ethereum".to_string(),
             chain_id: 1,
-            rpc: "https://eth.example.com".to_string(),
+            rpc: "https://eth.example.com".into(),
             block_poll_frequency: None,
             compute_units_per_second: None,
             max_block_range: None,

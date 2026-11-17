@@ -7,6 +7,7 @@ use crate::database::postgres::{
     relationship::{ApplyAllRelationships, Relationship},
     setup::{setup_postgres, SetupPostgresError},
 };
+use crate::endpoint_failover::{spawn_rpc_endpoint_event_forwarder, RpcEndpointEvent};
 use crate::{
     api::GraphqlOverrideSettings,
     event::callback_registry::{EventCallbackRegistry, TraceCallbackRegistry},
@@ -47,6 +48,16 @@ pub struct StartDetails<'a> {
     pub graphql_details: GraphqlOverrideSettings,
     pub cron_scheduler_handle: Option<tokio::task::JoinHandle<Result<(), String>>>,
     pub watch: bool,
+    /// When false, rindexer will not register process signal handlers (SIGTERM/SIGINT/etc.)
+    /// so an embedding host application can own signal handling itself.
+    pub manage_process_signals: bool,
+    /// When true, the health server is never started (useful when embedding rindexer
+    /// inside another application which exposes its own health endpoints).
+    pub disable_health_server: bool,
+    /// Optional sender the embedding host supplies to observe RPC endpoint
+    /// failover events (`Switched`/`Degraded`/`Recovered`) across every
+    /// network. Urls in the events are credential-redacted.
+    pub rpc_endpoint_events: Option<tokio::sync::broadcast::Sender<RpcEndpointEvent>>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -103,6 +114,9 @@ pub enum StartRindexerError {
     #[error("Port conflict: {0}")]
     PortConflict(String),
 
+    #[error("Could not resolve custom table column types: {0}")]
+    CouldNotResolveTableColumnTypes(String),
+
     #[error("Could not start Reth node: {0}")]
     CouldNotStartRethNode(#[from] eyre::Error),
 
@@ -123,6 +137,32 @@ async fn handle_shutdown(signal: &str) {
     std::process::exit(0);
 }
 
+async fn wait_for_shutdown_handle(
+    shutdown_handle: Option<tokio::task::JoinHandle<()>>,
+) -> Result<(), tokio::task::JoinError> {
+    match shutdown_handle {
+        Some(handle) => handle.await,
+        // Signals are managed by the embedding host, so never resolve here
+        None => {
+            std::future::pending::<()>().await;
+            Ok(())
+        }
+    }
+}
+
+/// True when a custom table column was left for ABI inference. `CREATE TABLE`
+/// panics on an unresolved type, so rust startup resolves before setup.
+fn manifest_has_unresolved_table_columns(manifest: &crate::manifest::core::Manifest) -> bool {
+    let unresolved = |tables: &[crate::manifest::contract::Table]| {
+        tables.iter().any(|table| table.columns.iter().any(|column| column.column_type.is_none()))
+    };
+    manifest
+        .contracts
+        .iter()
+        .any(|contract| contract.tables.as_ref().is_some_and(|tables| unresolved(tables)))
+        || manifest.native_transfers.tables.as_ref().is_some_and(|tables| unresolved(tables))
+}
+
 #[allow(clippy::result_large_err, reason = "preserve existing error API")]
 pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindexerError> {
     info!(
@@ -134,10 +174,16 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
     }
     let project_path = details.manifest_path.parent();
 
+    // Surface RPC endpoint failover events to the embedding host when it
+    // supplied a sender.
+    if let Some(host_events) = details.rpc_endpoint_events.clone() {
+        spawn_rpc_endpoint_event_forwarder(host_events);
+    }
+
     match project_path {
         Some(project_path) => {
             #[cfg(unix)]
-            let shutdown_handle = {
+            let shutdown_handle = if details.manage_process_signals {
                 let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
                     .map_err(|e| StartRindexerError::ShutdownHandlerFailed(e.to_string()))?;
                 let mut sigint = signal::unix::signal(signal::unix::SignalKind::interrupt())
@@ -145,26 +191,44 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                 let mut sigquit = signal::unix::signal(signal::unix::SignalKind::quit())
                     .map_err(|e| StartRindexerError::ShutdownHandlerFailed(e.to_string()))?;
 
-                tokio::spawn(async move {
+                Some(tokio::spawn(async move {
                     tokio::select! {
                         _ = sigterm.recv() => handle_shutdown("SIGTERM").await,
                         _ = sigint.recv() => handle_shutdown("SIGINT (Ctrl+C)").await,
                         _ = sigquit.recv() => handle_shutdown("SIGQUIT").await,
                     }
-                })
+                }))
+            } else {
+                None
             };
 
             // On Windows, we just use Ctrl+C to trigger shutdown
             #[cfg(windows)]
-            let shutdown_handle = tokio::spawn(async move {
-                if let Err(e) = signal::ctrl_c().await {
-                    error!("Failed to register Ctrl+C handler: {}", e);
-                    panic!("Ctrl+C handler failed: {}", e);
-                }
-                handle_shutdown("Ctrl+C").await
-            });
+            let shutdown_handle = if details.manage_process_signals {
+                Some(tokio::spawn(async move {
+                    if let Err(e) = signal::ctrl_c().await {
+                        error!("Failed to register Ctrl+C handler: {}", e);
+                        panic!("Ctrl+C handler failed: {}", e);
+                    }
+                    handle_shutdown("Ctrl+C").await
+                }))
+            } else {
+                None
+            };
 
-            let manifest = Arc::new(read_manifest(details.manifest_path)?);
+            let mut manifest = read_manifest(details.manifest_path)?;
+            // Rust projects skip the no-code startup that infers table column
+            // types. CREATE TABLE calls `resolved_type()` and panics when a
+            // column was left for ABI inference, so resolve here before
+            // setup_postgres. No-code already resolved; a second pass only
+            // fills types that are still missing.
+            if manifest_has_unresolved_table_columns(&manifest) {
+                crate::indexer::no_code::resolve_table_column_types(project_path, &mut manifest)
+                    .map_err(|error| {
+                        StartRindexerError::CouldNotResolveTableColumnTypes(error.to_string())
+                    })?;
+            }
+            let manifest = Arc::new(manifest);
 
             if manifest.project_type != ProjectType::NoCode {
                 setup_info_logger();
@@ -210,17 +274,21 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
 
             let health_port = manifest.global.health_port;
 
-            if let Some(graphql_port) = graphql_port {
-                if graphql_port == health_port {
-                    return Err(StartRindexerError::PortConflict(format!(
-                        "GraphQL and health servers cannot use the same port: {}",
-                        graphql_port
-                    )));
+            if !details.disable_health_server {
+                if let Some(graphql_port) = graphql_port {
+                    if graphql_port == health_port {
+                        return Err(StartRindexerError::PortConflict(format!(
+                            "GraphQL and health servers cannot use the same port: {}",
+                            graphql_port
+                        )));
+                    }
                 }
             }
 
             // Health server follows the indexer lifecycle - only runs when indexer is running
-            let health_server_handle = if details.indexing_details.is_some() {
+            let health_server_handle = if details.indexing_details.is_some()
+                && !details.disable_health_server
+            {
                 let manifest_clone = Arc::clone(&manifest);
 
                 Some(tokio::spawn(async move {
@@ -421,7 +489,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                                 error!("Health server task failed: {:?}", e);
                             }
                         }
-                        result = shutdown_handle => {
+                        result = wait_for_shutdown_handle(shutdown_handle) => {
                             result.map_err(|e| {
                                 error!("Shutdown handler failed: {:?}", e);
                                 StartRindexerError::ShutdownHandlerFailed(e.to_string())
@@ -437,7 +505,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                                 error!("GraphQL server task failed: {:?}", e);
                             }
                         }
-                        result = shutdown_handle => {
+                        result = wait_for_shutdown_handle(shutdown_handle) => {
                             result.map_err(|e| {
                                 error!("Shutdown handler failed: {:?}", e);
                                 StartRindexerError::ShutdownHandlerFailed(e.to_string())
@@ -453,7 +521,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                                 error!("Health server task failed: {:?}", e);
                             }
                         }
-                        result = shutdown_handle => {
+                        result = wait_for_shutdown_handle(shutdown_handle) => {
                             result.map_err(|e| {
                                 error!("Shutdown handler failed: {:?}", e);
                                 StartRindexerError::ShutdownHandlerFailed(e.to_string())
@@ -463,7 +531,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                 }
                 (None, None, shutdown_handle) => {
                     info!("Waiting for shutdown signal...");
-                    shutdown_handle.await.map_err(|e| {
+                    wait_for_shutdown_handle(shutdown_handle).await.map_err(|e| {
                         error!("Shutdown handler failed: {:?}", e);
                         StartRindexerError::ShutdownHandlerFailed(e.to_string())
                     })?;
@@ -485,6 +553,10 @@ pub struct StartNoCodeDetails<'a> {
     pub indexing_details: IndexerNoCodeDetails,
     pub graphql_details: GraphqlOverrideSettings,
     pub watch: bool,
+    /// Optional sender the embedding host supplies to observe RPC endpoint
+    /// failover events (`Switched`/`Degraded`/`Recovered`) across every
+    /// network. Urls in the events are credential-redacted.
+    pub rpc_endpoint_events: Option<tokio::sync::broadcast::Sender<RpcEndpointEvent>>,
 }
 
 #[derive(thiserror::Error, Debug)]
