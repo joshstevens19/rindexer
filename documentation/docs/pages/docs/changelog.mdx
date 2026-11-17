@@ -5,6 +5,7 @@
 
 ### Bug fixes
 -------------------------------------------------
+- fix: indexing status labels print as plain `SYNCING` / `LIVE` / `COMPLETED` again instead of the literal text `\x1b[32mLIVE\x1b[0m`. `tracing-subscriber` 0.3.20 started escaping control characters inside log messages, so the colour codes rindexer embedded in those labels were rendered verbatim ([#483](https://github.com/joshstevens19/rindexer/issues/483)).
 - fix: **non-ASCII names no longer crash or mis-parse** — three places walked a string by character index and then used that index as a byte offset. A contract, indexer, event or ABI input name containing a multi-byte character and ending in two upper-case letters (for example `naïveURI`) panicked with `Failed to get char`; a `$call(...)` expression or a `returns (...)` tuple field containing one was silently truncated (a field could be stored under the wrong column) or panicked with `byte index is not a char boundary`. Pure-ASCII names resolve to exactly the same identifiers as before, so no existing table or column is renamed.
 - fix: docs site no longer scrolls sideways on narrow screens. The home page install command wraps inside its block (and scrolls if a token is wider), and the mobile sidebar stays on screen and tappable from 320px up.
 - fix: macOS release binaries statically link OpenSSL, require macOS 11.0 or newer, and use `/etc/ssl/cert.pem` for PostgreSQL TLS when `SSL_CERT_FILE` and `SSL_CERT_DIR` are unset.

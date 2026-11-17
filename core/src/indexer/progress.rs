@@ -1,5 +1,4 @@
 use alloy::primitives::U64;
-use colored::{ColoredString, Colorize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -19,16 +18,16 @@ pub enum IndexingEventProgressStatus {
 }
 
 impl IndexingEventProgressStatus {
-    pub fn syncing_log() -> ColoredString {
-        "SYNCING".green()
+    pub fn syncing_log() -> &'static str {
+        "SYNCING"
     }
 
-    pub fn live_log() -> ColoredString {
-        "LIVE".green()
+    pub fn live_log() -> &'static str {
+        "LIVE"
     }
 
-    pub fn completed_log() -> ColoredString {
-        "COMPLETED".green()
+    pub fn completed_log() -> &'static str {
+        "COMPLETED"
     }
 }
 
@@ -400,6 +399,31 @@ mod tests {
     use alloy::primitives::U64;
 
     use crate::events::{RindexerEventEmitter, RindexerEventStream};
+
+    /// `tracing-subscriber` >= 0.3.20 escapes control characters in event
+    /// messages, so an ANSI-coloured label embedded in a log line renders as
+    /// the literal text `\x1b[32mLIVE\x1b[0m` instead of green `LIVE`.
+    /// Status labels must therefore stay free of escape sequences.
+    #[test]
+    fn status_labels_contain_no_ansi_escapes() {
+        for label in [
+            IndexingEventProgressStatus::syncing_log(),
+            IndexingEventProgressStatus::live_log(),
+            IndexingEventProgressStatus::completed_log(),
+        ] {
+            assert!(
+                !label.contains('\x1b'),
+                "status label `{label}` embeds an ANSI escape; tracing will render it literally"
+            );
+        }
+    }
+
+    #[test]
+    fn status_labels_are_the_expected_text() {
+        assert_eq!(IndexingEventProgressStatus::syncing_log(), "SYNCING");
+        assert_eq!(IndexingEventProgressStatus::live_log(), "LIVE");
+        assert_eq!(IndexingEventProgressStatus::completed_log(), "COMPLETED");
+    }
 
     /// Helper: build an `IndexingEventsProgressState` with both `events` and
     /// `block_networks` populated so that `update_last_synced_block` exercises
