@@ -1125,6 +1125,7 @@ pub mod mock {
         flagged_endpoint_reasons: std::sync::Mutex<Vec<String>>,
         endpoint_switches: std::sync::atomic::AtomicU64,
         shared_tip_logs: Option<Arc<SharedTipLogs>>,
+        head_limit: std::sync::atomic::AtomicU64,
     }
 
     impl MockChainProvider {
@@ -1141,7 +1142,14 @@ pub mod mock {
                 flagged_endpoint_reasons: std::sync::Mutex::new(vec![]),
                 endpoint_switches: std::sync::atomic::AtomicU64::new(0),
                 shared_tip_logs: None,
+                head_limit: std::sync::atomic::AtomicU64::new(u64::MAX),
             }
+        }
+
+        /// Hide blocks above `number` from `get_latest_block`, so a test can
+        /// hold the head and then let new blocks land.
+        pub fn set_head(&self, number: u64) {
+            self.head_limit.store(number, std::sync::atomic::Ordering::Release);
         }
 
         /// Reasons passed to `flag_active_endpoint_degraded`, in call order.
@@ -1219,7 +1227,13 @@ pub mod mock {
         }
 
         async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
-            Ok(self.blocks.iter().max_by_key(|b| b.inner.number()).cloned())
+            let head_limit = self.head_limit.load(std::sync::atomic::Ordering::Acquire);
+            Ok(self
+                .blocks
+                .iter()
+                .filter(|b| b.inner.number() <= head_limit)
+                .max_by_key(|b| b.inner.number())
+                .cloned())
         }
 
         async fn get_block_number(&self) -> Result<U64, ProviderError> {

@@ -292,7 +292,8 @@ impl EventCallbackRegistry {
                     if let Some(processed_block) =
                         processed_network_contracts.iter().find(|c| c.id == d.id)
                     {
-                        d.start_block = Some(processed_block.processed_up_to);
+                        d.start_block =
+                            Some(processed_block.processed_up_to.saturating_add(U64::from(1)));
                     }
                 }
             });
@@ -971,5 +972,60 @@ mod tests {
     fn first_metadata_empty_trace_returns_none() {
         let result = CallbackResult::Trace(vec![]);
         assert!(result.first_metadata().is_none());
+    }
+
+    #[tokio::test]
+    async fn reapply_after_historic_starts_live_after_the_last_processed_block() {
+        use crate::{
+            blockclock::BlockClock,
+            event::contract_setup::{AddressDetails, IndexingContractSetup},
+            provider::mock::MockChainProvider,
+            types::single_or_array::StringOrArray,
+        };
+        use alloy::rpc::types::ValueOrArray;
+
+        let provider: Arc<dyn ChainProvider> = Arc::new(MockChainProvider::new(1));
+        let network_contract = NetworkContract {
+            id: "network-contract".to_string(),
+            network: "test".to_string(),
+            indexing_contract_setup: IndexingContractSetup::Address(AddressDetails {
+                address: ValueOrArray::Value(Address::ZERO),
+                indexed_filters: None,
+            }),
+            cached_provider: Arc::clone(&provider),
+            block_clock: BlockClock::new(None, None, Arc::clone(&provider)),
+            decoder: noop_decoder(),
+            start_block: Some(U64::from(100)),
+            end_block: None,
+            disable_logs_bloom_checks: false,
+        };
+        let mut registry = EventCallbackRegistry::new();
+        registry.register_event(EventCallbackRegistryInformation {
+            id: "event".to_string(),
+            indexer_name: "test-indexer".to_string(),
+            topic_id: B256::ZERO,
+            event_name: "TestEvent".to_string(),
+            index_event_in_order: true,
+            contract: ContractInformation {
+                name: "test-contract".to_string(),
+                details: vec![network_contract],
+                abi: StringOrArray::Single(String::new()),
+                reorg_safe_distance: None,
+            },
+            callback: Arc::new(|_| Box::pin(async { Ok(()) })),
+            tables: Arc::new(vec![]),
+            reorg_sender: None,
+            streams_clients: Arc::new(None),
+            providers: Arc::new(HashMap::new()),
+            constants: Arc::new(HashMap::new()),
+            multicall_addresses: Arc::new(HashMap::new()),
+        });
+
+        let live = registry.reapply_after_historic(vec![ProcessedNetworkContract {
+            id: "network-contract".to_string(),
+            processed_up_to: U64::from(156),
+        }]);
+
+        assert_eq!(live.events[0].contract.details[0].start_block, Some(U64::from(157)));
     }
 }

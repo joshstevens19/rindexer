@@ -161,8 +161,10 @@ async fn get_start_end_block(
     })?;
     let latest_block = U64::from(latest_block.header.number);
 
+    // One past the head is where live indexing resumes after historic when no
+    // block has landed since: an empty range, not a start in the future.
     if let Some(start_block) = manifest_start_block {
-        if start_block > latest_block {
+        if start_block > latest_block.saturating_add(U64::from(1)) {
             error!(
                 "{} - start_block supplied in yaml - {} {} is higher then latest block number - {}",
                 event_name, network, start_block, latest_block
@@ -1954,6 +1956,32 @@ contracts:
 
         assert!(matches!(
             result,
+            Err(StartIndexingError::StartBlockIsHigherThanLatestBlockError(..))
+        ));
+    }
+
+    /// Live indexing restarts at the block after historic's last one. When no
+    /// block has landed since, that start is one past the head: nothing to backfill.
+    #[tokio::test]
+    async fn start_block_one_past_latest_resumes_after_the_head() {
+        let mock = provider_at_block(100);
+        let start_end = |start: u64| {
+            get_start_end_block(
+                &mock,
+                Some(U64::from(start)),
+                None,
+                empty_sync_config(),
+                "Test",
+                "ethereum",
+                None,
+                false,
+            )
+        };
+
+        let (start, end, _) = start_end(101).await.unwrap();
+        assert_eq!((start, end), (U64::from(101), U64::from(100)));
+        assert!(matches!(
+            start_end(102).await,
             Err(StartIndexingError::StartBlockIsHigherThanLatestBlockError(..))
         ));
     }
