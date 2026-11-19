@@ -7,7 +7,7 @@ use crate::{
     helpers::is_relevant_block,
     indexer::{
         dependency::{ContractEventsDependenciesConfig, EventDependencies},
-        fetch_logs::{fetch_logs_stream, EndpointSwitchWatcher, FetchLogsResult},
+        fetch_logs::{covered_to_block, fetch_logs_stream, EndpointSwitchWatcher, FetchLogsResult},
         heartbeat::{HeartbeatAction, HeartbeatTracker},
         last_synced::update_progress_and_last_synced_task,
         progress::IndexingEventProgressStatus,
@@ -813,9 +813,10 @@ async fn live_indexing_for_contract_event_dependencies(
                     let logs_empty = logs.is_empty();
                     // clone here over the full logs way less overhead
                     let last_log = logs.last().cloned();
+                    let covered_to = covered_to_block(&logs, to_block);
 
                     let fetched_logs =
-                        Ok(FetchLogsResult { logs, from_block, to_block, reorg: None });
+                        Ok(FetchLogsResult { logs, from_block, to_block: covered_to, reorg: None });
 
                     let result = handle_logs_result(
                         Arc::clone(config),

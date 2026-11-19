@@ -71,9 +71,20 @@ pub struct ReorgInfo {
 pub struct FetchLogsResult {
     pub logs: Vec<Log>,
     pub from_block: U64,
+    /// The last block this batch covers; progress advances to it once the batch is handled.
     pub to_block: U64,
     /// If set, a reorg was detected. Consumer should clean up storage before re-indexing.
     pub reorg: Option<ReorgInfo>,
+}
+
+/// The last block a fetch of `..=to_block` that returned `logs` covers. With logs the stream
+/// fetches again from the block after the last log, so the blocks after it are not covered
+/// yet: reporting them would let progress (and `BlockIndexingCompleted`) pass blocks whose
+/// logs can still arrive in the next batch.
+pub(crate) fn covered_to_block(logs: &[Log], to_block: U64) -> U64 {
+    logs.last()
+        .and_then(|log| log.block_number)
+        .map_or(to_block, |block| U64::from(block).min(to_block))
 }
 
 pub fn fetch_logs_stream(
@@ -462,6 +473,7 @@ async fn fetch_historic_logs_stream<P: ChainProvider>(
             let logs_empty = logs.is_empty();
             // clone here over the full logs way less overhead
             let last_log = logs.last().cloned();
+            let covered_to = covered_to_block(&logs, to_block);
 
             if !logs_empty {
                 info!(
@@ -480,7 +492,7 @@ async fn fetch_historic_logs_stream<P: ChainProvider>(
                         sender.send(Ok(FetchLogsResult {
                             logs,
                             from_block,
-                            to_block,
+                            to_block: covered_to,
                             reorg: None,
                         }));
                     }
@@ -501,7 +513,12 @@ async fn fetch_historic_logs_stream<P: ChainProvider>(
                     }
                 }
             } else {
-                sender.send(Ok(FetchLogsResult { logs, from_block, to_block, reorg: None }));
+                sender.send(Ok(FetchLogsResult {
+                    logs,
+                    from_block,
+                    to_block: covered_to,
+                    reorg: None,
+                }));
             }
 
             if logs_empty {
@@ -1039,6 +1056,7 @@ async fn fetch_logs_once<P: ChainProvider + ?Sized>(
         Ok(logs) => {
             let logs_empty = logs.is_empty();
             let last_log = logs.last().cloned();
+            let covered_to = covered_to_block(&logs, to_block);
 
             if !logs_empty {
                 info!(
@@ -1053,7 +1071,7 @@ async fn fetch_logs_once<P: ChainProvider + ?Sized>(
 
             let result = if timestamps {
                 if let Ok(logs) = block_clock.attach_log_timestamps(logs).await {
-                    Some(FetchLogsResult { logs, from_block, to_block, reorg: None })
+                    Some(FetchLogsResult { logs, from_block, to_block: covered_to, reorg: None })
                 } else {
                     return (
                         None,
@@ -1067,7 +1085,7 @@ async fn fetch_logs_once<P: ChainProvider + ?Sized>(
                     );
                 }
             } else {
-                Some(FetchLogsResult { logs, from_block, to_block, reorg: None })
+                Some(FetchLogsResult { logs, from_block, to_block: covered_to, reorg: None })
             };
 
             if logs_empty {
@@ -1826,6 +1844,7 @@ async fn live_indexing_stream(
 
                                         let logs_empty = logs.is_empty();
                                         let last_log = logs.last().cloned();
+                                        let covered_to = covered_to_block(&logs, to_block);
 
                                         // Attach timestamp from cached block metadata to the logs
                                         // to prevent any further fetches.
@@ -1869,7 +1888,7 @@ async fn live_indexing_stream(
                                             .send(Ok(FetchLogsResult {
                                                 logs,
                                                 from_block,
-                                                to_block,
+                                                to_block: covered_to,
                                                 reorg: None,
                                             }))
                                             .await
@@ -2772,6 +2791,36 @@ mod tests {
         let result = result.expect("should return next range");
         // Next from_block should be last_log.block_number + 1 = 176
         assert_eq!(result.next.from_block(), U64::from(176));
+    }
+
+    #[tokio::test]
+    async fn historic_batch_with_logs_reports_only_through_its_last_log_block() {
+        // The stream fetches 176..=200 again, so the batch must not report 200 as indexed:
+        // progress (and BlockIndexingCompleted) would claim blocks whose logs may still come.
+        let logs = vec![make_log_at_block(150), make_log_at_block(175)];
+        let mock = MockChainProvider::new(1).with_logs(logs);
+        let (tx, mut rx) = mpsc::channel(4);
+        let filter = RindexerEventFilter::empty_for_test()
+            .set_from_block(U64::from(100))
+            .set_to_block(U64::from(200));
+
+        let result = fetch_historic_logs_stream(
+            false,
+            BlockClock::new(None, None, Arc::new(MockChainProvider::new(1))),
+            &mock,
+            &tx,
+            &B256::ZERO,
+            filter,
+            None,
+            U64::from(500),
+            "test",
+        )
+        .await
+        .expect("should return next range");
+
+        let batch = rx.recv().await.expect("a dispatched batch").expect("a successful batch");
+        assert_eq!((batch.from_block, batch.to_block), (U64::from(100), U64::from(175)));
+        assert_eq!(result.next.from_block(), batch.to_block + U64::from(1));
     }
 
     #[tokio::test]
@@ -3696,6 +3745,23 @@ mod tests {
         assert_eq!(counter(&SHARED_TIP_LOGS_SERVED_TOTAL, &[net, "prefix_rpc_plus_tip"]), 1.0);
     }
 
+    /// The window ends at `TIP` but its last log is in `TIP - 2`, so the stream fetches
+    /// `TIP - 1..=TIP` again. The batch must not report `TIP` as indexed: a log the first
+    /// answer missed in those blocks would arrive after the progress said they were done.
+    #[tokio::test(start_paused = true)]
+    async fn live_batch_with_logs_reports_only_through_its_last_log_block() {
+        let logs = vec![log_at(TIP - 2, hash_of(TIP - 2), stream_address(), stream_topic(), 0)];
+        let provider = Arc::new(RecordingLiveProvider::recording(
+            MockChainProvider::new(1).with_blocks(vec![busy_tip()]).with_logs(logs),
+        ));
+
+        let (batch, _) =
+            first_live_batch(&provider, stream_filter(TIP - 3), TIP - 4, false, "test").await;
+
+        assert_eq!(provider.ranges(), vec![(TIP - 3, TIP)]);
+        assert_eq!((batch.from_block, batch.to_block), (U64::from(TIP - 3), U64::from(TIP - 2)));
+    }
+
     /// The RPC's head goes from `TIP - 2` straight to `TIP`, so `TIP - 1` is never polled as
     /// head, and the stream's own filtered `eth_getLogs` answers that block empty. The shared
     /// unfiltered fetch has the block's logs; the stream must get them from it.
@@ -4358,6 +4424,24 @@ mod tests {
             assert!(r.reorg.is_none(), "historical fetch must never emit a reorg");
             let next = next.expect("more range remaining");
             assert_eq!(next.next.from_block(), U64::from(181));
+        }
+
+        #[tokio::test]
+        async fn fetch_logs_once_with_logs_reports_only_through_its_last_log_block() {
+            let logs = vec![make_log_at_block(120), make_log_at_block(180)];
+            let mock = MockChainProvider::new(1).with_logs(logs);
+            let filter = RindexerEventFilter::empty_for_test()
+                .set_from_block(U64::from(100))
+                .set_to_block(U64::from(200));
+
+            let bc = BlockClock::new(None, None, Arc::new(MockChainProvider::new(1)));
+            let (result, next, _kind) =
+                fetch_logs_once(false, &bc, &mock, filter, None, U64::from(500), "test").await;
+
+            let r = result.expect("should return logs");
+            assert_eq!((r.from_block, r.to_block), (U64::from(100), U64::from(180)));
+            let next = next.expect("more range remaining");
+            assert_eq!(next.next.from_block(), r.to_block + U64::from(1));
         }
 
         #[tokio::test]
