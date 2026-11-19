@@ -1145,4 +1145,161 @@ mod tests {
             assert!(seen.contains(&expected), "missing dispatch for tag {expected}: {completed:?}");
         }
     }
+
+    /// The window ends at `TIP` but its last log is in `TIP - 2`, so the next fetch
+    /// starts from `TIP - 1`. The handler must not be told the batch covers `TIP`.
+    #[tokio::test(start_paused = true)]
+    async fn ordered_live_batch_with_logs_reports_only_through_its_last_log_block() {
+        use crate::{
+            blockclock::BlockClock,
+            event::{
+                callback_registry::{EventCallbackRegistry, EventCallbackRegistryInformation},
+                config::ContractEventProcessingConfig,
+                contract_setup::{
+                    AddressDetails, ContractInformation, IndexingContractSetup, NetworkContract,
+                },
+            },
+            indexer::IndexingEventsProgressState,
+            manifest::config::Config,
+            provider::mock::MockChainProvider,
+            types::single_or_array::StringOrArray,
+        };
+        use alloy::{
+            network::{AnyHeader, AnyRpcBlock, AnyRpcHeader},
+            primitives::{Address, Bytes, Log as PrimitiveLog, LogData},
+            rpc::types::{Block, BlockTransactions, Log, ValueOrArray},
+        };
+        use std::path::PathBuf;
+        use tokio_util::sync::CancellationToken;
+
+        const TIP: u64 = 603;
+        let log = Log {
+            inner: PrimitiveLog {
+                address: Address::ZERO,
+                data: LogData::new_unchecked(vec![], Bytes::new()),
+            },
+            block_hash: Some(B256::repeat_byte(1)),
+            block_number: Some(TIP - 2),
+            block_timestamp: None,
+            transaction_hash: Some(B256::repeat_byte(2)),
+            transaction_index: Some(0),
+            log_index: Some(0),
+            removed: false,
+        };
+        let tip = AnyRpcBlock::new(
+            Block::new(
+                AnyRpcHeader::from_sealed(
+                    AnyHeader { number: TIP, ..Default::default() }.seal(B256::repeat_byte(3)),
+                ),
+                BlockTransactions::Full(vec![]),
+            )
+            .into(),
+        );
+        let provider: Arc<dyn ChainProvider> =
+            Arc::new(MockChainProvider::new(1).with_blocks(vec![tip]).with_logs(vec![log]));
+
+        let network_contract = NetworkContract {
+            id: "ordered-live-network-contract".to_string(),
+            network: "ordered-live-test".to_string(),
+            indexing_contract_setup: IndexingContractSetup::Address(AddressDetails {
+                address: ValueOrArray::Value(Address::ZERO),
+                indexed_filters: None,
+            }),
+            cached_provider: Arc::clone(&provider),
+            block_clock: BlockClock::new(None, None, Arc::clone(&provider)),
+            decoder: Arc::new(|_, _| Arc::new(()) as Arc<dyn std::any::Any + Send + Sync>),
+            start_block: Some(U64::from(TIP - 4)),
+            end_block: None,
+            disable_logs_bloom_checks: false,
+        };
+
+        let cancel_token = CancellationToken::new();
+        let reported = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut registry = EventCallbackRegistry::new();
+        registry.register_event(EventCallbackRegistryInformation {
+            id: "ordered-live-event".to_string(),
+            indexer_name: "test-indexer".to_string(),
+            topic_id: B256::ZERO,
+            event_name: "TestEvent".to_string(),
+            index_event_in_order: true,
+            contract: ContractInformation {
+                name: "test-contract".to_string(),
+                details: vec![network_contract.clone()],
+                abi: StringOrArray::Single(String::new()),
+                reorg_safe_distance: None,
+            },
+            callback: {
+                let reported = Arc::clone(&reported);
+                let cancel_token = cancel_token.clone();
+                Arc::new(move |results: Vec<EventResult>| {
+                    reported.lock().unwrap().extend(
+                        results
+                            .iter()
+                            .map(|r| (r.found_in_request.from_block, r.found_in_request.to_block)),
+                    );
+                    cancel_token.cancel();
+                    Box::pin(async { Ok(()) })
+                })
+            },
+            tables: Arc::new(vec![]),
+            reorg_sender: None,
+            streams_clients: Arc::new(None),
+            providers: Arc::new(HashMap::new()),
+            constants: Arc::new(HashMap::new()),
+            multicall_addresses: Arc::new(HashMap::new()),
+        });
+
+        let config = Arc::new(EventProcessingConfig::ContractEventProcessing(
+            ContractEventProcessingConfig {
+                id: "ordered-live-event".to_string(),
+                project_path: PathBuf::new(),
+                indexer_name: "test-indexer".to_string(),
+                contract_name: "test-contract".to_string(),
+                topic_id: B256::ZERO,
+                event_name: "TestEvent".to_string(),
+                config: Config::default(),
+                network_contract: Arc::new(network_contract),
+                timestamps: false,
+                start_block: U64::from(TIP - 4),
+                end_block: U64::from(TIP - 4),
+                registry: Arc::new(registry),
+                progress: IndexingEventsProgressState::monitor(&[], &[], None).await,
+                #[cfg(feature = "postgres")]
+                postgres: None,
+                #[cfg(feature = "clickhouse")]
+                clickhouse: None,
+                csv_details: None,
+                stream_last_synced_block_file_path: None,
+                index_event_in_order: true,
+                live_indexing: true,
+                indexing_distance_from_head: U64::ZERO,
+                cancel_token: cancel_token.clone(),
+                tables: Arc::new(vec![]),
+                reorg_sender: None,
+                streams_clients: Arc::new(None),
+                contract_abi: None,
+                providers: Arc::new(HashMap::new()),
+                constants: Arc::new(HashMap::new()),
+                multicall_addresses: Arc::new(HashMap::new()),
+            },
+        ));
+        let filter = RindexerEventFilter::empty_for_test()
+            .set_from_block(U64::from(TIP - 4))
+            .set_to_block(U64::from(TIP - 4));
+
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            live_indexing_for_contract_event_dependencies(EventDependenciesIndexingConfig {
+                network: "ordered-live-test".to_string(),
+                cached_provider: provider,
+                events: vec![(config, filter)],
+                reorg_coordinator: None,
+                trace_registry: None,
+            }),
+        )
+        .await
+        .expect("the loop stops once the handler cancels the generation");
+
+        assert_eq!(*reported.lock().unwrap(), vec![(U64::from(TIP - 3), U64::from(TIP - 2))]);
+    }
 }
