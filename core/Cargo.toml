@@ -71,8 +71,8 @@ tokio-postgres-rustls = { version = "0.13", optional = true }
 rustls = { workspace = true }
 webpki-roots = { version = "1", optional = true }
 rustls-native-certs = { version = "0.8", optional = true }
-openssl = "0.10"
-postgres-openssl = "0.5"
+openssl = { version = "0.10", optional = true }
+postgres-openssl = { version = "0.5", optional = true }
 tokio-stream = "0.1"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["time"] }
@@ -130,7 +130,7 @@ incremental = false
 
 [features]
 default = ["postgres", "clickhouse", "graphql", "hypersync", "phantom", "discord", "telegram", "sns", "redis", "rabbitmq"]
-postgres = ["dep:tokio-postgres", "dep:bb8-postgres", "dep:tokio-postgres-rustls", "dep:webpki-roots", "dep:rustls-native-certs", "rust_decimal/db-tokio-postgres"]
+postgres = ["dep:tokio-postgres", "dep:bb8-postgres", "dep:openssl", "dep:postgres-openssl", "dep:tokio-postgres-rustls", "dep:webpki-roots", "dep:rustls-native-certs", "rust_decimal/db-tokio-postgres"]
 clickhouse = ["dep:clickhouse"]
 graphql = ["postgres"]
 hypersync = ["dep:hypersync-client"]
