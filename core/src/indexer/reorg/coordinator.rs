@@ -1330,6 +1330,47 @@ mod tests {
     }
 
     // ======================================================================
+    // Same-height hash replacement
+    //
+    // A block at a height already in the window is replaced by a sibling with
+    // the same parent. Parent-hash validation alone cannot see this, so the
+    // stored hash at that height must be compared too.
+    // ======================================================================
+
+    #[tokio::test]
+    async fn test_same_height_different_hash_is_detected_as_reorg() {
+        // A later poll reports a different hash at a height the window already
+        // holds, with the same parent: a 1-block sibling reorg where 12 = A is
+        // replaced by 12 = B, both children of 11. `validate_parent` only checks
+        // block 11, so before the fix this passed as Valid and `window.insert`
+        // silently overwrote A with B, keeping A's rows in the database.
+        //
+        // The provider's canonical chain is 10, 11, 12 = B (hash(12)).
+        let canonical: Vec<AnyRpcBlock> =
+            (10..=12).map(|n| make_canonical_block(n, hash(n as u8), hash(n as u8 - 1))).collect();
+        let provider: Arc<dyn ChainProvider> =
+            Arc::new(MockChainProvider::new(1).with_blocks(canonical));
+
+        let window = make_window_with_blocks(&[(10, 10, 9), (11, 11, 10)]);
+        let mut coordinator = make_coordinator_with_provider(window, provider);
+
+        // First poll sees 12 = A (hash(13)); its parent matches 11, so it is clean.
+        let first = coordinator.on_new_block(12, hash(13), hash(11)).await.unwrap();
+        assert!(first.is_none(), "first insert should be clean");
+        assert!(coordinator.window.get(12).is_some(), "block 12 should be in window");
+
+        // Second poll at the SAME height and parent, but a different hash (B).
+        // It must not be an idempotent overwrite: a reorg is reported, the fork
+        // point is 12 (11 still matches canonical), and A is not overwritten
+        // before the rollback runs.
+        let second = coordinator.on_new_block(12, hash(12), hash(11)).await.unwrap();
+        let task = second.expect("a different block head must be detected");
+        assert_eq!(task.fork_point, 12, "window matches canonical through 11");
+        assert_eq!(task.detection_point, 12);
+        assert_eq!(coordinator.window.get(12), Some(&(hash(13), hash(11))));
+    }
+
+    // ======================================================================
     // End-to-end: reth reorg notification → coordinator → FinalizedBuffer
     //
     // Locks in the post-fix invariant that a reth-shaped reorg notification
