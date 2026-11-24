@@ -460,4 +460,31 @@ mod tests {
             .map(|value| value.to_string_lossy().into_owned());
         assert_eq!(from_env.as_deref(), Some(url));
     }
+
+    #[tokio::test]
+    async fn start_server_spawns_the_child_without_putting_the_url_on_argv() {
+        let url = "postgresql://rindexer:super-secret@pg.example.com:5432/rindexer";
+        let mut child =
+            start_server(Path::new("/bin/true"), url, "foo_mint", &3001, true, true, true)
+                .await
+                .expect("spawn /bin/true");
+        let status = child.wait().expect("wait");
+        assert!(status.success());
+    }
+
+    #[tokio::test]
+    async fn start_server_reports_a_missing_executable() {
+        let err = start_server(
+            Path::new("/no/such/rindexer-graphql"),
+            "postgresql://rindexer:secret@localhost/db",
+            "foo_mint",
+            &3001,
+            false,
+            false,
+            false,
+        )
+        .await
+        .expect_err("missing binary");
+        assert!(!err.is_empty());
+    }
 }
