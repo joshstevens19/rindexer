@@ -292,17 +292,20 @@ fn spawn_start_server(
     });
 }
 
-async fn start_server(
+fn graphql_command(
     rindexer_graphql_exe: &Path,
     connection_string: &str,
     schemas: &str,
-    port: &u16,
+    port: u16,
     filter_only_on_indexed_columns: bool,
     disable_advanced_filters: bool,
     skip_node_alias_plugin: bool,
-) -> Result<Child, String> {
-    Command::new(rindexer_graphql_exe)
-        .arg(connection_string)
+) -> Command {
+    let mut command = Command::new(rindexer_graphql_exe);
+    // The URL used to be argv[0]. `ps` prints argv, so the database password
+    // showed up in the process list. The child reads it from the env instead.
+    command
+        .env("RINDEXER_GRAPHQL_DATABASE_URL", connection_string)
         .arg(schemas)
         .arg(port.to_string())
         // graphql_limit
@@ -313,9 +316,30 @@ async fn start_server(
         .arg(disable_advanced_filters.to_string())
         .arg(skip_node_alias_plugin.to_string())
         .stdout(Stdio::null())
-        .stderr(Stdio::inherit()) // Show errors from GraphQL server
-        .spawn()
-        .map_err(|e| e.to_string())
+        .stderr(Stdio::inherit());
+    command
+}
+
+async fn start_server(
+    rindexer_graphql_exe: &Path,
+    connection_string: &str,
+    schemas: &str,
+    port: &u16,
+    filter_only_on_indexed_columns: bool,
+    disable_advanced_filters: bool,
+    skip_node_alias_plugin: bool,
+) -> Result<Child, String> {
+    graphql_command(
+        rindexer_graphql_exe,
+        connection_string,
+        schemas,
+        *port,
+        filter_only_on_indexed_columns,
+        disable_advanced_filters,
+        skip_node_alias_plugin,
+    )
+    .spawn()
+    .map_err(|e| e.to_string())
 }
 
 async fn perform_health_check(
@@ -404,3 +428,63 @@ async fn perform_health_check(
 //     }
 //     Ok(())
 // }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn graphql_process_does_not_put_the_database_url_on_argv() {
+        let url = "postgresql://rindexer:super-secret@pg.example.com:5432/rindexer";
+        let command = graphql_command(
+            Path::new("rindexer-graphql"),
+            url,
+            "foo_mint",
+            3001,
+            false,
+            false,
+            false,
+        );
+
+        let args: Vec<String> =
+            command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect();
+        assert!(
+            args.iter().all(|arg| !arg.contains("super-secret") && !arg.contains("postgresql://")),
+            "database url leaked onto argv: {args:?}"
+        );
+
+        let from_env = command
+            .get_envs()
+            .find(|(key, _)| *key == "RINDEXER_GRAPHQL_DATABASE_URL")
+            .and_then(|(_, value)| value)
+            .map(|value| value.to_string_lossy().into_owned());
+        assert_eq!(from_env.as_deref(), Some(url));
+    }
+
+    #[tokio::test]
+    async fn start_server_spawns_the_child_without_putting_the_url_on_argv() {
+        let url = "postgresql://rindexer:super-secret@pg.example.com:5432/rindexer";
+        let mut child =
+            start_server(Path::new("/bin/true"), url, "foo_mint", &3001, true, true, true)
+                .await
+                .expect("spawn /bin/true");
+        let status = child.wait().expect("wait");
+        assert!(status.success());
+    }
+
+    #[tokio::test]
+    async fn start_server_reports_a_missing_executable() {
+        let err = start_server(
+            Path::new("/no/such/rindexer-graphql"),
+            "postgresql://rindexer:secret@localhost/db",
+            "foo_mint",
+            &3001,
+            false,
+            false,
+            false,
+        )
+        .await
+        .expect_err("missing binary");
+        assert!(!err.is_empty());
+    }
+}
