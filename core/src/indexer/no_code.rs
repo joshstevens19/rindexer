@@ -152,6 +152,16 @@ pub fn resolve_table_column_types(
     Ok(())
 }
 
+/// The ABI overload whose canonical signature matches `event_info`.
+/// Duplicate Solidity names live in one `JsonAbi` vec; `.first()` would decode
+/// every copy with the first overload's inputs.
+fn json_abi_event(abi: &JsonAbi, event_info: &EventInfo) -> Option<Event> {
+    let signature = event_info.signature();
+    abi.events
+        .get(event_info.abi_name())
+        .and_then(|events| events.iter().find(|event| event.signature() == signature).cloned())
+}
+
 /// Build an `event_name -> field_name -> solidity_type` map from a list of ABI items.
 #[allow(clippy::result_large_err)]
 fn build_event_abi_types(
@@ -168,7 +178,7 @@ fn build_event_abi_types(
                 .iter()
                 .map(|input| (input.name.clone(), input.type_.clone()))
                 .collect();
-            (event_info.name.clone(), column_types)
+            (event_info.abi_name().to_string(), column_types)
         })
         .collect())
 }
@@ -768,7 +778,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                 let prepared = if run_table_ops {
                     match prepare_table_operations(
                         &params.tables,
-                        &params.event_info.name,
+                        params.event_info.abi_name(),
                         &table_events_data,
                         params.providers.clone(),
                         &params.constants,
@@ -1015,7 +1025,7 @@ params.postgres.clone(),
                     );
                     if let Err(e) = process_table_operations(
                         &params.tables,
-                        &params.event_info.name,
+                        params.event_info.abi_name(),
                         &table_events_data,
                         #[cfg(feature = "postgres")]
 params.postgres.clone(),
@@ -1068,7 +1078,7 @@ params.clickhouse.clone(),
 
                 for (block_number, block_events) in events_by_block {
                     let event_message = EventMessage {
-                        event_name: params.event_info.name.clone(),
+                        event_name: params.event_info.abi_name().to_string(),
                         event_data: Value::Array(block_events),
                         event_signature_hash: params.event.selector(),
                         network: network.clone(),
@@ -1127,7 +1137,7 @@ params.clickhouse.clone(),
             }
 
             let event_message = EventMessage {
-                event_name: params.event_info.name.clone(),
+                event_name: params.event_info.abi_name().to_string(),
                 event_data: Value::Array(chat_event_data),
                 event_signature_hash: params.event.selector(),
                 network: network.clone(),
@@ -1391,18 +1401,10 @@ async fn process_contract(
     let mut events: Vec<EventCallbackRegistryInformation> = vec![];
 
     for event_info in event_names {
-        let event_name = event_info.name.clone();
-        let event = abi
-            .events
-            .get(&event_name)
-            .and_then(|events| events.first())
-            .ok_or_else(|| {
-                ProcessIndexersError::EventNameNotFoundInAbi(
-                    contract.name.clone(),
-                    event_name.clone(),
-                )
-            })?
-            .clone();
+        let event_name = event_info.abi_name().to_string();
+        let event = json_abi_event(&abi, &event_info).ok_or_else(|| {
+            ProcessIndexersError::EventNameNotFoundInAbi(contract.name.clone(), event_name.clone())
+        })?;
 
         let contract_information = ContractInformation::create(
             project_path,
@@ -1447,10 +1449,8 @@ async fn process_contract(
             None
         };
 
-        let index_event_in_order = contract
-            .index_event_in_order
-            .as_ref()
-            .is_some_and(|vec| vec.contains(&event_info.name));
+        let index_event_in_order =
+            contract.index_event_in_order.as_ref().is_some_and(|vec| vec.contains(&event_name));
 
         // Build custom tables for this contract
         let contract_tables: Vec<TableRuntime> = contract
@@ -1469,7 +1469,7 @@ async fn process_contract(
         // that drive custom tables, the reorg recomputation source of truth)
         let store_raw_events = contract.stores_raw_events(&event_name);
 
-        let is_factory_event = contract.is_factory_only_event(&event_info.name);
+        let is_factory_event = contract.is_factory_only_event(&event_name);
         let atomic_safe_concurrency =
             index_event_in_order || manifest.config.callback_concurrency.unwrap_or(1) <= 1;
 
@@ -1478,7 +1478,7 @@ async fn process_contract(
         let event = EventCallbackRegistryInformation {
             id: generate_random_id(10),
             indexer_name: manifest.name.clone(),
-            event_name: event_info.name.clone(),
+            event_name: event_name.clone(),
             index_event_in_order,
             topic_id: event_info.topic_id(),
             contract: contract_information,
@@ -1544,26 +1544,10 @@ pub async fn process_trace_events(
     let contract_name = NATIVE_TRANSFER_CONTRACT_NAME.to_string();
 
     for event_info in event_names {
-        let event_name = event_info.name.clone();
-        let event = &abi
-            .events
-            .iter()
-            .find(|(name, _)| *name == &event_name)
-            .map(|(_, event)| event)
-            .ok_or_else(|| {
-                ProcessIndexersError::EventNameNotFoundInAbi(
-                    contract_name.clone(),
-                    event_name.clone(),
-                )
-            })?
-            .first()
-            .ok_or_else(|| {
-                ProcessIndexersError::EventNameNotFoundInAbi(
-                    contract_name.clone(),
-                    event_name.clone(),
-                )
-            })?
-            .clone();
+        let event_name = event_info.abi_name().to_string();
+        let event = json_abi_event(&abi, &event_info).ok_or_else(|| {
+            ProcessIndexersError::EventNameNotFoundInAbi(contract_name.clone(), event_name.clone())
+        })?;
 
         let trace_information =
             TraceInformation::create(manifest.native_transfers.clone(), network_providers)?;
@@ -1665,7 +1649,7 @@ pub async fn process_trace_events(
         let event = TraceCallbackRegistryInformation {
             id: generate_random_id(10),
             indexer_name: manifest.name.clone(),
-            event_name: event_info.name.clone(),
+            event_name: event_name.clone(),
             contract_name: contract_name.clone(),
             trace_information: trace_information.clone(),
             callback: no_code_callback(callback_params).trace_callback,
@@ -1743,5 +1727,23 @@ storage:
             .find(|c| c.name == "total_sent")
             .expect("total_sent column present");
         assert_eq!(total_sent.resolved_type(), &ColumnType::Uint256);
+    }
+
+    #[test]
+    fn duplicate_event_names_resolve_to_their_own_abi_overload() {
+        let abi_json = r#"[
+            {"type":"event","name":"Foo","inputs":[{"name":"a","type":"uint256","indexed":false}],"anonymous":false},
+            {"type":"event","name":"Foo","inputs":[{"name":"b","type":"address","indexed":true}],"anonymous":false}
+        ]"#;
+        let abi: alloy::json_abi::JsonAbi = serde_json::from_str(abi_json).unwrap();
+        let items: Vec<crate::abi::ABIItem> = serde_json::from_str(abi_json).unwrap();
+        let events =
+            crate::abi::ABIItem::extract_event_names_and_signatures_from_abi(items).unwrap();
+
+        let first = super::json_abi_event(&abi, &events[0]).unwrap();
+        let second = super::json_abi_event(&abi, &events[1]).unwrap();
+        assert_eq!(first.signature(), "Foo(uint256)");
+        assert_eq!(second.signature(), "Foo(address)");
+        assert_ne!(first.selector(), second.selector());
     }
 }
