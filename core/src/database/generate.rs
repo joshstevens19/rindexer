@@ -384,8 +384,11 @@ pub fn generate_tables_for_indexer_sql(
 
             // Create raw event tables for every event whose raw events the
             // runtime stores (include_events plus table-driving events)
-            let raw_events: Vec<_> =
-                events.iter().filter(|e| contract.stores_raw_events(&e.name)).cloned().collect();
+            let raw_events: Vec<_> = events
+                .iter()
+                .filter(|e| contract.stores_raw_events(e.abi_name()))
+                .cloned()
+                .collect();
 
             if !raw_events.is_empty() {
                 let event_matching_name_on_other = find_clashing_event_names(

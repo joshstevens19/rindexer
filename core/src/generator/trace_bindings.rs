@@ -122,7 +122,7 @@ fn generate_event_type_name(name: &str) -> String {
 fn generate_event_names_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> Code {
     let mut arms = event_info
         .iter()
-        .map(|info| format!("{}::{}(_) => \"{}\",", event_type_name, info.name, info.name))
+        .map(|info| format!("{}::{}(_) => \"{}\",", event_type_name, info.name, info.abi_name()))
         .collect::<Vec<_>>();
 
     // Add Block event match arm

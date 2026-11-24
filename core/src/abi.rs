@@ -1,4 +1,8 @@
-use std::{collections::HashSet, fs, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::Path,
+};
 
 use alloy::{
     primitives::{keccak256, B256},
@@ -267,6 +271,7 @@ impl ABIItem {
                 events.push(EventInfo::new(item)?);
             }
         }
+        disambiguate_duplicate_event_names(&mut events);
         Ok(events)
     }
 
@@ -338,11 +343,52 @@ impl ABIItem {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventInfo {
+    /// Rust type name and SQL identifier. Equals [`Self::abi_name`] when that
+    /// name is unique in the ABI. Overloaded copies are `Name_0`, `Name_1`, …
+    /// (alloy's suffix), because generated structs and tables cannot share a name.
     pub name: String,
+    /// Solidity event name, before disambiguation. YAML (`include_events`,
+    /// filters, streams, `index_event_in_order`) refers to this.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    abi_name: String,
     pub inputs: Vec<ABIInput>,
     signature: String,
     struct_result: String,
     struct_data: String,
+}
+
+/// Alloy suffixes every overload (`Swap_0`, `Swap_1`), not just the second
+/// copy. A name that appears once is left exactly as written. A candidate that
+/// is already taken (the ABI also has an event literally named `Foo_0`) skips
+/// to the next free index.
+fn disambiguate_duplicate_event_names(events: &mut [EventInfo]) {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for event in events.iter() {
+        *counts.entry(event.abi_name().to_string()).or_insert(0) += 1;
+    }
+
+    let mut taken: HashSet<String> = events
+        .iter()
+        .filter(|event| counts.get(event.abi_name()).copied().unwrap_or(0) <= 1)
+        .map(|event| event.name.clone())
+        .collect();
+
+    let mut next_index: HashMap<String, usize> = HashMap::new();
+    for event in events.iter_mut() {
+        let abi_name = event.abi_name().to_string();
+        if counts.get(&abi_name).copied().unwrap_or(0) <= 1 {
+            continue;
+        }
+        let index = next_index.entry(abi_name.clone()).or_insert(0);
+        loop {
+            let candidate = format!("{abi_name}_{index}");
+            *index += 1;
+            if taken.insert(candidate.clone()) {
+                event.apply_unique_name(candidate);
+                break;
+            }
+        }
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -357,12 +403,34 @@ impl EventInfo {
         let struct_data = format!("{}Data", item.name);
         let signature = item.format_event_signature()?;
         Ok(EventInfo {
+            abi_name: item.name.clone(),
             name: item.name,
             inputs: item.inputs,
             signature,
             struct_result,
             struct_data,
         })
+    }
+
+    /// Solidity name. YAML and stream filters use this, not [`Self::name`].
+    pub fn abi_name(&self) -> &str {
+        if self.abi_name.is_empty() {
+            &self.name
+        } else {
+            &self.abi_name
+        }
+    }
+
+    /// Canonical `Name(type,type)` preimage. Unchanged by disambiguation, so
+    /// topic0 still matches the chain.
+    pub fn signature(&self) -> &str {
+        &self.signature
+    }
+
+    fn apply_unique_name(&mut self, unique: String) {
+        self.struct_result = format!("{unique}Result");
+        self.struct_data = format!("{unique}Data");
+        self.name = unique;
     }
 
     pub fn topic_id(&self) -> B256 {
@@ -501,5 +569,71 @@ pub fn get_abi_item_with_db_map(
         None => Err(GetAbiItemWithDbMapError::ParameterNotFound(format!(
             "Event {event_name} not found in contract ABI"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn events_from(json: serde_json::Value) -> Vec<EventInfo> {
+        let items: Vec<ABIItem> = serde_json::from_value(json).expect("abi json");
+        ABIItem::extract_event_names_and_signatures_from_abi(items).expect("events")
+    }
+
+    #[test]
+    fn duplicate_event_names_get_distinct_rust_type_names() {
+        // Two events can share a Solidity name and differ by inputs. Generated
+        // structs are named after `EventInfo::name`, so a shared name does not compile.
+        let events = events_from(serde_json::json!([
+            {"type":"event","name":"Lens_Account_MetadataURISet","inputs":[{"name":"metadataURI","type":"string"}],"anonymous":false},
+            {"type":"event","name":"Bar","inputs":[],"anonymous":false},
+            {"type":"event","name":"Lens_Account_MetadataURISet","inputs":[{"name":"metadataURI","type":"string"},{"name":"source","type":"address"}],"anonymous":false}
+        ]));
+
+        assert_eq!(events[0].name, "Lens_Account_MetadataURISet_0");
+        assert_eq!(events[0].abi_name(), "Lens_Account_MetadataURISet");
+        assert_eq!(events[0].struct_data(), "Lens_Account_MetadataURISet_0Data");
+        assert_eq!(events[0].struct_result(), "Lens_Account_MetadataURISet_0Result");
+        assert!(events[0].signature().starts_with("Lens_Account_MetadataURISet("));
+        assert!(!events[0].signature().contains("_0"));
+        assert_eq!(events[1].name, "Bar");
+        assert_eq!(events[1].abi_name(), "Bar");
+        assert_eq!(events[1].struct_data(), "BarData");
+        assert_eq!(events[2].name, "Lens_Account_MetadataURISet_1");
+        assert_eq!(events[2].abi_name(), "Lens_Account_MetadataURISet");
+        assert_eq!(events[2].struct_data(), "Lens_Account_MetadataURISet_1Data");
+        assert_ne!(events[0].topic_id(), events[2].topic_id());
+    }
+
+    #[test]
+    fn duplicate_suffix_skips_a_name_the_abi_already_uses() {
+        let events = events_from(serde_json::json!([
+            {"type":"event","name":"Foo","inputs":[{"name":"a","type":"uint256"}],"anonymous":false},
+            {"type":"event","name":"Foo_0","inputs":[],"anonymous":false},
+            {"type":"event","name":"Foo","inputs":[{"name":"a","type":"address"}],"anonymous":false}
+        ]));
+        assert_eq!(events[0].name, "Foo_1");
+        assert_eq!(events[0].abi_name(), "Foo");
+        assert_eq!(events[1].name, "Foo_0");
+        assert_eq!(events[1].abi_name(), "Foo_0");
+        assert_eq!(events[2].name, "Foo_2");
+        assert_eq!(events[2].abi_name(), "Foo");
+    }
+
+    #[test]
+    fn unique_event_name_is_left_alone() {
+        let events = events_from(serde_json::json!([
+            {"type":"event","name":"Transfer","inputs":[
+                {"name":"from","type":"address"},
+                {"name":"to","type":"address"},
+                {"name":"value","type":"uint256"}
+            ],"anonymous":false}
+        ]));
+        assert_eq!(events[0].name, "Transfer");
+        assert_eq!(events[0].abi_name(), "Transfer");
+        assert_eq!(events[0].signature(), "Transfer(address,address,uint256)");
+        assert_eq!(events[0].struct_result(), "TransferResult");
+        assert_eq!(events[0].struct_data(), "TransferData");
     }
 }
