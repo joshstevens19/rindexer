@@ -7,20 +7,25 @@ const ConnectionFilterPlugin = require("postgraphile-plugin-connection-filter");
 const { PgNodeAliasPostGraphile } = require("graphile-build-pg");
 
 const args = process.argv.slice(2);
+const connectionString = process.env.RINDEXER_GRAPHQL_DATABASE_URL;
 
-if (args.length < 5) {
-    console.error("Usage: postgraphile <connectionString> <schemas> <port> <page_limit> <timeout> <filterOnlyOnIndexedColumns> <disableAdvancedFilters> <skipNodeAliasPlugin>");
+if (!connectionString) {
+    console.error("RINDEXER_GRAPHQL_DATABASE_URL must be set");
     process.exit(1);
 }
 
-const connectionString = args[0];
-const schemas = args[1].split(",");
-const port = parseInt(args[2]);
-let graphqlPageLimit = parseInt(args[3]);
-let graphqlTimeout = parseInt(args[4]);
-let filterOnlyOnIndexedColumns = args[5] === "true";
-let disableAdvancedFilters = args[6] === "true";
-let skipNodeAliasPlugin = args[7] === "true";
+if (args.length < 4) {
+    console.error("Usage: postgraphile <schemas> <port> <page_limit> <timeout> <filterOnlyOnIndexedColumns> <disableAdvancedFilters> <skipNodeAliasPlugin>");
+    process.exit(1);
+}
+
+const schemas = args[0].split(",");
+const port = parseInt(args[1]);
+let graphqlPageLimit = parseInt(args[2]);
+let graphqlTimeout = parseInt(args[3]);
+let filterOnlyOnIndexedColumns = args[4] === "true";
+let disableAdvancedFilters = args[5] === "true";
+let skipNodeAliasPlugin = args[6] === "true";
 
 const byteaToHex = makeWrapResolversPlugin(
     (context) => {
