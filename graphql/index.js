@@ -1,5 +1,6 @@
 const express = require('express')
 const cors = require('cors')
+const { corsOptionsFromEnv } = require("./cors");
 const { postgraphile } = require("postgraphile");
 const { makeWrapResolversPlugin } = require("graphile-utils");
 const PgSimplifyInflectorPlugin = require("@graphile-contrib/pg-simplify-inflector");
@@ -26,6 +27,14 @@ let graphqlTimeout = parseInt(args[3]);
 let filterOnlyOnIndexedColumns = args[4] === "true";
 let disableAdvancedFilters = args[5] === "true";
 let skipNodeAliasPlugin = args[6] === "true";
+
+let corsOptions;
+try {
+    corsOptions = corsOptionsFromEnv(process.env.RINDEXER_GRAPHQL_ALLOWED_ORIGINS);
+} catch (err) {
+    console.error(err.message);
+    process.exit(1);
+}
 
 const byteaToHex = makeWrapResolversPlugin(
     (context) => {
@@ -70,7 +79,7 @@ const options = {
     host: "localhost",
     disableDefaultMutations: true,
     dynamicJson: true,
-    cors: true,
+    cors: corsOptions ?? true,
     retryOnInitFail: true,
     enableQueryBatching: true,
     sortExport: true,
@@ -120,7 +129,7 @@ const htmlContent = `
 `;
 
 const app = express()
-app.use(cors())
+app.use(corsOptions ? cors(corsOptions) : cors())
 app.use(express.json())
 app.use(postgraphile(connectionString, schemas, options))
 
