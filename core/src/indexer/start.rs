@@ -337,6 +337,7 @@ async fn start_indexing_traces(
             method: network_details.method,
             stream_last_synced_block_file_path: None,
             cancel_token: cancel_token.clone(),
+            live_indexing: !no_live_indexing_forced,
         });
 
         let reorg_coordinator = network_coordinators.get(&network_name).cloned();

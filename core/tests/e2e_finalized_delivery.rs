@@ -27,6 +27,7 @@ fn webhook_config(endpoint: &str, delivery: Option<StreamDeliveryMode>) -> Webho
         networks: vec![NETWORK.to_string()],
         events: vec![stream_event("Transfer")],
         delivery,
+        live_indexed_only: false,
     }
 }
 
@@ -133,6 +134,7 @@ async fn mixed_instant_and_finalized_on_same_clients() {
             networks: vec![NETWORK.to_string()],
             events: vec![stream_event("Transfer")],
             delivery: Some(StreamDeliveryMode::Instant),
+            live_indexed_only: false,
         },
         WebhookStreamConfig {
             endpoint: format!("{}/finalized", finalized_server.url()),
@@ -140,6 +142,7 @@ async fn mixed_instant_and_finalized_on_same_clients() {
             networks: vec![NETWORK.to_string()],
             events: vec![stream_event("Transfer")],
             delivery: Some(StreamDeliveryMode::Finalized),
+            live_indexed_only: false,
         },
     ])
     .await;

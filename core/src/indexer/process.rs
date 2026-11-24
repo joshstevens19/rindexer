@@ -977,16 +977,24 @@ async fn handle_logs_result(
                 .collect::<Vec<_>>();
 
             if let Ok(permit) = callback_permits.clone().acquire_owned().await {
+                let live = config.live_indexing();
                 let task = tokio::spawn(async move {
                     let _writer_guard = writer_guard;
-                    trigger_event(config, fn_data, result.to_block).await;
-                    drop(permit)
+                    crate::indexing_phase::with_indexing_phase(live, async move {
+                        trigger_event(config, fn_data, result.to_block).await;
+                        drop(permit);
+                    })
+                    .await;
                 });
 
                 Ok(task)
             } else {
                 let _writer_guard = writer_guard;
-                trigger_event(config, fn_data, result.to_block).await;
+                let live = config.live_indexing();
+                crate::indexing_phase::with_indexing_phase(live, async move {
+                    trigger_event(config, fn_data, result.to_block).await;
+                })
+                .await;
                 Ok(tokio::spawn(async {}))
             }
         }

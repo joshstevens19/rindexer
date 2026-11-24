@@ -556,6 +556,12 @@ impl StreamsClients {
         Self::refresh_depth_gauge_under_lock(&map, &event_message.network);
     }
 
+    /// Historical batches are the default. `live_indexed_only` destinations
+    /// publish only while [`crate::in_live_indexing`] is set.
+    fn phase_allows(live_indexed_only: bool) -> bool {
+        !live_indexed_only || crate::in_live_indexing()
+    }
+
     fn should_send_for_config(
         config_events: &[StreamEvent],
         event_name: &str,
@@ -910,6 +916,7 @@ impl StreamsClients {
                         is_trace_event,
                         force_send_network_wide,
                     ) && config.networks.contains(&event_message.network)
+                        && Self::phase_allows(config.live_indexed_only)
                     {
                         if Self::should_buffer(
                             config.delivery.as_ref(),
@@ -939,6 +946,7 @@ impl StreamsClients {
                         is_trace_event,
                         force_send_network_wide,
                     ) && config.networks.contains(&event_message.network)
+                        && Self::phase_allows(config.live_indexed_only)
                     {
                         if Self::should_buffer(
                             config.delivery.as_ref(),
@@ -969,6 +977,7 @@ impl StreamsClients {
                         is_trace_event,
                         force_send_network_wide,
                     ) && config.networks.contains(&event_message.network)
+                        && Self::phase_allows(config.live_indexed_only)
                     {
                         if Self::should_buffer(
                             config.delivery.as_ref(),
@@ -999,6 +1008,7 @@ impl StreamsClients {
                         is_trace_event,
                         force_send_network_wide,
                     ) && config.networks.contains(&event_message.network)
+                        && Self::phase_allows(config.live_indexed_only)
                     {
                         if Self::should_buffer(
                             config.delivery.as_ref(),
@@ -1029,6 +1039,7 @@ impl StreamsClients {
                         is_trace_event,
                         force_send_network_wide,
                     ) && config.networks.contains(&event_message.network)
+                        && Self::phase_allows(config.live_indexed_only)
                     {
                         if Self::should_buffer(
                             config.delivery.as_ref(),
@@ -1058,6 +1069,7 @@ impl StreamsClients {
                         is_trace_event,
                         force_send_network_wide,
                     ) && config.networks.contains(&event_message.network)
+                        && Self::phase_allows(config.live_indexed_only)
                     {
                         if Self::should_buffer(
                             config.delivery.as_ref(),
@@ -1801,6 +1813,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn live_indexed_only_webhook_skips_historical_and_sends_on_live() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server.mock("POST", "/hook").with_status(200).expect(1).create_async().await;
+        let config = WebhookStreamConfig {
+            endpoint: format!("{}/hook", server.url()),
+            shared_secret: "s".to_string(),
+            networks: vec!["ethereum".to_string()],
+            events: vec![stream_event("Transfer")],
+            delivery: None,
+            live_indexed_only: true,
+        };
+        let msg = sample_event_message();
+        let historical = webhook_clients(vec![config.clone()])
+            .stream("hist".to_string(), &msg, false, false)
+            .await
+            .unwrap();
+        assert_eq!(historical, 0, "historical pass must not publish");
+
+        let live = crate::indexing_phase::with_indexing_phase(true, async {
+            webhook_clients(vec![config]).stream("live".to_string(), &msg, false, false).await
+        })
+        .await
+        .unwrap();
+        assert_eq!(live, 1);
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn stream_skips_webhook_on_network_mismatch() {
         let config = WebhookStreamConfig {
             endpoint: "http://127.0.0.1:1/hook".to_string(),
@@ -1808,6 +1848,7 @@ mod tests {
             networks: vec!["polygon".to_string()],
             events: vec![stream_event("Transfer")],
             delivery: None,
+            live_indexed_only: false,
         };
         let msg = sample_event_message(); // network: ethereum
         let result =
@@ -1823,6 +1864,7 @@ mod tests {
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Approval")],
             delivery: None,
+            live_indexed_only: false,
         };
         let msg = sample_event_message(); // event: Transfer
         let result =
@@ -1846,6 +1888,7 @@ mod tests {
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Transfer")],
             delivery: None,
+            live_indexed_only: false,
         };
 
         let msg = sample_event_message();
@@ -1869,6 +1912,7 @@ mod tests {
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Transfer")],
             delivery: None,
+            live_indexed_only: false,
         };
 
         let msg = sample_event_message();
@@ -1890,6 +1934,7 @@ mod tests {
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Transfer")], // does not include NativeTransfer
             delivery: None,
+            live_indexed_only: false,
         };
 
         let msg = EventMessage {
@@ -1923,6 +1968,7 @@ mod tests {
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Transfer")], // no NativeTransfer entry
             delivery: Some(crate::manifest::stream::StreamDeliveryMode::Finalized),
+            live_indexed_only: false,
         };
 
         let clients = webhook_clients(vec![config]);
@@ -1969,6 +2015,7 @@ mod tests {
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Transfer")],
             delivery: None,
+            live_indexed_only: false,
         };
 
         let msg = sample_event_message();
@@ -2043,6 +2090,7 @@ mod tests {
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Transfer")], // doesn't matter, force_send
             delivery: None,
+            live_indexed_only: false,
         };
 
         let tables =
@@ -2083,6 +2131,7 @@ mod tests {
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Transfer")],
             delivery: None,
+            live_indexed_only: false,
         };
 
         let tables = vec![affected_table(
@@ -2129,6 +2178,7 @@ mod tests {
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Transfer")],
             delivery: None,
+            live_indexed_only: false,
         };
 
         let result =
@@ -2154,6 +2204,7 @@ mod tests {
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Transfer")],
             delivery: None,
+            live_indexed_only: false,
         };
 
         let msg = sample_event_message();
@@ -2172,6 +2223,7 @@ mod tests {
             networks: vec!["polygon".to_string()],
             events: vec![stream_event("Transfer")],
             delivery: None,
+            live_indexed_only: false,
         };
 
         let msg = sample_event_message(); // network: ethereum
@@ -2350,6 +2402,7 @@ mod tests {
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Transfer")],
             delivery: None,
+            live_indexed_only: false,
         };
         let clients = webhook_clients(vec![config]);
         seed_buffer(&clients, "ethereum", "Transfer", &[100, 101], 10).await;
@@ -2379,6 +2432,7 @@ mod tests {
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Transfer")],
             delivery: None,
+            live_indexed_only: false,
         };
         let clients = webhook_clients(vec![config]);
         let all: Vec<u64> = (95..=115).collect();
@@ -2451,6 +2505,7 @@ mod tests {
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Transfer")],
             delivery: None,
+            live_indexed_only: false,
         };
         let good_cfg = WebhookStreamConfig {
             endpoint: format!("{}/good", server.url()),
@@ -2458,6 +2513,7 @@ mod tests {
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Transfer")],
             delivery: None,
+            live_indexed_only: false,
         };
         let clients = webhook_clients(vec![bad_cfg, good_cfg]);
 
@@ -2511,6 +2567,7 @@ mod tests {
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Transfer")],
             delivery: None,
+            live_indexed_only: false,
         };
         let clients = webhook_clients(vec![config]);
 
@@ -2545,6 +2602,7 @@ mod tests {
             networks: vec!["ethereum".to_string()],
             events: vec![stream_event("Transfer")],
             delivery: None,
+            live_indexed_only: false,
         };
         let clients = webhook_clients(vec![config]);
 
@@ -2580,6 +2638,7 @@ mod tests {
             networks: vec![network.to_string()],
             events: vec![stream_event("Transfer")],
             delivery: None,
+            live_indexed_only: false,
         };
         let clients = webhook_clients(vec![config]);
 

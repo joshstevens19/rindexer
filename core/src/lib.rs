@@ -5,6 +5,8 @@ pub mod generator;
 pub mod hot_reload;
 pub use hot_reload::RELOAD_EXIT_CODE;
 pub mod indexer;
+mod indexing_phase;
+pub use indexing_phase::in_live_indexing;
 pub mod layer_extensions;
 pub mod manifest;
 pub mod metrics;

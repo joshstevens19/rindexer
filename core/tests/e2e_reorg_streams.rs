@@ -117,6 +117,7 @@ async fn stream_reorg_reaches_redis() {
             // Intentionally empty — reorg routing must bypass event-name filtering.
             events: vec![],
             delivery: None,
+            live_indexed_only: false,
         }],
     };
 
@@ -251,6 +252,7 @@ async fn stream_reorg_reaches_rabbitmq() {
             networks: vec!["ethereum".to_string()],
             events: vec![],
             delivery: None,
+            live_indexed_only: false,
         }],
     };
 
@@ -353,6 +355,7 @@ async fn stream_reorg_reaches_kafka() {
             networks: vec!["ethereum".to_string()],
             events: vec![],
             delivery: None,
+            live_indexed_only: false,
         }],
     };
 
@@ -435,6 +438,7 @@ async fn stream_reorg_reaches_cloudflare_queues() {
             networks: vec!["ethereum".to_string()],
             events: vec![],
             delivery: None,
+            live_indexed_only: false,
         }],
     };
 

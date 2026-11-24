@@ -566,11 +566,15 @@ pub async fn native_transfer_block_consumer(
             TraceResult::new_block(b, network_name, provider.chain().id(), from_block, to_block)
         })
         .collect::<Vec<_>>();
-    config.trigger_event(blocks).await;
+    let live = config.live_indexing;
+    crate::indexing_phase::with_indexing_phase(live, async {
+        config.trigger_event(blocks).await;
 
-    if !native_transfers.is_empty() {
-        config.trigger_event(native_transfers).await;
-    }
+        if !native_transfers.is_empty() {
+            config.trigger_event(native_transfers).await;
+        }
+    })
+    .await;
 
     evm_trace_update_progress_and_last_synced_task(
         config.clone(),
@@ -785,6 +789,7 @@ mod tests {
             method: TraceProcessingMethod::TraceBlock,
             stream_last_synced_block_file_path: None,
             cancel_token: CancellationToken::new(),
+            live_indexing: false,
         };
 
         let result = provider_trace_call(provider, &config, U64::from(100u64)).await;
@@ -835,6 +840,7 @@ mod tests {
             method: TraceProcessingMethod::DebugTraceBlockByNumber,
             stream_last_synced_block_file_path: None,
             cancel_token: CancellationToken::new(),
+            live_indexing: false,
         };
 
         let result = provider_trace_call(provider, &config, U64::from(100u64)).await;
@@ -868,6 +874,7 @@ mod tests {
             method: TraceProcessingMethod::TraceBlock,
             stream_last_synced_block_file_path: None,
             cancel_token: CancellationToken::new(),
+            live_indexing: false,
         })
     }
 

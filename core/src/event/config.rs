@@ -285,6 +285,13 @@ impl EventProcessingConfig {
         }
     }
 
+    pub fn live_indexing(&self) -> bool {
+        match self {
+            Self::ContractEventProcessing(config) => config.live_indexing,
+            Self::FactoryEventProcessing(config) => config.live_indexing,
+        }
+    }
+
     pub fn contract_name(&self) -> String {
         match self {
             Self::ContractEventProcessing(config) => config.contract_name.clone(),
@@ -310,13 +317,6 @@ impl EventProcessingConfig {
         match self {
             Self::ContractEventProcessing(config) => config.event_name.clone(),
             Self::FactoryEventProcessing(config) => config.event.name.clone(),
-        }
-    }
-
-    pub fn live_indexing(&self) -> bool {
-        match self {
-            Self::ContractEventProcessing(config) => config.live_indexing,
-            Self::FactoryEventProcessing(config) => config.live_indexing,
         }
     }
 
@@ -473,6 +473,8 @@ pub struct TraceProcessingConfig {
     pub stream_last_synced_block_file_path: Option<String>,
     /// Per-generation cancellation token for hot-reload support.
     pub cancel_token: CancellationToken,
+    /// True on the live-indexing pass. Historical backfill leaves this false.
+    pub live_indexing: bool,
 }
 
 impl TraceProcessingConfig {

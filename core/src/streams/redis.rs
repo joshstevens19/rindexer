@@ -99,6 +99,7 @@ mod tests {
                 networks: vec!["ethereum".to_string()],
                 events: vec![],
                 delivery: None,
+                live_indexed_only: false,
             }],
         }
     }

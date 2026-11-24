@@ -20,6 +20,7 @@
 
 ### Features
 -------------------------------------------------
+- feat: **Stream only live events** — set `live_indexed_only: true` on a stream destination (webhook, SNS topic, Kafka topic, Redis stream, RabbitMQ exchange, Cloudflare queue) to skip historical backfill for that destination. Unset, historical events are still published. Rust handlers can call `rindexer::in_live_indexing()` (`false` during backfill, `true` on the live pass) without a signature change ([#208](https://github.com/joshstevens19/rindexer/issues/208)).
 
 ## Releases
 -------------------------------------------------

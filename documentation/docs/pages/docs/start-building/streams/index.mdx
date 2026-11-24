@@ -16,6 +16,24 @@ Rust projects do not get exposed to the stream clients yet but it can easily be 
 Note you can use all the streams together they are independent of each other, so if you wanted to us `kafka`,
 `webhooks`, `rabbitmq`, `sns`, `redis`, and `cloudflare_queues` together you can do that.
 
+## Live indexing only
+
+Set `live_indexed_only: true` on a destination (a webhook, a Kafka topic, an SNS topic, and the same field on the other providers) to skip historical backfill. The destination only receives batches from the live-indexing pass. Leave it unset and historical events are still published, same as before.
+
+```yaml
+streams:
+  webhooks:
+    - endpoint: https://example.com/hook
+      shared_secret: ${WEBHOOK_SECRET}
+      networks:
+        - ethereum
+      live_indexed_only: true
+      events:
+        - event_name: Transfer
+```
+
+Rust handlers can call `rindexer::in_live_indexing()`, which is `false` during backfill and `true` during the live pass. Existing handler signatures are unchanged.
+
 Supported stream providers:
 
 - [Webhooks](/docs/start-building/streams/webhooks) - Fire webhooks to your own APIs

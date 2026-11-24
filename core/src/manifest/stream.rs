@@ -46,6 +46,10 @@ pub struct SNSStreamTopicConfig {
     pub events: Vec<StreamEvent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery: Option<StreamDeliveryMode>,
+    /// When true, this destination only receives batches from the live-indexing
+    /// pass. Historical backfill is not published. Default false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub live_indexed_only: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -63,6 +67,10 @@ pub struct WebhookStreamConfig {
     pub events: Vec<StreamEvent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery: Option<StreamDeliveryMode>,
+    /// When true, this destination only receives batches from the live-indexing
+    /// pass. Historical backfill is not published. Default false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub live_indexed_only: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -85,6 +93,10 @@ pub struct RedisStreamStreamConfig {
     pub events: Vec<StreamEvent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery: Option<StreamDeliveryMode>,
+    /// When true, this destination only receives batches from the live-indexing
+    /// pass. Historical backfill is not published. Default false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub live_indexed_only: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -136,6 +148,10 @@ pub struct RabbitMQStreamQueueConfig {
     pub events: Vec<StreamEvent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery: Option<StreamDeliveryMode>,
+    /// When true, this destination only receives batches from the live-indexing
+    /// pass. Historical backfill is not published. Default false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub live_indexed_only: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -187,6 +203,10 @@ pub struct KafkaStreamQueueConfig {
     pub events: Vec<StreamEvent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery: Option<StreamDeliveryMode>,
+    /// When true, this destination only receives batches from the live-indexing
+    /// pass. Historical backfill is not published. Default false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub live_indexed_only: bool,
 }
 
 #[cfg(feature = "kafka")]
@@ -216,6 +236,10 @@ pub struct CloudflareQueuesStreamQueueConfig {
     pub events: Vec<StreamEvent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery: Option<StreamDeliveryMode>,
+    /// When true, this destination only receives batches from the live-indexing
+    /// pass. Historical backfill is not published. Default false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub live_indexed_only: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -350,5 +374,43 @@ impl StreamsConfig {
         if !full_path.exists() {
             fs::create_dir_all(&full_path).await.expect("Failed to create directory for stream");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn live_indexed_only_defaults_off_and_is_not_written_back() {
+        let config: WebhookStreamConfig = serde_yaml::from_str(
+            r#"
+endpoint: https://example.com/hook
+shared_secret: secret
+networks:
+  - ethereum
+events: []
+"#,
+        )
+        .unwrap();
+        assert!(!config.live_indexed_only);
+        let yaml = serde_yaml::to_string(&config).unwrap();
+        assert!(!yaml.contains("live_indexed_only"), "{yaml}");
+    }
+
+    #[test]
+    fn live_indexed_only_parses() {
+        let config: WebhookStreamConfig = serde_yaml::from_str(
+            r#"
+endpoint: https://example.com/hook
+shared_secret: secret
+networks:
+  - ethereum
+events: []
+live_indexed_only: true
+"#,
+        )
+        .unwrap();
+        assert!(config.live_indexed_only);
     }
 }
