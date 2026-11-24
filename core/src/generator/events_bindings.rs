@@ -124,7 +124,9 @@ fn generate_event_names_match_arms_code(event_type_name: &str, event_info: &[Eve
     Code::new(
         event_info
             .iter()
-            .map(|info| format!("{}::{}(_) => \"{}\",", event_type_name, info.name, info.name))
+            .map(|info| {
+                format!("{}::{}(_) => \"{}\",", event_type_name, info.name, info.abi_name())
+            })
             .collect::<Vec<_>>()
             .join("\n"),
     )
@@ -916,7 +918,7 @@ use super::super::super::typings::{indexer_name_formatted}::events::{handler_reg
                     // (Postgres sole sink, not a factory discovery event).
                     let atomic_optin_hint = if storage.postgres_enabled()
                         && !storage.csv_enabled()
-                        && !contract.is_factory_only_event(&event.name)
+                        && !contract.is_factory_only_event(event.abi_name())
                     {
                         "// Storage-only handler? `context.database.insert_bulk_with_cursor(...)`\n                    // commits this batch and the last-synced cursor in ONE transaction\n                    // (exactly-once raw events; see the rindexer changelog). Requires\n                    // `callback_concurrency` <= 1 and NO side effects after the call —\n                    // the cursor commits with the rows, so a crash after it will not\n                    // re-run this handler for the batch.\n                    "
                     } else {

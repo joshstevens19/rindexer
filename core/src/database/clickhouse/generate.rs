@@ -71,7 +71,7 @@ pub fn generate_tables_for_indexer_clickhouse(
             // runtime stores (include_events plus table-driving events)
             let raw_events: Vec<_> = event_names
                 .iter()
-                .filter(|e| contract.stores_raw_events(&e.name))
+                .filter(|e| contract.stores_raw_events(e.abi_name()))
                 .cloned()
                 .collect();
 
