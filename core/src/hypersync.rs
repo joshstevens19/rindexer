@@ -15,7 +15,8 @@
 //! `eth_getLogs` response cannot attest. Ranges HyperSync cannot serve (stream
 //! disconnected, wait timed out, query error) go to RPC exactly as without the flag, and
 //! `rindexer_hypersync_head_fallback_total` counts them. RPC still supplies the tip
-//! header, so parent-hash reorg detection and the bloom shortcut are unchanged.
+//! header, so parent-hash reorg detection and the bloom shortcut are unchanged. The
+//! RPC-backed shared tip-block cache is not used in this mode.
 
 use std::collections::HashMap;
 use std::fmt::{self, Debug};
@@ -254,6 +255,11 @@ pub async fn create_hypersync_provider(
 
     let head = if config.r#for == Some(HypersyncFor::Realtime) {
         info!("HyperSync serving the chain head for network {} ({}/height/sse)", network_name, url);
+        if rpc.shared_tip_logs().is_some() {
+            info!(
+                "shared tip logs not used for network {network_name}: `hypersync.for: realtime` serves live tips from HyperSync"
+            );
+        }
         Some(Head {
             feed: OnceLock::new(),
             wait: HEAD_WAIT,
@@ -547,7 +553,13 @@ impl ChainProvider for HypersyncProvider {
     }
 
     fn shared_tip_logs(&self) -> Option<Arc<SharedTipLogs>> {
-        self.rpc.shared_tip_logs()
+        // The shared tip-block cache reads its logs straight from the RPC node, so with
+        // `for: realtime` it would answer live tips without ever reaching `get_logs`
+        // below. Leaving it out makes every live stream ask this provider instead.
+        match self.head {
+            Some(_) => None,
+            None => self.rpc.shared_tip_logs(),
+        }
     }
 
     // The tip header stays RPC-authoritative even with `for: realtime`: the HyperSync
@@ -682,6 +694,152 @@ impl ChainProvider for HypersyncProvider {
 
     async fn eth_call_latest(&self, to: Address, data: Bytes) -> Result<String, ProviderError> {
         self.rpc.eth_call_latest(to, data).await
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    use arrow::array::{ArrayRef, BinaryArray, BooleanArray, RecordBatch, UInt64Array};
+    use arrow::ipc::writer::FileWriter;
+    use hypersync_net_types::hypersync_net_types_capnp::query_response;
+
+    use hypersync_client::SerializationFormat;
+
+    use super::*;
+
+    fn ipc(columns: Vec<(&str, ArrayRef)>) -> Vec<u8> {
+        let batch = RecordBatch::try_from_iter_with_nullable(
+            columns.into_iter().map(|(name, column)| (name, column, true)),
+        )
+        .expect("record batch");
+        let mut writer =
+            FileWriter::try_new(Vec::new(), batch.schema_ref()).expect("arrow ipc writer");
+        writer.write(&batch).expect("write batch");
+        writer.into_inner().expect("finish arrow ipc")
+    }
+
+    /// A `/query/arrow-ipc` response body holding `log` and covering up to its block.
+    fn response_body(log: &Log) -> Vec<u8> {
+        let number = log.block_number.expect("block number");
+        let binary = |bytes: &[u8]| -> ArrayRef { Arc::new(BinaryArray::from_vec(vec![bytes])) };
+        let uint = |value: u64| -> ArrayRef { Arc::new(UInt64Array::from(vec![value])) };
+        let topic = |index: usize| -> ArrayRef {
+            Arc::new(BinaryArray::from_opt_vec(vec![log
+                .topics()
+                .get(index)
+                .map(|topic| topic.as_slice())]))
+        };
+
+        let logs = ipc(vec![
+            ("removed", Arc::new(BooleanArray::from(vec![false])) as ArrayRef),
+            ("log_index", uint(log.log_index.expect("log index"))),
+            ("transaction_index", uint(0)),
+            ("transaction_hash", binary(B256::ZERO.as_slice())),
+            ("block_hash", binary(log.block_hash.expect("block hash").as_slice())),
+            ("block_number", uint(number)),
+            ("address", binary(log.address().as_slice())),
+            ("data", binary(&log.data().data)),
+            ("topic0", topic(0)),
+            ("topic1", topic(1)),
+            ("topic2", topic(2)),
+            ("topic3", topic(3)),
+        ]);
+        let blocks = ipc(vec![("number", uint(number)), ("timestamp", binary(&[1]))]);
+
+        let mut message = capnp::message::Builder::new_default();
+        let mut response = message.init_root::<query_response::Builder>();
+        response.set_archive_height(number as i64);
+        response.set_next_block(number + 1);
+        let mut data = response.init_data();
+        data.set_blocks(&blocks);
+        data.set_logs(&logs);
+        data.set_transactions(&ipc(vec![("hash", binary(B256::ZERO.as_slice()))])[..]);
+
+        let mut body = Vec::new();
+        capnp::serialize_packed::write_message(&mut body, &message).expect("write response");
+        body
+    }
+
+    /// Answers every HTTP request with a HyperSync query response holding `log`.
+    fn serve_query_responses(log: &Log) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind query listener");
+        let url = format!("http://{}", listener.local_addr().expect("listener addr"));
+        let body = response_body(log);
+
+        std::thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                // Drain the whole request, so closing the socket does not reset it.
+                let mut request = Vec::new();
+                let mut buf = [0u8; 4096];
+                while let Ok(read @ 1..) = stream.read(&mut buf) {
+                    request.extend_from_slice(&buf[..read]);
+                    let text = String::from_utf8_lossy(&request);
+                    let Some((head, sent)) = text.split_once("\r\n\r\n") else { continue };
+                    let expected = head
+                        .lines()
+                        .filter_map(|line| line.split_once(':'))
+                        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                        .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    if sent.len() >= expected {
+                        break;
+                    }
+                }
+                let _ = stream.write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .as_bytes(),
+                );
+                let _ = stream.write_all(&body);
+            }
+        });
+
+        url
+    }
+
+    /// A `for: realtime` provider over `rpc` whose archive already covers `log`'s block and
+    /// whose HyperSync endpoint answers every query with `log`.
+    pub(crate) fn realtime_provider_serving(
+        rpc: Arc<JsonRpcCachedProvider>,
+        log: &Log,
+    ) -> HypersyncProvider {
+        let client = Client::new(ClientConfig {
+            url: serve_query_responses(log),
+            api_token: "00000000-0000-0000-0000-000000000000".to_string(),
+            serialization_format: SerializationFormat::Json,
+            max_num_retries: 0,
+            ..ClientConfig::default()
+        })
+        .expect("building a client makes no network calls");
+
+        let height = log.block_number.expect("block number");
+        let (_tx, state) = watch::channel(HeadState::Connected(height));
+        let feed = HeadFeed { state, task: tokio::spawn(async {}) };
+
+        HypersyncProvider {
+            client,
+            rpc,
+            max_block_range: None,
+            stream_config: StreamConfig::default(),
+            height_cache: Mutex::new(None),
+            head: Some(Head {
+                feed: OnceLock::from(feed),
+                wait: Duration::from_secs(5),
+                last_wait_warning: std::sync::Mutex::new(None),
+            }),
+        }
+    }
+
+    impl HypersyncProvider {
+        /// Turns the provider into a `for: backfill` one.
+        pub(crate) fn disable_head_serving(&mut self) {
+            self.head = None;
+        }
     }
 }
 

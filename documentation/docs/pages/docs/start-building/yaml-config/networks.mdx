@@ -211,6 +211,10 @@ What this does and does not guarantee:
 - HyperSync serves canonical data only and never marks logs `removed`, so the live loop's removed-logs reorg signal does
   not fire for HyperSync-served ranges. Enable `reorg_handling` on the network alongside `for: realtime` so reorgs are
   still detected from block hashes.
+- [`shared_tip_logs`](#shared_tip_logs) is not used on a `realtime` network, because its shared read comes from your RPC
+  node. Each live stream makes its own log request for the tip, so ranges that fall back to RPC cost one `eth_getLogs`
+  per stream and are not re-asked when the node answers empty for a block it has not indexed yet. Its
+  `rindexer_shared_tip_logs_*` metrics stay at zero.
 
 Head latency is bounded by HyperSync's ingest and validation. Measured on Polygon, its height push trails a 100ms
 `eth_blockNumber` poll of a paid RPC by roughly 150ms at the median and up to ~0.75s at p99, before the log query itself.
@@ -402,6 +406,8 @@ networks:
     empty_retry_deadline_ms: 7000 // [!code focus]
     cache_blocks: 32 // [!code focus]
 ```
+
+A network with [`hypersync.for: realtime`](#for) does not use the shared fetch, whatever these settings say.
 
 - `enabled` (default `true`): `false` restores the per-stream tip `eth_getLogs` calls on this network, and the
   `rindexer_shared_tip_logs_*` metrics stay at zero for it.

@@ -15,6 +15,10 @@ include = ["src/**", "resources/**", "Cargo.toml", "build.rs"]
 tempfile = { workspace = true }
 mockito = "1.7"
 testcontainers = "0.27"
+# Encode fake HyperSync query responses; keep in step with hypersync-client.
+arrow = { version = "57", default-features = false, features = ["ipc"] }
+capnp = "0.23"
+hypersync-net-types = "0.12"
 testcontainers-modules = { version = "0.15", features = ["postgres", "clickhouse", "redis", "rabbitmq", "kafka"] }
 tokio-postgres = { workspace = true, features = ["with-serde_json-1"] }
 rust_decimal = { version = "1.41", features = ["db-tokio-postgres"] }
