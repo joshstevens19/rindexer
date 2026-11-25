@@ -124,7 +124,9 @@ fn generate_event_names_match_arms_code(event_type_name: &str, event_info: &[Eve
     Code::new(
         event_info
             .iter()
-            .map(|info| format!("{}::{}(_) => \"{}\",", event_type_name, info.name, info.name))
+            .map(|info| {
+                format!("{}::{}(_) => \"{}\",", event_type_name, info.name, info.abi_name())
+            })
             .collect::<Vec<_>>()
             .join("\n"),
     )
@@ -710,12 +712,13 @@ pub fn generate_event_handlers(
     let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
 
     let mut imports = String::new();
+    let postgres_import = if storage.postgres_enabled() { "PgType, " } else { "" };
     imports.push_str(&format!(
         r#"#![allow(non_snake_case)]
 {GENERATED_FILE_HEADER}
 use rindexer::{{
     event::callback_registry::EventCallbackRegistry,
-    EthereumSqlTypeWrapper, PgType, rindexer_error, rindexer_info
+    EthereumSqlTypeWrapper, {postgres_import}rindexer_error, rindexer_info
 }};
 "#
     ));
@@ -915,7 +918,7 @@ use super::super::super::typings::{indexer_name_formatted}::events::{handler_reg
                     // (Postgres sole sink, not a factory discovery event).
                     let atomic_optin_hint = if storage.postgres_enabled()
                         && !storage.csv_enabled()
-                        && !contract.is_factory_only_event(&event.name)
+                        && !contract.is_factory_only_event(event.abi_name())
                     {
                         "// Storage-only handler? `context.database.insert_bulk_with_cursor(...)`\n                    // commits this batch and the last-synced cursor in ONE transaction\n                    // (exactly-once raw events; see the rindexer changelog). Requires\n                    // `callback_concurrency` <= 1 and NO side effects after the call —\n                    // the cursor commits with the rows, so a crash after it will not\n                    // re-run this handler for the batch.\n                    "
                     } else {
@@ -1072,6 +1075,12 @@ mod tests {
             .lines()
             .any(|l| l.contains("insert_bulk_with_cursor") && !l.trim_start().starts_with("//"));
         assert!(!atomic_call, "atomic call must never be emitted:\n{code}");
+    }
+
+    #[test]
+    fn handlers_without_postgres_do_not_import_pg_types() {
+        let code = generated_handlers(PLAIN_CONTRACT, "csv:\n  enabled: true");
+        assert!(!code.contains("PgType"));
     }
 
     #[test]

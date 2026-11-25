@@ -1279,6 +1279,15 @@ mod tests {
     }
 
     #[test]
+    fn event_row_condition_quotes_columns_for_a_reorg_snapshot() {
+        let expr = parse("$to != 0x0000000000000000000000000000000000000000").unwrap();
+        assert_eq!(
+            expr.to_event_row_condition(),
+            "\"to\" <> '0x0000000000000000000000000000000000000000'"
+        );
+    }
+
+    #[test]
     fn test_to_sql_condition_logical() {
         let table_name = "token_balances";
 

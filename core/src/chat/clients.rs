@@ -1,42 +1,48 @@
-use std::sync::Arc;
-
-use alloy::primitives::U64;
-use futures::future::join_all;
-use serde_json::Value;
-use serenity::all::ChannelId;
-use teloxide::types::ChatId;
-use thiserror::Error;
-use tokio::{
-    task,
-    task::{JoinError, JoinHandle},
+#[cfg(feature = "discord")]
+use crate::{
+    chat::discord::{DiscordBot, DiscordError},
+    manifest::chat::{DiscordConfig, DiscordEvent},
 };
-
+#[cfg(feature = "telegram")]
+use crate::{
+    chat::telegram::{TelegramBot, TelegramError},
+    manifest::chat::{TelegramConfig, TelegramEvent},
+};
 use crate::{
     chat::{
-        discord::{DiscordBot, DiscordError},
         opsgenie::{OpsGenieBot, OpsGenieError},
         pagerduty::{PagerDutyBot, PagerDutyError},
         slack::{SlackBot, SlackError},
-        telegram::{TelegramBot, TelegramError},
         template::Template,
         twilio::{TwilioBot, TwilioError},
     },
     event::{filter_by_expression, filter_event_data_by_conditions, EventMessage},
     manifest::chat::{
-        ChatConfig, DiscordConfig, DiscordEvent, OpsGenieConfig, OpsGenieEvent, PagerDutyConfig,
-        PagerDutyEvent, SlackConfig, SlackEvent, TelegramConfig, TelegramEvent, TwilioConfig,
-        TwilioEvent,
+        ChatConfig, OpsGenieConfig, OpsGenieEvent, PagerDutyConfig, PagerDutyEvent, SlackConfig,
+        SlackEvent, TwilioConfig, TwilioEvent,
     },
 };
+use alloy::primitives::U64;
+use futures::future::join_all;
+use serde_json::Value;
+#[cfg(feature = "discord")]
+use serenity::all::ChannelId;
+use std::sync::Arc;
+#[cfg(feature = "telegram")]
+use teloxide::types::ChatId;
+use thiserror::Error;
+use tokio::task::{self, JoinError, JoinHandle};
 
 type SendMessage = Vec<JoinHandle<Result<(), ChatError>>>;
 
 #[derive(Error, Debug)]
 pub enum ChatError {
     #[error("Telegram error: {0}")]
+    #[cfg(feature = "telegram")]
     Telegram(#[from] TelegramError),
 
     #[error("Discord error: {0}")]
+    #[cfg(feature = "discord")]
     Discord(#[from] DiscordError),
 
     #[error("Slack error: {0}")]
@@ -56,12 +62,14 @@ pub enum ChatError {
 }
 
 #[derive(Debug, Clone)]
+#[cfg(feature = "telegram")]
 struct TelegramInstance {
     config: TelegramConfig,
     client: Arc<TelegramBot>,
 }
 
 #[derive(Debug)]
+#[cfg(feature = "discord")]
 struct DiscordInstance {
     config: DiscordConfig,
     client: Arc<DiscordBot>,
@@ -92,7 +100,9 @@ struct OpsGenieInstance {
 }
 
 pub struct ChatClients {
+    #[cfg(feature = "telegram")]
     telegram: Option<Vec<TelegramInstance>>,
+    #[cfg(feature = "discord")]
     discord: Option<Vec<DiscordInstance>>,
     slack: Option<Vec<SlackInstance>>,
     twilio: Option<Vec<TwilioInstance>>,
@@ -102,6 +112,7 @@ pub struct ChatClients {
 
 impl ChatClients {
     pub async fn new(chat_config: ChatConfig) -> Self {
+        #[cfg(feature = "telegram")]
         let telegram = chat_config.telegram.map(|config| {
             config
                 .into_iter()
@@ -112,6 +123,7 @@ impl ChatClients {
                 .collect()
         });
 
+        #[cfg(feature = "discord")]
         let discord = chat_config.discord.map(|config| {
             config
                 .into_iter()
@@ -170,7 +182,16 @@ impl ChatClients {
                 .collect()
         });
 
-        Self { telegram, discord, slack, twilio, pagerduty, opsgenie }
+        Self {
+            #[cfg(feature = "telegram")]
+            telegram,
+            #[cfg(feature = "discord")]
+            discord,
+            slack,
+            twilio,
+            pagerduty,
+            opsgenie,
+        }
     }
 
     fn find_accepted_block_range(&self, from_block: &U64, to_block: &U64) -> U64 {
@@ -190,14 +211,21 @@ impl ChatClients {
     }
 
     fn has_any_chat(&self) -> bool {
-        self.telegram.is_some()
-            || self.discord.is_some()
-            || self.slack.is_some()
-            || self.twilio.is_some()
-            || self.pagerduty.is_some()
-            || self.opsgenie.is_some()
+        [
+            #[cfg(feature = "telegram")]
+            self.telegram.is_some(),
+            #[cfg(feature = "discord")]
+            self.discord.is_some(),
+            self.slack.is_some(),
+            self.twilio.is_some(),
+            self.pagerduty.is_some(),
+            self.opsgenie.is_some(),
+        ]
+        .into_iter()
+        .any(|enabled| enabled)
     }
 
+    #[cfg(feature = "telegram")]
     fn telegram_send_message_tasks(
         &self,
         instance: &TelegramInstance,
@@ -237,6 +265,7 @@ impl ChatClients {
         tasks
     }
 
+    #[cfg(feature = "discord")]
     fn discord_send_message_tasks(
         &self,
         instance: &DiscordInstance,
@@ -437,6 +466,7 @@ impl ChatClients {
         if let Value::Array(data_array) = &event_message.event_data {
             let mut messages: Vec<SendMessage> = Vec::new();
 
+            #[cfg(feature = "telegram")]
             if let Some(telegram) = &self.telegram {
                 for instance in telegram {
                     if instance.config.networks.contains(&event_message.network) {
@@ -458,6 +488,7 @@ impl ChatClients {
                 }
             }
 
+            #[cfg(feature = "discord")]
             if let Some(discord) = &self.discord {
                 for instance in discord {
                     if instance.config.networks.contains(&event_message.network) {

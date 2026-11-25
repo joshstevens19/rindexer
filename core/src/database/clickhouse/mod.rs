@@ -1,6 +1,11 @@
+#[cfg(feature = "clickhouse")]
 pub mod batch_operations;
+#[cfg(feature = "clickhouse")]
 pub mod client;
 pub mod generate;
+#[cfg(feature = "clickhouse")]
 pub mod schema_sync;
+#[cfg(feature = "clickhouse")]
 pub mod setup;
+#[cfg(feature = "clickhouse")]
 pub mod types;

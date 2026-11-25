@@ -1,6 +1,6 @@
 # 🦀 rindexer 🦀 
 
-[![codecov](https://codecov.io/gh/joshstevens19/rindexer/graph/badge.svg)](https://codecov.io/gh/joshstevens19/rindexer)
+[![codecov](https://codecov.io/gh/joshstevens19/rindexer/graph/badge.svg)](https://codecov.io/gh/joshstevens19/rindexer) 
 
 rindexer is an opensource powerful, high-speed indexing toolset developed in Rust, designed for compatibility with any EVM chain.
 This tool allows you to index chain events using a simple YAML file, requiring no additional coding.

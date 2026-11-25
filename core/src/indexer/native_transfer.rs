@@ -1,25 +1,6 @@
-use std::{cmp, collections::VecDeque, ops::RangeInclusive, sync::Arc, time::Duration};
-
-use alloy::consensus::Transaction;
-use alloy::transports::{RpcError, TransportErrorKind};
-use alloy::{
-    primitives::{Address, Bytes, U256, U64},
-    rpc::types::trace::parity::{Action, LocalizedTransactionTrace},
-};
-use futures::future::try_join_all;
-use serde::Serialize;
-use tokio::sync::Mutex;
-use tokio::{sync::mpsc, time::sleep};
-use tracing::{debug, error, info, warn};
-
-use tokio_util::sync::CancellationToken;
-
+#[cfg(feature = "clickhouse")]
 use crate::database::clickhouse::client::ClickhouseClient;
-use crate::indexer::reorg::{
-    detect_and_handle_reorg, event_writer_barrier, ReorgContext, ReorgCoordinator,
-};
-use crate::is_running;
-use crate::provider::RECOMMENDED_RPC_CHUNK_SIZE;
+#[cfg(feature = "postgres")]
 use crate::PostgresClient;
 use crate::{
     event::{
@@ -27,13 +8,31 @@ use crate::{
         config::TraceProcessingConfig,
     },
     indexer::{
+        fetch_logs::EndpointSwitchWatcher,
         last_synced::evm_trace_update_progress_and_last_synced_task,
         process::ProcessEventError,
+        reorg::{detect_and_handle_reorg, event_writer_barrier, ReorgContext, ReorgCoordinator},
         task_tracker::{indexing_event_processed, indexing_event_processing},
     },
+    is_running,
     manifest::native_transfer::TraceProcessingMethod,
-    provider::{ChainProvider, ProviderError},
+    provider::{ChainProvider, ProviderError, RECOMMENDED_RPC_CHUNK_SIZE},
 };
+use alloy::{
+    consensus::Transaction,
+    primitives::{Address, Bytes, U256, U64},
+    rpc::types::trace::parity::{Action, LocalizedTransactionTrace},
+    transports::{RpcError, TransportErrorKind},
+};
+use futures::future::try_join_all;
+use serde::Serialize;
+use std::{cmp, collections::VecDeque, ops::RangeInclusive, sync::Arc, time::Duration};
+use tokio::{
+    sync::{mpsc, Mutex},
+    time::sleep,
+};
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info, warn};
 
 /// An imaginary contract name to ensure native transfer "debug trace" indexing is compatible
 /// with the streams and sinks to which rindexer writes.
@@ -129,8 +128,8 @@ pub(crate) enum NativeTransferReorgOutcome {
 pub(crate) async fn native_transfer_detect_reorg_in_range(
     provider: &dyn ChainProvider,
     coordinator: Option<&Arc<Mutex<ReorgCoordinator>>>,
-    postgres: Option<&PostgresClient>,
-    clickhouse: Option<&Arc<ClickhouseClient>>,
+    #[cfg(feature = "postgres")] postgres: Option<&PostgresClient>,
+    #[cfg(feature = "clickhouse")] clickhouse: Option<&Arc<ClickhouseClient>>,
     trace_registry: Option<&TraceCallbackRegistry>,
     network: &str,
     from_block: u64,
@@ -178,7 +177,14 @@ pub(crate) async fn native_transfer_detect_reorg_in_range(
     // acceptable for isolation. If latency becomes a concern, move
     // handle_reorg out of the hot path.
     let mut guard = coordinator.lock().await;
-    let ctx = ReorgContext { postgres, clickhouse, registry: None, trace_registry };
+    let ctx = ReorgContext {
+        #[cfg(feature = "postgres")]
+        postgres,
+        #[cfg(feature = "clickhouse")]
+        clickhouse,
+        registry: None,
+        trace_registry,
+    };
 
     for block in blocks {
         let number = block.header.number;
@@ -235,13 +241,14 @@ pub async fn native_transfer_block_fetch(
     indexing_distance_from_head: U64,
     network: String,
     cancel_token: CancellationToken,
-    postgres: Option<Arc<PostgresClient>>,
+    #[cfg(feature = "postgres")] postgres: Option<Arc<PostgresClient>>,
     _indexer_name: String,
     reorg_coordinator: Option<Arc<Mutex<ReorgCoordinator>>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    #[cfg(feature = "clickhouse")] clickhouse: Option<Arc<ClickhouseClient>>,
     trace_registry: Arc<TraceCallbackRegistry>,
 ) -> Result<(), ProcessEventError> {
     let mut last_seen_block = start_block;
+    let mut switch_watcher = EndpointSwitchWatcher::new(publisher.as_ref());
 
     loop {
         if !is_running() || cancel_token.is_cancelled() {
@@ -254,7 +261,30 @@ pub async fn native_transfer_block_fetch(
         // `target_iteration_duration` used in the contract-event fetch loop.
         sleep(Duration::from_millis(200)).await;
 
+        if switch_watcher.switched(publisher.as_ref()) {
+            if let Some(coordinator) = reorg_coordinator.as_ref() {
+                coordinator.lock().await.suspend_for_endpoint_switch();
+            }
+            info!(
+                network = %network,
+                "RPC endpoint switched - suspending native-transfer reorg validation until the new endpoint catches up"
+            );
+        }
+
         let latest_block = publisher.get_latest_block().await;
+
+        // A failover inside get_latest_block means `latest_block` already
+        // comes from the replacement. Suspend before parent-hash validation
+        // so a lagging endpoint cannot force a spurious rollback.
+        if switch_watcher.switched(publisher.as_ref()) {
+            if let Some(coordinator) = reorg_coordinator.as_ref() {
+                coordinator.lock().await.suspend_for_endpoint_switch();
+            }
+            info!(
+                network = %network,
+                "RPC endpoint switched during latest-block fetch - suspending native-transfer reorg validation until the new endpoint catches up"
+            );
+        }
 
         match latest_block {
             Ok(Some(latest_block)) => {
@@ -269,7 +299,9 @@ pub async fn native_transfer_block_fetch(
                     let tip_parent = latest_block.header.parent_hash;
                     let mut guard = coordinator.lock().await;
                     let ctx = ReorgContext {
+                        #[cfg(feature = "postgres")]
                         postgres: postgres.as_deref(),
+                        #[cfg(feature = "clickhouse")]
                         clickhouse: clickhouse.as_ref(),
                         registry: None,
                         trace_registry: Some(trace_registry.as_ref()),
@@ -323,7 +355,9 @@ pub async fn native_transfer_block_fetch(
                     let outcome = native_transfer_detect_reorg_in_range(
                         publisher.as_ref(),
                         reorg_coordinator.as_ref(),
+                        #[cfg(feature = "postgres")]
                         postgres.as_deref(),
+                        #[cfg(feature = "clickhouse")]
                         clickhouse.as_ref(),
                         Some(trace_registry.as_ref()),
                         &network,
@@ -744,6 +778,7 @@ mod tests {
             event_name: EVENT_NAME.to_string(),
             network: "ethereum".to_string(),
             progress,
+            #[cfg(feature = "postgres")]
             postgres: None,
             csv_details: None,
             registry: Arc::new(TraceCallbackRegistry::new()),
@@ -793,6 +828,7 @@ mod tests {
             event_name: EVENT_NAME.to_string(),
             network: "ethereum".to_string(),
             progress,
+            #[cfg(feature = "postgres")]
             postgres: None,
             csv_details: None,
             registry: Arc::new(TraceCallbackRegistry::new()),
@@ -825,6 +861,7 @@ mod tests {
             event_name: EVENT_NAME.to_string(),
             network: "ethereum".to_string(),
             progress,
+            #[cfg(feature = "postgres")]
             postgres: None,
             csv_details: None,
             registry: Arc::new(TraceCallbackRegistry::new()),
@@ -991,7 +1028,12 @@ mod tests {
             window.insert(num, b256(h), b256(p));
         }
 
-        let persistence = Arc::new(ReorgBlockHashPersistence::new(None, None));
+        let persistence = Arc::new(ReorgBlockHashPersistence::new(
+            #[cfg(feature = "postgres")]
+            None,
+            #[cfg(feature = "clickhouse")]
+            None,
+        ));
         let coord = ReorgCoordinator::new(
             network.to_string(),
             window,
@@ -1020,7 +1062,9 @@ mod tests {
         let outcome = native_transfer_detect_reorg_in_range(
             provider.as_ref(),
             Some(&coordinator),
+            #[cfg(feature = "postgres")]
             None,
+            #[cfg(feature = "clickhouse")]
             None,
             None,
             "ethereum",
@@ -1052,7 +1096,9 @@ mod tests {
         let outcome = native_transfer_detect_reorg_in_range(
             provider.as_ref(),
             Some(&coordinator),
+            #[cfg(feature = "postgres")]
             None,
+            #[cfg(feature = "clickhouse")]
             None,
             None,
             "ethereum",
@@ -1108,7 +1154,9 @@ mod tests {
         let outcome = native_transfer_detect_reorg_in_range(
             provider.as_ref(),
             Some(&coordinator),
+            #[cfg(feature = "postgres")]
             None,
+            #[cfg(feature = "clickhouse")]
             None,
             None,
             "ethereum",
@@ -1133,7 +1181,9 @@ mod tests {
         let outcome = native_transfer_detect_reorg_in_range(
             provider.as_ref(),
             None,
+            #[cfg(feature = "postgres")]
             None,
+            #[cfg(feature = "clickhouse")]
             None,
             None,
             "ethereum",

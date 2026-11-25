@@ -143,6 +143,17 @@ impl PostgresClient {
                 .map_err(|_| PostgresConnectionError::CouldNotCreateTlsConnector)?;
             tls.set_min_proto_version(Some(SslVersion::TLS1_2))
                 .map_err(|_| PostgresConnectionError::CouldNotCreateTlsConnector)?;
+            // Vendored OpenSSL loads CAs from /usr/local/ssl, which macOS does
+            // not ship. /etc/ssl/cert.pem is the system bundle. Skip it when
+            // SSL_CERT_FILE or SSL_CERT_DIR is set, so those still define trust.
+            #[cfg(target_os = "macos")]
+            if env::var_os("SSL_CERT_FILE").is_none() && env::var_os("SSL_CERT_DIR").is_none() {
+                let apple_cas = std::path::Path::new("/etc/ssl/cert.pem");
+                if apple_cas.is_file() {
+                    tls.set_ca_file(apple_cas)
+                        .map_err(|_| PostgresConnectionError::CouldNotCreateTlsConnector)?;
+                }
+            }
             let tls_connector = MakeTlsConnector::new(tls.build());
 
             // Perform a direct connection test
@@ -687,7 +698,20 @@ impl PostgresClient {
                 .await?;
         }
 
-        // 4. Rewind last_synced_block checkpoints to fork_point - 1
+        // 4. Drop idempotency claims in the reorged range so a re-included log
+        //    can apply its arithmetic again. The reversal below undoes the
+        //    first apply; leaving the claim would skip the replay.
+        //    Indexers that never wrote a custom table do not have the claim
+        //    table yet (the e2e reorg harness is one). Create it first so the
+        //    DELETE is a no-op instead of aborting the rollback.
+        transaction.batch_execute(&super::generate::generate_table_op_claim_table_sql()).await?;
+        let delete_claims = "DELETE FROM rindexer_internal.table_op_claim \
+             WHERE network = $1 AND block_number >= $2 AND block_number <= $3";
+        transaction
+            .execute(delete_claims, &[&network, &fork_point_i64, &detection_point_i64])
+            .await?;
+
+        // 5. Rewind last_synced_block checkpoints to fork_point - 1
         let rewind_block = Decimal::from(fork_point.saturating_sub(1));
         for table in checkpoint_tables {
             let query = format!(

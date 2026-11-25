@@ -1,3 +1,4 @@
+#![cfg(feature = "postgres")]
 //! Integration tests for `PostgresClient::insert_bulk_with_cursor` — the
 //! atomic [event batch + `rindexer_internal` last-synced cursor] commit that
 //! closes the double-index race.

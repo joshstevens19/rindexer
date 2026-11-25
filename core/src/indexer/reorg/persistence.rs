@@ -1,28 +1,37 @@
-use std::str::FromStr;
-use std::sync::Arc;
-
-use alloy::primitives::B256;
-use anyhow::Context;
-use clickhouse::Row;
-use serde::Deserialize;
-
-use crate::database::clickhouse::client::ClickhouseClient;
-use crate::database::clickhouse::types::ClickhouseHash;
-use crate::database::postgres::client::PostgresClient;
-
 use super::window::BlockChainWindow;
+#[cfg(feature = "clickhouse")]
+use crate::database::clickhouse::{client::ClickhouseClient, types::ClickhouseHash};
+#[cfg(feature = "postgres")]
+use crate::database::postgres::client::PostgresClient;
+#[cfg(any(feature = "postgres", feature = "clickhouse"))]
+use alloy::primitives::B256;
+#[cfg(any(feature = "postgres", feature = "clickhouse"))]
+use anyhow::Context;
+#[cfg(feature = "clickhouse")]
+use clickhouse::Row;
+#[cfg(feature = "clickhouse")]
+use serde::Deserialize;
+#[cfg(any(feature = "postgres", feature = "clickhouse"))]
+use std::{str::FromStr, sync::Arc};
 
 pub struct ReorgBlockHashPersistence {
+    #[cfg(feature = "postgres")]
     postgres: Option<Arc<PostgresClient>>,
+    #[cfg(feature = "clickhouse")]
     clickhouse: Option<Arc<ClickhouseClient>>,
 }
 
 impl ReorgBlockHashPersistence {
     pub fn new(
-        postgres: Option<Arc<PostgresClient>>,
-        clickhouse: Option<Arc<ClickhouseClient>>,
+        #[cfg(feature = "postgres")] postgres: Option<Arc<PostgresClient>>,
+        #[cfg(feature = "clickhouse")] clickhouse: Option<Arc<ClickhouseClient>>,
     ) -> Self {
-        Self { postgres, clickhouse }
+        Self {
+            #[cfg(feature = "postgres")]
+            postgres,
+            #[cfg(feature = "clickhouse")]
+            clickhouse,
+        }
     }
 
     /// Load all entries from the persisted `reorg_block_hashes` table into a new
@@ -35,6 +44,7 @@ impl ReorgBlockHashPersistence {
         super::validate_sql_value(network, "network")?;
         let mut window = BlockChainWindow::try_new(max_window_size)?;
 
+        #[cfg(feature = "postgres")]
         if let Some(postgres) = &self.postgres {
             let query = r#"
                 SELECT block_number, block_hash, parent_hash
@@ -74,6 +84,7 @@ impl ReorgBlockHashPersistence {
             return Ok(window);
         }
 
+        #[cfg(feature = "clickhouse")]
         if let Some(clickhouse) = &self.clickhouse {
             #[derive(Row, Deserialize)]
             struct ReorgBlockHashRow {
@@ -141,6 +152,7 @@ impl ReorgBlockHashPersistence {
             "parent_hash is not a valid 0x-prefixed hex string: {parent_hash}"
         );
 
+        #[cfg(feature = "postgres")]
         if let Some(postgres) = &self.postgres {
             let query = r#"INSERT INTO rindexer_internal.reorg_block_hashes
                          (network, block_number, block_hash, parent_hash)
@@ -159,6 +171,7 @@ impl ReorgBlockHashPersistence {
                 })?;
         }
 
+        #[cfg(feature = "clickhouse")]
         if let Some(clickhouse) = &self.clickhouse {
             let query = format!(
                 "INSERT INTO rindexer_internal.reorg_block_hashes \
@@ -178,6 +191,7 @@ impl ReorgBlockHashPersistence {
     /// Delete entries older than the given block number.
     pub async fn prune(&self, network: &str, older_than: u64) -> anyhow::Result<()> {
         super::validate_sql_value(network, "network")?;
+        #[cfg(feature = "postgres")]
         if let Some(postgres) = &self.postgres {
             let query = r#"DELETE FROM rindexer_internal.reorg_block_hashes
                          WHERE network = $1 AND block_number < $2"#;
@@ -189,6 +203,7 @@ impl ReorgBlockHashPersistence {
                 .context("Failed to prune reorg_block_hashes in postgres")?;
         }
 
+        #[cfg(feature = "clickhouse")]
         if let Some(clickhouse) = &self.clickhouse {
             let query = format!(
                 r#"ALTER TABLE rindexer_internal.reorg_block_hashes DELETE

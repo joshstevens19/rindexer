@@ -576,6 +576,7 @@ pub async fn start(
                         override_port: None,
                     },
                     watch,
+                    rpc_endpoint_events: None,
                 };
 
                 start_rindexer_no_code(details).await.map_err(|e| {
@@ -592,6 +593,7 @@ pub async fn start(
                         override_port: port.as_ref().and_then(|port| port.parse().ok()),
                     },
                     watch,
+                    rpc_endpoint_events: None,
                 };
 
                 start_rindexer_no_code(details).await.map_err(|e| {
@@ -608,6 +610,7 @@ pub async fn start(
                         override_port: port.as_ref().and_then(|port| port.parse().ok()),
                     },
                     watch,
+                    rpc_endpoint_events: None,
                 };
 
                 let _ = start_rindexer_no_code(details).await.map_err(|e| {

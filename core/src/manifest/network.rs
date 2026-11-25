@@ -2,7 +2,8 @@ use std::fmt;
 use std::time::Duration;
 
 use alloy::primitives::U64;
-use serde::de::Visitor;
+use serde::de::{SeqAccess, Visitor};
+use serde::ser::Serializer;
 use serde::{de, Deserialize, Deserializer, Serialize};
 
 #[cfg(feature = "reth")]
@@ -192,13 +193,142 @@ fn default_shared_tip_logs_cache_blocks() -> usize {
     32
 }
 
+/// The RPC endpoints configured for a network.
+///
+/// Accepts either a single url string (the historic form) or a list of urls
+/// where the first entry is the primary endpoint and the rest are ordered
+/// fallbacks:
+///
+/// ```yaml
+/// rpc: https://mainnet.gateway.tenderly.co
+/// ```
+///
+/// ```yaml
+/// rpc:
+///   - ${ETH_RPC_PRIMARY}
+///   - ${ETH_RPC_FALLBACK}
+/// ```
+///
+/// A single url serializes back to the plain string form so existing
+/// manifests round-trip unchanged.
+///
+/// Individual urls are NOT checked for emptiness at parse time - Foundry
+/// imports leave non-local `CHAIN_<id>_RPC_URL` values empty, and those
+/// manifests must still parse so `validate_manifest_network_rpc_urls` can
+/// produce its actionable error. Only a structurally empty list is rejected.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RpcUrls(Vec<String>);
+
+impl RpcUrls {
+    /// Create from a list of urls. Returns `None` when the list is empty.
+    pub fn try_new(urls: Vec<String>) -> Option<Self> {
+        if urls.is_empty() {
+            return None;
+        }
+        Some(Self(urls))
+    }
+
+    /// The primary (first) endpoint url.
+    pub fn primary(&self) -> &str {
+        &self.0[0]
+    }
+
+    /// All endpoint urls in failover order (primary first).
+    pub fn all(&self) -> &[String] {
+        &self.0
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, String> {
+        self.0.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl From<String> for RpcUrls {
+    fn from(url: String) -> Self {
+        Self(vec![url])
+    }
+}
+
+impl From<&str> for RpcUrls {
+    fn from(url: &str) -> Self {
+        Self(vec![url.to_string()])
+    }
+}
+
+impl fmt::Display for RpcUrls {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0.join(", "))
+    }
+}
+
+impl Serialize for RpcUrls {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // Keep the historic single-string form for single-endpoint networks
+        // so serialized manifests stay backwards compatible.
+        if self.0.len() == 1 {
+            serializer.serialize_str(&self.0[0])
+        } else {
+            self.0.serialize(serializer)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RpcUrls {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct RpcUrlsVisitor;
+
+        impl<'de> Visitor<'de> for RpcUrlsVisitor {
+            type Value = RpcUrls;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("an rpc url string or a non-empty list of rpc url strings")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<RpcUrls, E>
+            where
+                E: de::Error,
+            {
+                Ok(RpcUrls(vec![value.to_string()]))
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<RpcUrls, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut urls = Vec::new();
+                while let Some(url) = seq.next_element::<String>()? {
+                    urls.push(url);
+                }
+                RpcUrls::try_new(urls)
+                    .ok_or_else(|| de::Error::custom("rpc must contain at least one url"))
+            }
+        }
+
+        deserializer.deserialize_any(RpcUrlsVisitor)
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Network {
     pub name: String,
 
     pub chain_id: u64,
 
-    pub rpc: String,
+    pub rpc: RpcUrls,
 
     /// Poll the latest block at a defined frequency. It is recommended that this frequency be a
     /// multiple faster than the networks block time to ensure fast indexing.
@@ -470,7 +600,7 @@ mod tests {
 
         assert_eq!(network.name, "ethereum");
         assert_eq!(network.chain_id, 1);
-        assert_eq!(network.rpc, "https://mainnet.gateway.tenderly.co");
+        assert_eq!(network.rpc.primary(), "https://mainnet.gateway.tenderly.co");
         assert_eq!(network.max_block_range, None);
         assert_eq!(network.compute_units_per_second, None);
         assert_eq!(network.block_poll_frequency, None);

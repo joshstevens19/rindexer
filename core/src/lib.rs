@@ -1,5 +1,6 @@
 // public
 pub mod adaptive_concurrency;
+pub mod endpoint_failover;
 pub mod generator;
 pub mod hot_reload;
 pub use hot_reload::RELOAD_EXIT_CODE;
@@ -19,22 +20,22 @@ mod health;
 pub use health::{start_health_server, HealthServer, HealthServerState, HealthStatus};
 
 mod database;
-pub use database::{
-    clickhouse::{
-        client::ClickhouseClient,
-        schema_sync::{
-            apply_schema_change as apply_clickhouse_schema_change,
-            detect_schema_changes as detect_clickhouse_schema_changes,
-            SchemaChange as ClickhouseSchemaChange,
-        },
-        setup::setup_clickhouse,
+#[cfg(feature = "clickhouse")]
+pub use database::clickhouse::{
+    client::ClickhouseClient,
+    schema_sync::{
+        apply_schema_change as apply_clickhouse_schema_change,
+        detect_schema_changes as detect_clickhouse_schema_changes,
+        SchemaChange as ClickhouseSchemaChange,
     },
-    generate::drop_tables_for_indexer_sql,
-    postgres::{
-        client::{BulkCursorUpdate, PostgresClient, ToSql},
-        schema_sync::{apply_schema_change, detect_schema_changes, SchemaChange},
-        setup::setup_postgres,
-    },
+    setup::setup_clickhouse,
+};
+pub use database::generate::drop_tables_for_indexer_sql;
+#[cfg(feature = "postgres")]
+pub use database::postgres::{
+    client::{BulkCursorUpdate, PostgresClient, ToSql},
+    schema_sync::{apply_schema_change, detect_schema_changes, SchemaChange},
+    setup::setup_postgres,
 };
 
 mod simple_file_formatters;
@@ -42,7 +43,7 @@ pub use simple_file_formatters::csv::AsyncCsvAppender;
 
 mod helpers;
 pub use helpers::{
-    format_all_files_for_project, generate_random_id, load_env_from_project_path,
+    format_all_files_for_project, generate_random_id, load_env_from_project_path, parse_log,
     public_read_env_value, write_file, WriteFileError,
 };
 mod api;
@@ -55,11 +56,15 @@ pub use abi::ABIItem;
 mod chat;
 pub mod event;
 pub mod notifications;
-pub use indexer::reorg::ReorgEvent;
-pub use indexer::tip_logs::SharedTipLogsSettings;
+pub use endpoint_failover::{
+    subscribe_rpc_endpoint_events, EndpointHealthSnapshot, RpcEndpointEvent,
+};
+pub use indexer::{reorg::ReorgEvent, tip_logs::SharedTipLogsSettings};
 pub use notifications::ChainStateNotification;
 pub mod blockclock;
+#[cfg(feature = "hypersync")]
 pub mod hypersync;
+#[cfg(feature = "phantom")]
 pub mod phantom;
 pub mod provider;
 mod start;
@@ -73,7 +78,9 @@ pub use events::{RindexerEvent, RindexerEventStream};
 // export 3rd party dependencies
 pub use async_trait::async_trait;
 pub use colored::Colorize as RindexerColorize;
-pub use database::sql_type_wrapper::EthereumSqlTypeWrapper;
+pub use database::sql_type_wrapper::{
+    map_ethereum_wrapper_to_json, map_log_params_to_ethereum_wrapper, EthereumSqlTypeWrapper,
+};
 pub use futures::FutureExt;
 pub use indexer::no_code::resolve_table_column_types;
 pub use lazy_static::lazy_static;
@@ -83,6 +90,8 @@ pub use start::{
     StartNoCodeDetails,
 };
 pub use tokio::main as rindexer_main;
+#[cfg(feature = "postgres")]
 pub use tokio_postgres::types::Type as PgType;
 pub use tracing::{error as rindexer_error, info as rindexer_info};
+pub use types::core::{LogParam, ParsedLog};
 pub use types::single_or_array::StringOrArray;

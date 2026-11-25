@@ -59,11 +59,6 @@ fn has_table_name_conflicts(indexer: &Indexer) -> bool {
     false
 }
 
-pub struct GraphqlOverrideSettings {
-    pub enabled: bool,
-    pub override_port: Option<u16>,
-}
-
 fn get_graphql_exe() -> Result<PathBuf, Box<dyn std::error::Error>> {
     // Try the build-time path first (for development)
     let build_path = PathBuf::from(env!("RINDEXER_GRAPHQL_EXE"));
@@ -175,6 +170,13 @@ pub async fn start_graphql_server(
     let (tx, rx) = oneshot::channel();
     let tx_arc = Arc::new(Mutex::new(Some(tx)));
 
+    let allowed_origins = match normalized_cors_origins(settings.cors_allowed_origins()) {
+        Ok(origins) => origins,
+        Err(message) => {
+            return Err(StartGraphqlServerError::GraphQLServerStartupError(message));
+        }
+    };
+
     spawn_start_server(
         tx_arc,
         rindexer_graphql_exe,
@@ -184,6 +186,7 @@ pub async fn start_graphql_server(
         settings.filter_only_on_indexed_columns,
         settings.disable_advanced_filters,
         skip_node_alias_plugin,
+        allowed_origins,
     );
 
     // Wait for the initial server startup
@@ -226,6 +229,7 @@ fn spawn_start_server(
     filter_only_on_indexed_columns: bool,
     disable_advanced_filters: bool,
     skip_node_alias_plugin: bool,
+    allowed_origins: Option<Vec<String>>,
 ) {
     tokio::spawn(async move {
         loop {
@@ -241,6 +245,7 @@ fn spawn_start_server(
                 filter_only_on_indexed_columns,
                 disable_advanced_filters,
                 skip_node_alias_plugin,
+                allowed_origins.as_deref(),
             )
             .await
             {
@@ -297,17 +302,51 @@ fn spawn_start_server(
     });
 }
 
-async fn start_server(
+/// `None` allows every origin and clears any inherited allow-list so a shell
+/// variable cannot change the default. `Some` is passed as a JSON array.
+fn apply_cors_env(command: &mut Command, allowed_origins: Option<&[String]>) {
+    match allowed_origins {
+        Some(origins) => {
+            let json = serde_json::to_string(origins).expect("origin strings serialize");
+            command.env("RINDEXER_GRAPHQL_ALLOWED_ORIGINS", json);
+        }
+        None => {
+            command.env_remove("RINDEXER_GRAPHQL_ALLOWED_ORIGINS");
+        }
+    }
+}
+
+fn normalized_cors_origins(
+    allowed_origins: Option<&[String]>,
+) -> Result<Option<Vec<String>>, String> {
+    let Some(origins) = allowed_origins else {
+        return Ok(None);
+    };
+    if origins.iter().any(|origin| origin.trim().is_empty()) {
+        return Err(
+            "graphql.cors.allowed_origins contains an empty origin. Omit the field to allow every origin."
+                .to_string(),
+        );
+    }
+    Ok(Some(origins.to_vec()))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn graphql_command(
     rindexer_graphql_exe: &Path,
     connection_string: &str,
     schemas: &str,
-    port: &u16,
+    port: u16,
     filter_only_on_indexed_columns: bool,
     disable_advanced_filters: bool,
     skip_node_alias_plugin: bool,
-) -> Result<Child, String> {
-    Command::new(rindexer_graphql_exe)
-        .arg(connection_string)
+    allowed_origins: Option<&[String]>,
+) -> Command {
+    let mut command = Command::new(rindexer_graphql_exe);
+    // The URL used to be argv[0]. `ps` prints argv, so the database password
+    // showed up in the process list. The child reads it from the env instead.
+    command
+        .env("RINDEXER_GRAPHQL_DATABASE_URL", connection_string)
         .arg(schemas)
         .arg(port.to_string())
         // graphql_limit
@@ -318,9 +357,34 @@ async fn start_server(
         .arg(disable_advanced_filters.to_string())
         .arg(skip_node_alias_plugin.to_string())
         .stdout(Stdio::null())
-        .stderr(Stdio::inherit()) // Show errors from GraphQL server
-        .spawn()
-        .map_err(|e| e.to_string())
+        .stderr(Stdio::inherit());
+    apply_cors_env(&mut command, allowed_origins);
+    command
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn start_server(
+    rindexer_graphql_exe: &Path,
+    connection_string: &str,
+    schemas: &str,
+    port: &u16,
+    filter_only_on_indexed_columns: bool,
+    disable_advanced_filters: bool,
+    skip_node_alias_plugin: bool,
+    allowed_origins: Option<&[String]>,
+) -> Result<Child, String> {
+    graphql_command(
+        rindexer_graphql_exe,
+        connection_string,
+        schemas,
+        *port,
+        filter_only_on_indexed_columns,
+        disable_advanced_filters,
+        skip_node_alias_plugin,
+        allowed_origins,
+    )
+    .spawn()
+    .map_err(|e| e.to_string())
 }
 
 async fn perform_health_check(
@@ -409,3 +473,108 @@ async fn perform_health_check(
 //     }
 //     Ok(())
 // }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cors_env(command: &Command) -> Option<Option<String>> {
+        command
+            .get_envs()
+            .find(|(key, _)| *key == "RINDEXER_GRAPHQL_ALLOWED_ORIGINS")
+            .map(|(_, value)| value.map(|value| value.to_string_lossy().into_owned()))
+    }
+
+    fn command(allowed_origins: Option<&[String]>) -> Command {
+        graphql_command(
+            Path::new("rindexer-graphql"),
+            "postgresql://rindexer:secret@localhost/rindexer",
+            "schema",
+            3001,
+            false,
+            false,
+            false,
+            allowed_origins,
+        )
+    }
+
+    #[test]
+    fn graphql_process_does_not_put_the_database_url_on_argv() {
+        let url = "postgresql://rindexer:super-secret@pg.example.com:5432/rindexer";
+        let command = graphql_command(
+            Path::new("rindexer-graphql"),
+            url,
+            "foo_mint",
+            3001,
+            false,
+            false,
+            false,
+            None,
+        );
+
+        let args: Vec<String> =
+            command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect();
+        assert!(
+            args.iter().all(|arg| !arg.contains("super-secret") && !arg.contains("postgresql://")),
+            "database url leaked onto argv: {args:?}"
+        );
+
+        let from_env = command
+            .get_envs()
+            .find(|(key, _)| *key == "RINDEXER_GRAPHQL_DATABASE_URL")
+            .and_then(|(_, value)| value)
+            .map(|value| value.to_string_lossy().into_owned());
+        assert_eq!(from_env.as_deref(), Some(url));
+    }
+
+    #[tokio::test]
+    async fn start_server_spawns_the_child_without_putting_the_url_on_argv() {
+        let url = "postgresql://rindexer:super-secret@pg.example.com:5432/rindexer";
+        let mut child =
+            start_server(Path::new("/bin/true"), url, "foo_mint", &3001, true, true, true, None)
+                .await
+                .expect("spawn /bin/true");
+        let status = child.wait().expect("wait");
+        assert!(status.success());
+    }
+
+    #[tokio::test]
+    async fn start_server_reports_a_missing_executable() {
+        let err = start_server(
+            Path::new("/no/such/rindexer-graphql"),
+            "postgresql://rindexer:secret@localhost/db",
+            "foo_mint",
+            &3001,
+            false,
+            false,
+            false,
+            None,
+        )
+        .await
+        .expect_err("missing binary");
+        assert!(!err.is_empty());
+    }
+
+    #[test]
+    fn unset_cors_clears_any_inherited_allow_list() {
+        // None means "allow every origin", and the var is removed so a value
+        // sitting in the parent environment cannot tighten that.
+        assert_eq!(cors_env(&command(None)), Some(None));
+    }
+
+    #[test]
+    fn allow_list_is_passed_as_json() {
+        let origins = vec!["https://app.example".to_string(), "http://localhost:3000".to_string()];
+        assert_eq!(
+            cors_env(&command(Some(&origins))).unwrap().unwrap(),
+            r#"["https://app.example","http://localhost:3000"]"#
+        );
+    }
+
+    #[test]
+    fn blank_origin_is_rejected() {
+        let origins = vec!["https://app.example".to_string(), "  ".to_string()];
+        let err = normalized_cors_origins(Some(&origins)).unwrap_err();
+        assert!(err.contains("empty origin"), "{err}");
+    }
+}

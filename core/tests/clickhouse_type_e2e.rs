@@ -1,3 +1,4 @@
+#![cfg(feature = "clickhouse")]
 /// E2E validation tests for ClickHouse type handling and features.
 ///
 /// Unit tests (no CH needed): validate type mapping, serialization, YAML parsing.

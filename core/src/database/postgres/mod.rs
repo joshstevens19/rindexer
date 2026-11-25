@@ -1,9 +1,17 @@
+#[cfg(feature = "postgres")]
 pub mod batch_operations;
+#[cfg(feature = "postgres")]
 pub mod client;
 pub mod generate;
+#[cfg(feature = "postgres")]
 pub mod indexes;
+#[cfg(feature = "postgres")]
 pub mod migrations;
+#[cfg(feature = "postgres")]
 pub mod relationship;
+#[cfg(feature = "postgres")]
 pub mod schema_sync;
+#[cfg(feature = "postgres")]
 pub mod setup;
+#[cfg(feature = "postgres")]
 pub mod write_mode;

@@ -1,21 +1,24 @@
-use std::path::Path;
-use tracing::{error, info};
-
+#![cfg_attr(not(feature = "clickhouse"), allow(dead_code))]
 use crate::{
     abi::{ABIInput, ABIItem, EventInfo, GenerateAbiPropertiesType},
+    database::{
+        generate::{
+            generate_indexer_contract_schema_name, generate_internal_factory_event_table_name,
+            generate_internal_factory_event_table_name_no_shorten,
+            GenerateTablesForIndexerSqlError,
+        },
+        postgres::generate::{
+            generate_internal_event_table_name_no_shorten,
+            GenerateInternalFactoryEventTableNameParams,
+        },
+    },
     helpers::camel_to_snake,
     indexer::Indexer,
+    manifest::contract::{injected_columns, FactoryDetailsYaml, Table},
     types::code::Code,
 };
-
-use crate::database::generate::{
-    generate_indexer_contract_schema_name, generate_internal_factory_event_table_name,
-    generate_internal_factory_event_table_name_no_shorten, GenerateTablesForIndexerSqlError,
-};
-use crate::database::postgres::generate::{
-    generate_internal_event_table_name_no_shorten, GenerateInternalFactoryEventTableNameParams,
-};
-use crate::manifest::contract::{injected_columns, FactoryDetailsYaml, Table};
+use std::path::Path;
+use tracing::{error, info};
 
 pub fn generate_reorg_block_hashes_table_clickhouse_sql() -> String {
     r#"CREATE TABLE IF NOT EXISTS rindexer_internal.reorg_block_hashes (
@@ -68,7 +71,7 @@ pub fn generate_tables_for_indexer_clickhouse(
             // runtime stores (include_events plus table-driving events)
             let raw_events: Vec<_> = event_names
                 .iter()
-                .filter(|e| contract.stores_raw_events(&e.name))
+                .filter(|e| contract.stores_raw_events(e.abi_name()))
                 .cloned()
                 .collect();
 

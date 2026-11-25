@@ -1,57 +1,58 @@
-use std::{collections::HashMap, path::Path, sync::Arc};
-
-use alloy::primitives::U64;
-use futures::future::try_join_all;
-use futures::stream::FuturesUnordered;
-use futures::StreamExt;
-use tokio::sync::Mutex;
-use tokio::{
-    task::{JoinError, JoinHandle},
-    time::Instant,
-};
-use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
-
-use crate::abi::{ABIInput, ABIItem};
+#[cfg(feature = "clickhouse")]
 use crate::database::clickhouse::client::{ClickhouseClient, ClickhouseConnectionError};
-use crate::database::generate::generate_indexer_contract_schema_name;
-use crate::database::postgres::generate::generate_internal_event_table_name;
-use crate::event::config::{ContractEventProcessingConfig, FactoryEventProcessingConfig};
-use crate::helpers::{camel_to_snake, format_duration};
-use crate::indexer::native_transfer::native_transfer_block_processor;
-use crate::indexer::reorg::{
-    reorg_safe_distance_for_chain, BlockChainWindow, DerivedColumnJournal, DerivedColumnRollback,
-    DerivedTableInfo, DerivedTableRollbackOp, DerivedTableRollbackPlan, EventTableInfo,
-    ReorgBlockHashPersistence, ReorgContext, ReorgCoordinator,
-};
-use crate::indexer::Indexer;
-use crate::manifest::network::ReorgHandlingConfig;
 use crate::{
-    database::postgres::client::PostgresConnectionError,
+    abi::{ABIInput, ABIItem},
+    database::{
+        generate::generate_indexer_contract_schema_name,
+        postgres::generate::generate_internal_event_table_name,
+    },
     event::{
         callback_registry::{EventCallbackRegistry, TraceCallbackRegistry},
-        config::{EventProcessingConfig, TraceProcessingConfig},
+        config::{
+            ContractEventProcessingConfig, EventProcessingConfig, FactoryEventProcessingConfig,
+            TraceProcessingConfig,
+        },
     },
+    helpers::{camel_to_snake, format_duration},
     indexer::{
         dependency::ContractEventsDependenciesConfig,
         last_synced::{get_last_synced_block_number, SyncConfig},
         native_transfer::{
-            native_transfer_block_fetch, NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME,
+            native_transfer_block_fetch, native_transfer_block_processor, NATIVE_TRANSFER_ABI,
+            NATIVE_TRANSFER_CONTRACT_NAME,
         },
         process::{
             process_contracts_events_with_dependencies, process_non_blocking_event,
             ProcessContractsEventsWithDependenciesError, ProcessEventError,
         },
         progress::IndexingEventsProgressState,
-        ContractEventDependencies,
+        reorg::{
+            reorg_safe_distance_for_chain, BlockChainWindow, DerivedColumnJournal,
+            DerivedColumnRollback, DerivedTableInfo, DerivedTableRollbackOp,
+            DerivedTableRollbackPlan, EventTableInfo, ReorgBlockHashPersistence, ReorgContext,
+            ReorgCoordinator,
+        },
+        ContractEventDependencies, Indexer,
     },
     manifest::{
         contract::{ColumnType, ReorgSafeDistance},
         core::Manifest,
+        network::ReorgHandlingConfig,
     },
     provider::{ChainProvider, ProviderError},
-    PostgresClient,
 };
+#[cfg(feature = "postgres")]
+use crate::{database::postgres::client::PostgresConnectionError, PostgresClient};
+use alloy::primitives::U64;
+use futures::{future::try_join_all, stream::FuturesUnordered, StreamExt};
+use std::{collections::HashMap, path::Path, sync::Arc};
+use tokio::{
+    sync::Mutex,
+    task::{JoinError, JoinHandle},
+    time::Instant,
+};
+use tokio_util::sync::CancellationToken;
+use tracing::{error, info, warn};
 
 #[derive(thiserror::Error, Debug)]
 pub enum CombinedLogEventProcessingError {
@@ -72,9 +73,11 @@ pub enum StartIndexingError {
     CouldNotRunAllIndexHandlers(#[from] ProcessEventError),
 
     #[error("{0}")]
+    #[cfg(feature = "postgres")]
     PostgresConnectionError(#[from] PostgresConnectionError),
 
     #[error("{0}")]
+    #[cfg(feature = "clickhouse")]
     ClickhouseConnectionError(#[from] ClickhouseConnectionError),
 
     #[error("Could not get block number from provider: {0}")]
@@ -108,6 +111,39 @@ pub struct ProcessedNetworkContract {
     pub processed_up_to: U64,
 }
 
+/// Where to resume given a stored cursor.
+///
+/// A configured `start_block` always resumes at `last_synced + 1` (that is
+/// the backfill contract). `backfill_downtime` is set for events that drive
+/// custom tables: the aggregate is wrong if transfers mined while the
+/// process was down are skipped, so any stored cursor resumes at
+/// `last_synced + 1` even when the head has moved past it.
+///
+/// Live-from-head indexing without that flag leaves `start_block` unset and
+/// does not backfill a gap. A cursor that has already reached the head must
+/// still resume AFTER that block. Starting at the head re-indexes it, and
+/// raw-event inserts are not idempotent, so table arithmetic would apply
+/// twice.
+///
+/// `last_synced_block` is `None` for a missing row and for the seeded `0`
+/// (`get_last_synced_block_number` treats zero as "never indexed"). A tables
+/// contract therefore still starts at the head on its first boot, and
+/// rewinding the cursor to 0 does not rebuild history.
+fn indexing_resume_block(
+    manifest_start_block: Option<U64>,
+    last_synced_block: Option<U64>,
+    latest_block: U64,
+    backfill_downtime: bool,
+) -> Option<U64> {
+    let last_synced = last_synced_block?;
+    if manifest_start_block.is_some() || backfill_downtime || last_synced >= latest_block {
+        Some(last_synced + U64::from(1))
+    } else {
+        None
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn get_start_end_block(
     provider: &dyn ChainProvider,
     manifest_start_block: Option<U64>,
@@ -116,6 +152,7 @@ async fn get_start_end_block(
     event_name: &str,
     network: &str,
     reorg_safe_distance: Option<ReorgSafeDistance>,
+    backfill_downtime: bool,
 ) -> Result<(U64, U64, U64), StartIndexingError> {
     // Share the live poller's head snapshot: a fresh block-number read can get
     // ahead of a cached header when block_poll_frequency is long.
@@ -124,8 +161,10 @@ async fn get_start_end_block(
     })?;
     let latest_block = U64::from(latest_block.header.number);
 
+    // One past the head is where live indexing resumes after historic when no
+    // block has landed since: an empty range, not a start in the future.
     if let Some(start_block) = manifest_start_block {
-        if start_block > latest_block {
+        if start_block > latest_block.saturating_add(U64::from(1)) {
             error!(
                 "{} - start_block supplied in yaml - {} {} is higher then latest block number - {}",
                 event_name, network, start_block, latest_block
@@ -152,22 +191,19 @@ async fn get_start_end_block(
         }
     }
 
-    let last_known_start_block = if manifest_start_block.is_some() {
-        let last_synced_block = get_last_synced_block_number(config).await;
-
-        if let Some(value) = last_synced_block {
-            let start_from = value + U64::from(1);
-            info!(
-                "{} Found last synced block number - {:?} rindexer will start up from {:?}",
-                event_name, value, start_from
-            );
-            Some(start_from)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    let last_synced_block = get_last_synced_block_number(config).await;
+    let last_known_start_block = indexing_resume_block(
+        manifest_start_block,
+        last_synced_block,
+        latest_block,
+        backfill_downtime,
+    );
+    if let Some(start_from) = last_known_start_block {
+        info!(
+            "{} Found last synced block number - {:?} rindexer will start up from {:?}",
+            event_name, last_synced_block, start_from
+        );
+    }
 
     let start_block =
         last_known_start_block.unwrap_or(manifest_start_block.unwrap_or(latest_block));
@@ -195,8 +231,8 @@ async fn get_start_end_block(
 async fn start_indexing_traces(
     manifest: &Manifest,
     project_path: &Path,
-    postgres: Option<Arc<PostgresClient>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    #[cfg(feature = "postgres")] postgres: Option<Arc<PostgresClient>>,
+    #[cfg(feature = "clickhouse")] clickhouse: Option<Arc<ClickhouseClient>>,
     indexer: &Indexer,
     trace_registry: Arc<TraceCallbackRegistry>,
     cancel_token: CancellationToken,
@@ -251,7 +287,9 @@ async fn start_indexing_traces(
 
         let sync_config = SyncConfig {
             project_path,
+            #[cfg(feature = "postgres")]
             postgres: &postgres,
+            #[cfg(feature = "clickhouse")]
             clickhouse: &clickhouse,
             csv_details: &manifest.storage.csv,
             contract_csv_enabled: manifest.contract_csv_enabled(&first_event.contract_name),
@@ -271,6 +309,7 @@ async fn start_indexing_traces(
             &format!("TraceEvents[{}]", network_name),
             &network_name,
             first_event.trace_information.reorg_safe_distance,
+            false,
         )
         .await?;
 
@@ -291,6 +330,7 @@ async fn start_indexing_traces(
             event_name: "TraceEvents".to_string(),
             network: network_name.clone(),
             progress: progress.clone(),
+            #[cfg(feature = "postgres")]
             postgres: postgres.clone(),
             csv_details: None,
             registry: network_registry,
@@ -309,9 +349,11 @@ async fn start_indexing_traces(
             indexing_distance_from_head,
             network_name.clone(),
             cancel_token.clone(),
+            #[cfg(feature = "postgres")]
             postgres.clone(),
             first_event.indexer_name.clone(),
             reorg_coordinator,
+            #[cfg(feature = "clickhouse")]
             clickhouse.clone(),
             trace_registry.clone(),
         ));
@@ -726,8 +768,8 @@ fn build_derived_tables_for_event(
 async fn start_indexing_contract_events(
     manifest: &Manifest,
     project_path: &Path,
-    postgres: Option<Arc<PostgresClient>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    #[cfg(feature = "postgres")] postgres: Option<Arc<PostgresClient>>,
+    #[cfg(feature = "clickhouse")] clickhouse: Option<Arc<ClickhouseClient>>,
     indexer: &Indexer,
     registry: Arc<EventCallbackRegistry>,
     trace_registry: Arc<TraceCallbackRegistry>,
@@ -767,7 +809,9 @@ async fn start_indexing_contract_events(
             let event = event.clone();
             let network_contract = network_contract.clone();
             let project_path = project_path.to_path_buf();
+            #[cfg(feature = "postgres")]
             let postgres = postgres.clone();
+            #[cfg(feature = "clickhouse")]
             let clickhouse = clickhouse.clone();
             let manifest_csv_details = manifest.storage.csv.clone();
             let registry = Arc::clone(&registry);
@@ -777,7 +821,9 @@ async fn start_indexing_contract_events(
             block_tasks.push(async move {
                 let config = SyncConfig {
                     project_path: &project_path,
+                    #[cfg(feature = "postgres")]
                     postgres: &postgres,
+                    #[cfg(feature = "clickhouse")]
                     clickhouse: &clickhouse,
                     csv_details: &manifest_csv_details,
                     contract_csv_enabled: manifest.contract_csv_enabled(&event.contract.name),
@@ -796,6 +842,11 @@ async fn start_indexing_contract_events(
                     &event.info_log_name(),
                     &network_contract.network,
                     event.contract.reorg_safe_distance,
+                    // Custom-table arithmetic is not idempotent. Once a cursor
+                    // exists, resume at cursor+1 so transfers mined during
+                    // downtime are applied. Events with no tables keep the
+                    // live-from-head gap skip.
+                    !event.tables.is_empty(),
                 )
                 .await;
 
@@ -806,8 +857,6 @@ async fn start_indexing_contract_events(
                         stream_details,
                         blocks,
                         project_path,
-                        postgres,
-                        clickhouse,
                         manifest_csv_details,
                         registry,
                         progress,
@@ -932,8 +981,12 @@ async fn start_indexing_contract_events(
     }
 
     // Shared persistence per invocation (shared across all coordinators)
-    let reorg_persistence =
-        Arc::new(ReorgBlockHashPersistence::new(postgres.clone(), clickhouse.clone()));
+    let reorg_persistence = Arc::new(ReorgBlockHashPersistence::new(
+        #[cfg(feature = "postgres")]
+        postgres.clone(),
+        #[cfg(feature = "clickhouse")]
+        clickhouse.clone(),
+    ));
 
     // Build one ReorgCoordinator per network (shared across all events on that network).
     // The first non-blocking event on each network takes ownership; subsequent events get None.
@@ -1013,7 +1066,9 @@ async fn start_indexing_contract_events(
                         startup_task.detection_point.saturating_sub(startup_task.fork_point) + 1,
                     );
                     let reorg_ctx = ReorgContext {
+                        #[cfg(feature = "postgres")]
                         postgres: postgres.as_deref(),
+                        #[cfg(feature = "clickhouse")]
                         clickhouse: clickhouse.as_ref(),
                         registry: Some(&registry),
                         trace_registry: Some(&trace_registry),
@@ -1052,8 +1107,6 @@ async fn start_indexing_contract_events(
             stream_details,
             (start_block, end_block, indexing_distance_from_head),
             project_path,
-            postgres,
-            clickhouse,
             manifest_csv_details,
             registry,
             progress,
@@ -1061,6 +1114,10 @@ async fn start_indexing_contract_events(
             dependencies,
         ) = res?;
 
+        #[cfg(feature = "postgres")]
+        let postgres = postgres.clone();
+        #[cfg(feature = "clickhouse")]
+        let clickhouse = clickhouse.clone();
         processed_network_contracts.push(ProcessedNetworkContract {
             id: network_contract.id.clone(),
             processed_up_to: end_block,
@@ -1109,7 +1166,9 @@ async fn start_indexing_contract_events(
                     end_block,
                     registry: Arc::clone(&registry),
                     progress: Arc::clone(&progress),
+                    #[cfg(feature = "clickhouse")]
                     clickhouse: clickhouse.clone(),
+                    #[cfg(feature = "postgres")]
                     postgres: postgres.clone(),
                     config: manifest.config.clone(),
                     csv_details: manifest_csv_details.clone(),
@@ -1149,7 +1208,9 @@ async fn start_indexing_contract_events(
                 end_block,
                 registry: Arc::clone(&registry),
                 progress: Arc::clone(&progress),
+                #[cfg(feature = "postgres")]
                 postgres: postgres.clone(),
+                #[cfg(feature = "clickhouse")]
                 clickhouse: clickhouse.clone(),
                 csv_details: manifest_csv_details.clone(),
                 config: manifest.config.clone(),
@@ -1324,7 +1385,9 @@ async fn start_indexing_contract_events(
                                 startup_task.detection_point.saturating_sub(startup_task.fork_point) + 1,
                             );
                             let reorg_ctx = ReorgContext {
+                                #[cfg(feature = "postgres")]
                                 postgres: postgres.as_deref(),
+                                #[cfg(feature = "clickhouse")]
                                 clickhouse: clickhouse.as_ref(),
                                 registry: Some(&registry),
                                 trace_registry: Some(&trace_registry),
@@ -1448,7 +1511,9 @@ async fn start_indexing(
     cancel_token: CancellationToken,
     progress: Arc<IndexingEventsProgressState>,
 ) -> Result<Vec<ProcessedNetworkContract>, StartIndexingError> {
+    #[cfg(feature = "postgres")]
     let database = initialize_database(manifest).await?;
+    #[cfg(feature = "clickhouse")]
     let clickhouse = initialize_clickhouse(manifest).await?;
 
     // any events which are non-blocking and can be fired in parallel
@@ -1463,7 +1528,9 @@ async fn start_indexing(
     let contract_events_indexer = start_indexing_contract_events(
         manifest,
         project_path,
+        #[cfg(feature = "postgres")]
         database.clone(),
+        #[cfg(feature = "clickhouse")]
         clickhouse.clone(),
         &indexer,
         registry.clone(),
@@ -1499,7 +1566,9 @@ async fn start_indexing(
     let trace_indexer_handles = start_indexing_traces(
         manifest,
         project_path,
+        #[cfg(feature = "postgres")]
         database.clone(),
+        #[cfg(feature = "clickhouse")]
         clickhouse.clone(),
         &indexer,
         trace_registry.clone(),
@@ -1559,6 +1628,7 @@ async fn start_indexing(
     Ok(processed_network_contracts)
 }
 
+#[cfg(feature = "postgres")]
 pub async fn initialize_database(
     manifest: &Manifest,
 ) -> Result<Option<Arc<PostgresClient>>, StartIndexingError> {
@@ -1575,6 +1645,7 @@ pub async fn initialize_database(
     }
 }
 
+#[cfg(feature = "clickhouse")]
 pub async fn initialize_clickhouse(
     manifest: &Manifest,
 ) -> Result<Option<Arc<ClickhouseClient>>, StartIndexingError> {
@@ -1742,7 +1813,9 @@ contracts:
     fn empty_sync_config() -> SyncConfig<'static> {
         SyncConfig {
             project_path: Path::new("/tmp/test"),
+            #[cfg(feature = "postgres")]
             postgres: &None,
+            #[cfg(feature = "clickhouse")]
             clickhouse: &None,
             csv_details: &None,
             stream_details: &None,
@@ -1839,6 +1912,7 @@ contracts:
             "Test",
             "ethereum",
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1858,6 +1932,7 @@ contracts:
             "Test",
             "ethereum",
             None,
+            false,
         )
         .await;
 
@@ -1875,11 +1950,38 @@ contracts:
             "Test",
             "ethereum",
             None,
+            false,
         )
         .await;
 
         assert!(matches!(
             result,
+            Err(StartIndexingError::StartBlockIsHigherThanLatestBlockError(..))
+        ));
+    }
+
+    /// Live indexing restarts at the block after historic's last one. When no
+    /// block has landed since, that start is one past the head: nothing to backfill.
+    #[tokio::test]
+    async fn start_block_one_past_latest_resumes_after_the_head() {
+        let mock = provider_at_block(100);
+        let start_end = |start: u64| {
+            get_start_end_block(
+                &mock,
+                Some(U64::from(start)),
+                None,
+                empty_sync_config(),
+                "Test",
+                "ethereum",
+                None,
+                false,
+            )
+        };
+
+        let (start, end, _) = start_end(101).await.unwrap();
+        assert_eq!((start, end), (U64::from(101), U64::from(100)));
+        assert!(matches!(
+            start_end(102).await,
             Err(StartIndexingError::StartBlockIsHigherThanLatestBlockError(..))
         ));
     }
@@ -1895,6 +1997,7 @@ contracts:
             "Test",
             "ethereum",
             None,
+            false,
         )
         .await;
 
@@ -1915,6 +2018,7 @@ contracts:
             "Test",
             "ethereum",
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1935,6 +2039,7 @@ contracts:
             "Test",
             "ethereum",
             None,
+            false,
         )
         .await
         .unwrap();
@@ -1953,6 +2058,7 @@ contracts:
             "Test",
             "ethereum",
             Some(ReorgSafeDistance::Custom(50)),
+            false,
         )
         .await
         .unwrap();
@@ -1973,12 +2079,66 @@ contracts:
             "Test",
             "ethereum",
             None,
+            false,
         )
         .await
         .unwrap();
 
         assert_eq!(start, U64::from(500));
         assert_eq!(end, U64::from(500));
+    }
+
+    #[test]
+    fn live_from_head_does_not_reindex_a_caught_up_cursor() {
+        // Caught up at the head: resume AFTER it. Starting at the head
+        // would store the block's events a second time.
+        assert_eq!(
+            indexing_resume_block(None, Some(U64::from(5)), U64::from(5), false),
+            Some(U64::from(6))
+        );
+        // Cursor ahead of the tip (the chain has not produced the next
+        // block yet, or the tip read lagged). Still do not step backwards.
+        assert_eq!(
+            indexing_resume_block(None, Some(U64::from(8)), U64::from(5), false),
+            Some(U64::from(9))
+        );
+    }
+
+    #[test]
+    fn live_from_head_skips_blocks_missed_while_down() {
+        // No start_block, no tables, and the cursor is behind the tip: keep
+        // starting at the head. Downtime must not turn into a backfill.
+        assert_eq!(indexing_resume_block(None, Some(U64::from(5)), U64::from(100), false), None);
+        assert_eq!(indexing_resume_block(None, None, U64::from(100), false), None);
+    }
+
+    #[test]
+    fn tables_backfill_from_the_cursor_when_the_head_moved() {
+        // A custom-table event must apply transfers mined while the process
+        // was down. The head moving past the cursor is the normal case on a
+        // live chain.
+        assert_eq!(
+            indexing_resume_block(None, Some(U64::from(5)), U64::from(100), true),
+            Some(U64::from(6))
+        );
+        // Caught up still resumes after the cursor, not on top of it.
+        assert_eq!(
+            indexing_resume_block(None, Some(U64::from(5)), U64::from(5), true),
+            Some(U64::from(6))
+        );
+        // No cursor (including the seeded 0, which the reader turns into
+        // None): first boot still starts at the head. Rewinding to 0 does
+        // not rebuild history.
+        assert_eq!(indexing_resume_block(None, None, U64::from(100), true), None);
+    }
+
+    #[test]
+    fn configured_start_block_always_resumes_from_the_cursor() {
+        assert_eq!(
+            indexing_resume_block(Some(U64::from(1)), Some(U64::from(5)), U64::from(100), false),
+            Some(U64::from(6))
+        );
+        assert_eq!(indexing_resume_block(Some(U64::from(1)), None, U64::from(100), false), None);
     }
 
     #[tokio::test]
@@ -1992,6 +2152,7 @@ contracts:
             "Test",
             "ethereum",
             None,
+            false,
         )
         .await
         .unwrap();
@@ -2012,6 +2173,7 @@ contracts:
             "Test",
             "ethereum",
             None,
+            false,
         )
         .await
         .unwrap();
@@ -2032,6 +2194,7 @@ contracts:
             "Test",
             "ethereum",
             None,
+            false,
         )
         .await
         .unwrap();
@@ -2054,6 +2217,7 @@ contracts:
             "Test",
             "ethereum",
             Some(ReorgSafeDistance::Custom(200)),
+            false,
         )
         .await
         .unwrap();

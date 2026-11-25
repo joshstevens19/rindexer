@@ -51,7 +51,35 @@ networks:
   rpc: https://mainnet.gateway.tenderly.co // [!code focus]
 ```
 
-You can use [erpc](https://rindexer.xyz/docs/references/rpc-node-providers#rpc-proxy-and-caching) for load-balancing between multiple rpc endpoints (with failover, re-org aware caching, auto-batching, rate-limiters, auto-discovery of node providers, etc.)
+You can also supply a list of rpc urls: the first is the primary endpoint and the
+rest are ordered fallbacks. rindexer keeps traffic on one endpoint at a time and
+fails over automatically when the active endpoint errors, falls too far behind
+the other endpoints' chain tip (beyond the chain's reorg safe distance), or
+stops advancing. Each endpoint is verified against `chain_id` before its first
+use — a wrong-chain url is excluded from the pool and a fallback being down
+never blocks startup. Reorg handling is failover-aware: after a switch, the
+parent-hash validation window is revalidated against the new endpoint so a
+lagging fallback can never trigger a spurious reorg rollback.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: // [!code focus]
+    - ${ETHEREUM_RPC_PRIMARY} // [!code focus]
+    - ${ETHEREUM_RPC_FALLBACK} // [!code focus]
+```
+
+:::info
+Networks using a local reth/IPC endpoint are excluded from failover — extra
+urls configured alongside an IPC path are ignored.
+:::
+
+Alternatively you can use [erpc](https://rindexer.xyz/docs/references/rpc-node-providers#rpc-proxy-and-caching) for load-balancing between multiple rpc endpoints (with failover, re-org aware caching, auto-batching, rate-limiters, auto-discovery of node providers, etc.)
 
 ```yaml [rindexer.yaml]
 name: rETHIndexer

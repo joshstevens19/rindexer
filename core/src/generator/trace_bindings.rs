@@ -122,7 +122,7 @@ fn generate_event_type_name(name: &str) -> String {
 fn generate_event_names_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> Code {
     let mut arms = event_info
         .iter()
-        .map(|info| format!("{}::{}(_) => \"{}\",", event_type_name, info.name, info.name))
+        .map(|info| format!("{}::{}(_) => \"{}\",", event_type_name, info.name, info.abi_name()))
         .collect::<Vec<_>>();
 
     // Add Block event match arm
@@ -761,12 +761,13 @@ pub fn generate_trace_handlers(
     let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
 
     let mut imports = String::new();
+    let postgres_import = if storage.postgres_enabled() { "PgType, " } else { "" };
     imports.push_str(&format!(
         r#"#![allow(non_snake_case)]
 {GENERATED_FILE_HEADER}
 use rindexer::{{
     event::callback_registry::TraceCallbackRegistry,
-    EthereumSqlTypeWrapper, PgType, rindexer_error, rindexer_info
+    EthereumSqlTypeWrapper, {postgres_import}rindexer_error, rindexer_info
 }};
 "#
     ));

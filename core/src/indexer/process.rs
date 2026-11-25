@@ -1,41 +1,35 @@
-use alloy::primitives::{B256, U64};
-
-use futures::future::join_all;
-use futures::stream::FuturesUnordered;
-use futures::{poll, FutureExt, StreamExt};
-use std::{collections::HashMap, sync::Arc, time::Duration};
-use tokio::sync::Semaphore;
-use tokio::{
-    sync::Mutex,
-    task::{JoinError, JoinHandle},
-    time::Instant,
-};
-use tracing::{debug, error, info, warn};
-
-use crate::helpers::is_relevant_block;
-use crate::indexer::heartbeat::{HeartbeatAction, HeartbeatTracker};
-use crate::indexer::reorg::{
-    detect_and_handle_reorg, event_writer_barrier, reorg_safe_distance_for_chain, ReorgContext,
-    ReorgCoordinator,
-};
-use crate::metrics::indexing as metrics;
-use crate::provider::ChainProvider;
 use crate::{
     event::{
         callback_registry::{EventResult, TraceCallbackRegistry},
         config::EventProcessingConfig,
         BuildRindexerFilterError, RindexerEventFilter,
     },
+    helpers::is_relevant_block,
     indexer::{
         dependency::{ContractEventsDependenciesConfig, EventDependencies},
-        fetch_logs::{fetch_logs_stream, FetchLogsResult},
+        fetch_logs::{covered_to_block, fetch_logs_stream, EndpointSwitchWatcher, FetchLogsResult},
+        heartbeat::{HeartbeatAction, HeartbeatTracker},
         last_synced::update_progress_and_last_synced_task,
         progress::IndexingEventProgressStatus,
+        reorg::{
+            detect_and_handle_reorg, event_writer_barrier, reorg_safe_distance_for_chain,
+            ReorgContext, ReorgCoordinator,
+        },
         task_tracker::{indexing_event_processed, indexing_event_processing},
     },
     is_running,
-    provider::ProviderError,
+    metrics::indexing as metrics,
+    provider::{ChainProvider, ProviderError},
 };
+use alloy::primitives::{B256, U64};
+use futures::{future::join_all, poll, stream::FuturesUnordered, FutureExt, StreamExt};
+use std::{collections::HashMap, sync::Arc, time::Duration};
+use tokio::{
+    sync::{Mutex, Semaphore},
+    task::{JoinError, JoinHandle},
+    time::Instant,
+};
+use tracing::{debug, error, info, warn};
 
 #[derive(thiserror::Error, Debug)]
 pub enum ProcessEventError {
@@ -474,8 +468,9 @@ async fn live_indexing_for_contract_event_dependencies(
 
     for (config, event_filter) in events.iter() {
         let mut filter = event_filter.clone();
-        let last_seen_block_number = filter.to_block();
-        let next_block_number = last_seen_block_number + U64::from(1);
+        let next_block_number =
+            std::cmp::max(filter.from_block(), filter.to_block().saturating_add(U64::from(1)));
+        let last_seen_block_number = next_block_number.saturating_sub(U64::from(1));
 
         filter = filter.set_from_block(next_block_number).set_to_block(next_block_number);
 
@@ -486,6 +481,7 @@ async fn live_indexing_for_contract_event_dependencies(
     }
 
     let mut heartbeat = HeartbeatTracker::new(cached_provider.block_poll_frequency());
+    let mut switch_watcher = EndpointSwitchWatcher::new(cached_provider.as_ref());
     let target_iteration_duration = Duration::from_millis(200);
     let callback_permits = Arc::new(Semaphore::new(1));
 
@@ -495,10 +491,14 @@ async fn live_indexing_for_contract_event_dependencies(
     let reorg_coordinator = reorg_coordinator;
     let writer_barrier = event_writer_barrier(&network);
 
-    let (pg_client, ch_client, event_registry) = events
+    let (config, _) = events
         .first()
-        .map(|(config, _)| (config.postgres(), config.clickhouse(), config.registry()))
         .expect("live_indexing_for_contract_event_dependencies called with no events");
+    #[cfg(feature = "postgres")]
+    let pg_client = config.postgres();
+    #[cfg(feature = "clickhouse")]
+    let ch_client = config.clickhouse();
+    let event_registry = config.registry();
 
     loop {
         if !is_running() {
@@ -510,6 +510,19 @@ async fn live_indexing_for_contract_event_dependencies(
         }
 
         let iteration_start = Instant::now();
+
+        // A probe can fail the transport over between iterations. Suspend
+        // parent-hash validation before the next tip is compared against the
+        // window the previous endpoint built.
+        if switch_watcher.switched(cached_provider.as_ref()) {
+            if let Some(coordinator) = reorg_coordinator.as_ref() {
+                coordinator.lock().await.suspend_for_endpoint_switch();
+            }
+            info!(
+                "{} - RPC endpoint switched - suspending reorg window validation until the new endpoint catches up",
+                network
+            );
+        }
 
         // a consistent latest block number across all events in the batch is required to avoid race conditions
         let latest_block = match cached_provider.get_latest_block().await {
@@ -533,11 +546,26 @@ async fn live_indexing_for_contract_event_dependencies(
             }
         };
 
+        // The call above can itself fail over. Suspend before reorg
+        // validation so a lagging replacement's tip is not compared against
+        // the previous endpoint's window.
+        if switch_watcher.switched(cached_provider.as_ref()) {
+            if let Some(coordinator) = reorg_coordinator.as_ref() {
+                coordinator.lock().await.suspend_for_endpoint_switch();
+            }
+            info!(
+                "{} - RPC endpoint switched during latest-block fetch - suspending reorg window validation until the new endpoint catches up",
+                network
+            );
+        }
+
         // Reorg detection: validate parent hash via coordinator
         if let Some(coordinator) = reorg_coordinator.as_ref() {
             let log_prefix = format!("{} - {}", network, IndexingEventProgressStatus::live_log());
             let reorg_ctx = ReorgContext {
+                #[cfg(feature = "postgres")]
                 postgres: pg_client.as_deref(),
+                #[cfg(feature = "clickhouse")]
                 clickhouse: ch_client.as_ref(),
                 registry: Some(&event_registry),
                 trace_registry: trace_registry.as_deref(),
@@ -601,6 +629,9 @@ async fn live_indexing_for_contract_event_dependencies(
                     latest_block_number,
                     heartbeat.stall_timeout().as_secs()
                 );
+                cached_provider.flag_active_endpoint_degraded(&format!(
+                    "chain tip stalled at block {latest_block_number} for 5 minutes"
+                ));
             }
         }
 
@@ -734,7 +765,28 @@ async fn live_indexing_for_contract_event_dependencies(
                 ordering_live_indexing_details.filter
             );
 
-            match cached_provider.get_logs(&ordering_live_indexing_details.filter).await {
+            let logs_result =
+                cached_provider.get_logs(&ordering_live_indexing_details.filter).await;
+            // The range was sized from the tip at the start of this iteration.
+            // A failover inside get_logs can return an empty set for blocks the
+            // replacement has not reached. Discard it and leave every event's
+            // cursor where it is; the next iteration recomputes from the new tip.
+            // Breaking also stops later events in this batch from accepting a
+            // range that was computed against the old tip after the switch.
+            if switch_watcher.switched(cached_provider.as_ref()) {
+                if let Some(coordinator) = reorg_coordinator.as_ref() {
+                    coordinator.lock().await.suspend_for_endpoint_switch();
+                }
+                info!(
+                    "{} - RPC endpoint switched during eth_getLogs for blocks {}-{}; discarding the result and retrying",
+                    config.info_log_name(),
+                    from_block,
+                    to_block
+                );
+                break;
+            }
+
+            match logs_result {
                 Ok(logs) => {
                     debug!(
                         "{} - {} - Live id {} topic_id {}, Logs: {} from {} to {}",
@@ -762,9 +814,10 @@ async fn live_indexing_for_contract_event_dependencies(
                     let logs_empty = logs.is_empty();
                     // clone here over the full logs way less overhead
                     let last_log = logs.last().cloned();
+                    let covered_to = covered_to_block(&logs, to_block);
 
                     let fetched_logs =
-                        Ok(FetchLogsResult { logs, from_block, to_block, reorg: None });
+                        Ok(FetchLogsResult { logs, from_block, to_block: covered_to, reorg: None });
 
                     let result = handle_logs_result(
                         Arc::clone(config),
@@ -1092,5 +1145,314 @@ mod tests {
         for expected in (0..5).chain([100, 101]).chain(200..205) {
             assert!(seen.contains(&expected), "missing dispatch for tag {expected}: {completed:?}");
         }
+    }
+
+    /// `(found_in_request.from_block, found_in_request.to_block, log block)` per result.
+    type Reported = Arc<std::sync::Mutex<Vec<(U64, U64, u64)>>>;
+
+    /// A mock chain with a block for each of `blocks` and a log in each of `log_blocks`.
+    fn chain_with_logs(
+        blocks: std::ops::RangeInclusive<u64>,
+        log_blocks: &[u64],
+    ) -> Arc<crate::provider::mock::MockChainProvider> {
+        use alloy::{
+            network::{AnyHeader, AnyRpcBlock, AnyRpcHeader},
+            primitives::{Address, Bytes, Log as PrimitiveLog, LogData},
+            rpc::types::{Block, BlockTransactions, Log},
+        };
+
+        let logs = log_blocks
+            .iter()
+            .map(|&block| Log {
+                inner: PrimitiveLog {
+                    address: Address::ZERO,
+                    data: LogData::new_unchecked(vec![], Bytes::new()),
+                },
+                block_hash: Some(B256::repeat_byte(1)),
+                block_number: Some(block),
+                block_timestamp: None,
+                transaction_hash: Some(B256::repeat_byte(2)),
+                transaction_index: Some(0),
+                log_index: Some(0),
+                removed: false,
+            })
+            .collect();
+        let blocks = blocks
+            .map(|number| {
+                AnyRpcBlock::new(
+                    Block::new(
+                        AnyRpcHeader::from_sealed(
+                            AnyHeader { number, ..Default::default() }.seal(B256::repeat_byte(3)),
+                        ),
+                        BlockTransactions::Full(vec![]),
+                    )
+                    .into(),
+                )
+            })
+            .collect();
+        Arc::new(
+            crate::provider::mock::MockChainProvider::new(1).with_blocks(blocks).with_logs(logs),
+        )
+    }
+
+    /// One event over `start_block..=end_block` on `provider`. The handler records
+    /// what it is handed into `reported` and cancels the generation once it sees a
+    /// log at or after `stop_at`.
+    async fn test_event(
+        provider: Arc<dyn ChainProvider>,
+        start_block: u64,
+        end_block: u64,
+        live_indexing: bool,
+        index_event_in_order: bool,
+        reported: &Reported,
+        stop_at: u64,
+    ) -> EventProcessingConfig {
+        use crate::{
+            blockclock::BlockClock,
+            event::{
+                callback_registry::{EventCallbackRegistry, EventCallbackRegistryInformation},
+                config::ContractEventProcessingConfig,
+                contract_setup::{
+                    AddressDetails, ContractInformation, IndexingContractSetup, NetworkContract,
+                },
+            },
+            indexer::IndexingEventsProgressState,
+            manifest::config::Config,
+            types::single_or_array::StringOrArray,
+        };
+        use alloy::{primitives::Address, rpc::types::ValueOrArray};
+        use std::path::PathBuf;
+        use tokio_util::sync::CancellationToken;
+
+        let network_contract = NetworkContract {
+            id: "test-network-contract".to_string(),
+            network: "test-network".to_string(),
+            indexing_contract_setup: IndexingContractSetup::Address(AddressDetails {
+                address: ValueOrArray::Value(Address::ZERO),
+                indexed_filters: None,
+            }),
+            cached_provider: Arc::clone(&provider),
+            block_clock: BlockClock::new(None, None, Arc::clone(&provider)),
+            decoder: Arc::new(|_, _| Arc::new(()) as Arc<dyn std::any::Any + Send + Sync>),
+            start_block: Some(U64::from(start_block)),
+            end_block: None,
+            // The mock blocks carry no logs bloom.
+            disable_logs_bloom_checks: true,
+        };
+
+        let cancel_token = CancellationToken::new();
+        let mut registry = EventCallbackRegistry::new();
+        registry.register_event(EventCallbackRegistryInformation {
+            id: "test-event".to_string(),
+            indexer_name: "test-indexer".to_string(),
+            topic_id: B256::ZERO,
+            event_name: "TestEvent".to_string(),
+            index_event_in_order,
+            contract: ContractInformation {
+                name: "test-contract".to_string(),
+                details: vec![network_contract.clone()],
+                abi: StringOrArray::Single(String::new()),
+                reorg_safe_distance: None,
+            },
+            callback: {
+                let reported = Arc::clone(reported);
+                let cancel_token = cancel_token.clone();
+                Arc::new(move |results: Vec<EventResult>| {
+                    let delivered: Vec<_> = results
+                        .iter()
+                        .map(|r| {
+                            (
+                                r.found_in_request.from_block,
+                                r.found_in_request.to_block,
+                                r.tx_information.block_number,
+                            )
+                        })
+                        .collect();
+                    if delivered.iter().any(|(_, _, block)| *block >= stop_at) {
+                        cancel_token.cancel();
+                    }
+                    reported.lock().unwrap().extend(delivered);
+                    Box::pin(async { Ok(()) })
+                })
+            },
+            tables: Arc::new(vec![]),
+            reorg_sender: None,
+            streams_clients: Arc::new(None),
+            providers: Arc::new(HashMap::new()),
+            constants: Arc::new(HashMap::new()),
+            multicall_addresses: Arc::new(HashMap::new()),
+        });
+
+        EventProcessingConfig::ContractEventProcessing(ContractEventProcessingConfig {
+            id: "test-event".to_string(),
+            project_path: PathBuf::new(),
+            indexer_name: "test-indexer".to_string(),
+            contract_name: "test-contract".to_string(),
+            topic_id: B256::ZERO,
+            event_name: "TestEvent".to_string(),
+            config: Config::default(),
+            network_contract: Arc::new(network_contract),
+            timestamps: false,
+            start_block: U64::from(start_block),
+            end_block: U64::from(end_block),
+            registry: Arc::new(registry),
+            progress: IndexingEventsProgressState::monitor(&[], &[], None).await,
+            #[cfg(feature = "postgres")]
+            postgres: None,
+            #[cfg(feature = "clickhouse")]
+            clickhouse: None,
+            csv_details: None,
+            stream_last_synced_block_file_path: None,
+            index_event_in_order,
+            live_indexing,
+            indexing_distance_from_head: U64::ZERO,
+            cancel_token,
+            tables: Arc::new(vec![]),
+            reorg_sender: None,
+            streams_clients: Arc::new(None),
+            contract_abi: None,
+            providers: Arc::new(HashMap::new()),
+            constants: Arc::new(HashMap::new()),
+            multicall_addresses: Arc::new(HashMap::new()),
+        })
+    }
+
+    fn single_event_dependencies() -> EventDependencies {
+        EventDependencies {
+            tree: Arc::new(crate::indexer::dependency::EventsDependencyTree::new(vec![
+                crate::event::contract_setup::ContractEventMapping {
+                    contract_name: "test-contract".to_string(),
+                    event_name: "TestEvent".to_string(),
+                },
+            ])),
+            dependency_events: vec![],
+        }
+    }
+
+    fn delivered_log_blocks(reported: &Reported) -> Vec<u64> {
+        reported.lock().unwrap().iter().map(|(_, _, block)| *block).collect()
+    }
+
+    /// The window ends at `TIP` but its last log is in `TIP - 2`, so the next fetch
+    /// starts from `TIP - 1`. The handler must not be told the batch covers `TIP`.
+    #[tokio::test(start_paused = true)]
+    async fn ordered_live_batch_with_logs_reports_only_through_its_last_log_block() {
+        const TIP: u64 = 603;
+        let provider = chain_with_logs(TIP..=TIP, &[TIP - 2]);
+        let reported = Reported::default();
+        let config = Arc::new(
+            test_event(provider.clone(), TIP - 4, TIP - 4, true, true, &reported, 0).await,
+        );
+        let filter = RindexerEventFilter::empty_for_test()
+            .set_from_block(U64::from(TIP - 4))
+            .set_to_block(U64::from(TIP - 4));
+
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            live_indexing_for_contract_event_dependencies(EventDependenciesIndexingConfig {
+                network: "test-network".to_string(),
+                cached_provider: provider,
+                events: vec![(config, filter)],
+                reorg_coordinator: None,
+                trace_registry: None,
+            }),
+        )
+        .await
+        .expect("the loop stops once the handler cancels the generation");
+
+        assert_eq!(
+            *reported.lock().unwrap(),
+            vec![(U64::from(TIP - 3), U64::from(TIP - 2), TIP - 2)]
+        );
+    }
+
+    // Historic resync ends at the head `N`; the live pass then starts at `N + 1`,
+    // which does not exist yet. Across both passes the handler must get the log
+    // in `N` once, nothing while the head stays at `N`, then the log in `N + 1`.
+    const N: u64 = 156;
+
+    #[tokio::test(start_paused = true)]
+    async fn ordered_historic_then_live_hands_each_block_over_once() {
+        let provider = chain_with_logs(N - 1..=N + 1, &[N, N + 1]);
+        provider.set_head(N);
+        let reported = Reported::default();
+
+        let historic = test_event(provider.clone(), N - 1, N, false, true, &reported, N + 1).await;
+        process_contract_events_with_dependencies(
+            single_event_dependencies(),
+            Arc::new(vec![Arc::new(historic)]),
+            HashMap::new(),
+            Arc::new(TraceCallbackRegistry::new()),
+        )
+        .await
+        .expect("historic pass");
+        assert_eq!(delivered_log_blocks(&reported), vec![N]);
+
+        let live = test_event(provider.clone(), N + 1, N, true, true, &reported, N + 1).await;
+        let live_pass = tokio::spawn(process_contract_events_with_dependencies(
+            single_event_dependencies(),
+            Arc::new(vec![Arc::new(live)]),
+            HashMap::new(),
+            Arc::new(TraceCallbackRegistry::new()),
+        ));
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(!live_pass.is_finished(), "live pass waits for the next block");
+        assert_eq!(delivered_log_blocks(&reported), vec![N]);
+
+        provider.set_head(N + 1);
+        tokio::time::timeout(Duration::from_secs(10), live_pass)
+            .await
+            .expect("the live pass stops once the handler cancels the generation")
+            .expect("live pass task")
+            .expect("live pass");
+        assert_eq!(delivered_log_blocks(&reported), vec![N, N + 1]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn plain_historic_then_live_hands_each_block_over_once() {
+        let provider = chain_with_logs(N - 1..=N + 1, &[N, N + 1]);
+        provider.set_head(N);
+        let reported = Reported::default();
+
+        let historic = test_event(provider.clone(), N - 1, N, false, false, &reported, N + 1).await;
+        process_non_blocking_event(historic, None, None).await.expect("historic pass");
+        assert_eq!(delivered_log_blocks(&reported), vec![N]);
+
+        let live = test_event(provider.clone(), N + 1, N, true, false, &reported, N + 1).await;
+        let live_pass = tokio::spawn(process_non_blocking_event(live, None, None));
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(!live_pass.is_finished(), "live pass waits for the next block");
+        assert_eq!(delivered_log_blocks(&reported), vec![N]);
+
+        provider.set_head(N + 1);
+        tokio::time::timeout(Duration::from_secs(10), live_pass)
+            .await
+            .expect("the live pass stops once the handler cancels the generation")
+            .expect("live pass task")
+            .expect("live pass");
+        assert_eq!(delivered_log_blocks(&reported), vec![N, N + 1]);
+    }
+
+    /// A pass whose start is past its end (the head lagged the stored start) has
+    /// nothing to backfill. Live indexing starts at that start, not at `end + 1`.
+    #[tokio::test(start_paused = true)]
+    async fn ordered_live_starts_at_its_start_when_the_range_ends_before_it() {
+        let provider = chain_with_logs(N..=N + 2, &[N + 1, N + 2]);
+        let reported = Reported::default();
+        let live = test_event(provider, N + 2, N, true, true, &reported, N + 2).await;
+
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            process_contract_events_with_dependencies(
+                single_event_dependencies(),
+                Arc::new(vec![Arc::new(live)]),
+                HashMap::new(),
+                Arc::new(TraceCallbackRegistry::new()),
+            ),
+        )
+        .await
+        .expect("the live pass stops once the handler cancels the generation")
+        .expect("live pass");
+        assert_eq!(delivered_log_blocks(&reported), vec![N + 2]);
     }
 }

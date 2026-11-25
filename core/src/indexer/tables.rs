@@ -142,43 +142,57 @@
 //!                 value: $value
 //! ```
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
-use alloy::dyn_abi::{DynSolType, DynSolValue};
-use alloy::primitives::{Address, Bytes, B256, I256, U256, U64};
+#[cfg(any(feature = "postgres", feature = "clickhouse"))]
+use crate::database::batch_operations::{BatchOperationColumnBehavior, DynamicColumnDefinition};
+#[cfg(feature = "clickhouse")]
+use crate::database::clickhouse::{
+    batch_operations::execute_dynamic_batch_operation as execute_clickhouse_dynamic_batch_operation,
+    client::ClickhouseClient,
+};
+#[cfg(feature = "postgres")]
+use crate::database::{
+    generate::generate_indexer_contract_schema_name,
+    postgres::{
+        batch_operations::execute_dynamic_batch_operation,
+        client::{pg_error_to_string, PostgresClient},
+        generate::{generate_internal_event_table_name, generate_table_op_claim_table_sql},
+        write_mode::PgWriteMode,
+    },
+};
+use crate::{
+    adaptive_concurrency::ADAPTIVE_CONCURRENCY,
+    database::{
+        batch_operations::{BatchOperationAction, BatchOperationSqlType, BatchOperationType},
+        generate::generate_table_full_name,
+        sql_type_wrapper::EthereumSqlTypeWrapper,
+    },
+    event::{evaluate_arithmetic, filter_by_expression, parse_filter_expression, ComputedValue},
+    manifest::{
+        contract::{
+            compute_sequence_id, injected_columns, ColumnType, IterateBinding, OperationType,
+            SetAction, SetColumn, Table, TableOperation,
+        },
+        core::Constants,
+    },
+    provider::ChainProvider,
+    system_state::is_running,
+    types::core::LogParam,
+};
+use alloy::{
+    dyn_abi::{DynSolType, DynSolValue},
+    primitives::{Address, Bytes, B256, I256, U256, U64},
+};
 use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 use tokio::sync::RwLock;
+#[cfg(feature = "postgres")]
 use tokio_postgres::Transaction as PgTransaction;
 use tracing::{debug, info, warn};
-
-use crate::adaptive_concurrency::ADAPTIVE_CONCURRENCY;
-use crate::database::batch_operations::{
-    BatchOperationAction, BatchOperationColumnBehavior, BatchOperationSqlType, BatchOperationType,
-    DynamicColumnDefinition,
-};
-use crate::database::clickhouse::batch_operations::execute_dynamic_batch_operation as execute_clickhouse_dynamic_batch_operation;
-use crate::database::clickhouse::client::ClickhouseClient;
-use crate::database::generate::generate_indexer_contract_schema_name;
-use crate::database::generate::generate_table_full_name;
-use crate::database::postgres::batch_operations::execute_dynamic_batch_operation;
-use crate::database::postgres::client::{pg_error_to_string, PostgresClient};
-use crate::database::postgres::generate::generate_internal_event_table_name;
-use crate::database::postgres::write_mode::PgWriteMode;
-use crate::database::sql_type_wrapper::EthereumSqlTypeWrapper;
-use crate::event::{
-    evaluate_arithmetic, filter_by_expression, parse_filter_expression, ComputedValue,
-};
-use crate::manifest::contract::{
-    compute_sequence_id, injected_columns, ColumnType, IterateBinding, OperationType, SetAction,
-    SetColumn, Table, TableOperation,
-};
-use crate::manifest::core::Constants;
-use crate::provider::ChainProvider;
-use crate::system_state::is_running;
-use crate::types::core::LogParam;
 
 /// Configuration for tracking and checkpointing progress during table operations.
 #[derive(Clone)]
@@ -186,6 +200,7 @@ pub struct ProgressCheckpointConfig {
     pub indexer_name: String,
     pub contract_name: String,
     pub event_name: String,
+    #[cfg(feature = "postgres")]
     pub postgres: Option<Arc<PostgresClient>>,
 }
 
@@ -194,14 +209,21 @@ impl ProgressCheckpointConfig {
         indexer_name: String,
         contract_name: String,
         event_name: String,
-        postgres: Option<Arc<PostgresClient>>,
+        #[cfg(feature = "postgres")] postgres: Option<Arc<PostgresClient>>,
     ) -> Self {
-        Self { indexer_name, contract_name, event_name, postgres }
+        Self {
+            indexer_name,
+            contract_name,
+            event_name,
+            #[cfg(feature = "postgres")]
+            postgres,
+        }
     }
 
     /// Save the last synced block for a specific network.
     /// Only updates if the new block is higher than the current value.
     pub async fn checkpoint(&self, network: &str, block_number: u64) {
+        #[cfg(feature = "postgres")]
         if let Some(postgres) = &self.postgres {
             let schema =
                 generate_indexer_contract_schema_name(&self.indexer_name, &self.contract_name);
@@ -1477,12 +1499,18 @@ pub(crate) fn warn_on_unusable_arithmetic_defaults(table: &Table, table_label: &
 }
 
 /// Data for a single table row to be processed.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct TableRowData {
     /// Column values keyed by column name
     pub columns: HashMap<String, EthereumSqlTypeWrapper>,
     /// Network for this row
     pub network: String,
+    /// Log identity. The arithmetic claim is keyed on these so a retried log
+    /// does not apply again. Empty `tx_hash` means "no identity" and the row
+    /// is applied without a claim (cron runs and tests that predate the claim).
+    pub tx_hash: String,
+    pub log_index: i64,
+    pub block_number: i64,
 }
 
 /// Checks if a value string contains arithmetic operators indicating it's a computed expression.
@@ -1861,13 +1889,16 @@ fn parse_view_call(value: &str) -> Option<ViewCall> {
     let mut paren_depth = 1;
     let mut call_end = None;
 
-    for (i, c) in value.chars().enumerate().skip(start) {
+    // `char_indices` on the slice after the prefix yields byte offsets, which is
+    // what the `value[..]` slicing below needs; a character index would land in
+    // the wrong place (or inside a character) for any multi-byte input.
+    for (offset, c) in value[start..].char_indices() {
         match c {
             '(' => paren_depth += 1,
             ')' => {
                 paren_depth -= 1;
                 if paren_depth == 0 {
-                    call_end = Some(i);
+                    call_end = Some(start + offset);
                     break;
                 }
             }
@@ -1980,13 +2011,14 @@ fn parse_single_return_field(s: &str) -> Option<ReturnField> {
         // Find matching closing paren
         let mut paren_depth = 0;
         let mut tuple_end = None;
-        for (i, c) in s.chars().enumerate() {
+        // Byte offsets, not character indices: the slicing below indexes bytes.
+        for (offset, c) in s.char_indices() {
             match c {
                 '(' => paren_depth += 1,
                 ')' => {
                     paren_depth -= 1;
                     if paren_depth == 0 {
-                        tuple_end = Some(i);
+                        tuple_end = Some(offset);
                         break;
                     }
                 }
@@ -3792,7 +3824,13 @@ pub(crate) async fn prepare_table_operations<'t>(
                             EthereumSqlTypeWrapper::Address(tx_metadata.contract_address),
                         );
 
-                        rows_to_process.push(TableRowData { columns, network: network.clone() });
+                        rows_to_process.push(TableRowData {
+                            columns,
+                            network: network.clone(),
+                            tx_hash: format!("{:?}", tx_metadata.tx_hash),
+                            log_index: tx_metadata.log_index.to::<u64>() as i64,
+                            block_number: tx_metadata.block_number as i64,
+                        });
                         // Track max block for this batch
                         batch_max_blocks
                             .entry(network.clone())
@@ -3835,12 +3873,14 @@ pub(crate) async fn prepare_table_operations<'t>(
 /// or drops the transaction.
 pub(crate) async fn apply_table_operations(
     prepared: &PreparedTableOps<'_>,
-    pg: Option<PgWriteMode<'_>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    #[cfg(feature = "postgres")] pg: Option<PgWriteMode<'_>>,
+    #[cfg(feature = "clickhouse")] clickhouse: Option<Arc<ClickhouseClient>>,
     checkpoint_config: Option<&ProgressCheckpointConfig>,
 ) -> Result<(), String> {
+    #[cfg(feature = "postgres")]
     let postgres = match pg {
         Some(PgWriteMode::Tx(tx)) => {
+            #[cfg(feature = "clickhouse")]
             if clickhouse.is_some() {
                 return Err("apply_table_operations: ClickHouse operations cannot join a Postgres transaction".to_string());
             }
@@ -3856,7 +3896,7 @@ pub(crate) async fn apply_table_operations(
     // Track the max block number written per network - used for checkpointing on shutdown
     let mut max_block_written_per_network: HashMap<String, u64> = HashMap::new();
 
-    for op in &prepared.ops {
+    for (op_index, op) in prepared.ops.iter().enumerate() {
         // Check for shutdown before each operation
         if !is_running() {
             // Only checkpoint if we've actually written data to the database
@@ -3879,7 +3919,11 @@ pub(crate) async fn apply_table_operations(
         }
 
         // Execute the operation
+        #[cfg(feature = "postgres")]
         if let Some(postgres) = postgres {
+            // The claim, the write and the set/max/min journal commit together
+            // inside execute_postgres_operation. A retried log finds the claim
+            // and does not apply again.
             execute_postgres_operation(
                 PgWriteMode::Eager(postgres),
                 &op.table.full_table_name,
@@ -3887,14 +3931,12 @@ pub(crate) async fn apply_table_operations(
                 op.operation,
                 &op.rows,
                 op.sql_condition.as_deref(),
+                i32::try_from(op_index).unwrap_or(i32::MAX),
             )
             .await?;
-
-            // Journal non-reversible operations (Set/Max/Min) for reorg recalculation
-            journal_non_reversible_ops(postgres, &op.table.full_table_name, op.operation, &op.rows)
-                .await;
         }
 
+        #[cfg(feature = "clickhouse")]
         if let Some(clickhouse) = &clickhouse {
             execute_clickhouse_operation(
                 clickhouse,
@@ -3931,11 +3973,14 @@ pub(crate) async fn apply_table_operations(
 }
 
 /// Stages every prepared operation and its journal row in `tx`; nothing commits here.
+#[cfg(feature = "postgres")]
 async fn apply_table_operations_in_tx(
     prepared: &PreparedTableOps<'_>,
     tx: &PgTransaction<'_>,
 ) -> Result<(), String> {
-    for op in &prepared.ops {
+    for (op_index, op) in prepared.ops.iter().enumerate() {
+        // Journaling of fresh rows happens inside execute, on this same
+        // transaction, so a claim that skips a retried log also skips the journal.
         execute_postgres_operation(
             PgWriteMode::Tx(tx),
             &op.table.full_table_name,
@@ -3943,11 +3988,9 @@ async fn apply_table_operations_in_tx(
             op.operation,
             &op.rows,
             op.sql_condition.as_deref(),
+            i32::try_from(op_index).unwrap_or(i32::MAX),
         )
         .await?;
-
-        journal_non_reversible_ops_in_tx(tx, &op.table.full_table_name, op.operation, &op.rows)
-            .await?;
     }
 
     Ok(())
@@ -3971,8 +4014,8 @@ pub async fn process_table_operations(
     tables: &[TableRuntime],
     event_name: &str,
     events_data: &[(Vec<LogParam>, String, TxMetadata)], // (log_params, network, tx_metadata)
-    postgres: Option<Arc<PostgresClient>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    #[cfg(feature = "postgres")] postgres: Option<Arc<PostgresClient>>,
+    #[cfg(feature = "clickhouse")] clickhouse: Option<Arc<ClickhouseClient>>,
     providers: Arc<HashMap<String, Arc<dyn ChainProvider>>>,
     constants: &Constants,
     multicall_addresses: &HashMap<String, Option<String>>,
@@ -3990,7 +4033,9 @@ pub async fn process_table_operations(
 
     apply_table_operations(
         &prepared,
+        #[cfg(feature = "postgres")]
         postgres.as_deref().map(PgWriteMode::Eager),
+        #[cfg(feature = "clickhouse")]
         clickhouse,
         checkpoint_config,
     )
@@ -4071,12 +4116,83 @@ fn operation_type_to_batch_type(op_type: &OperationType) -> BatchOperationType {
     }
 }
 
+/// Inserts one claim per log and returns the rows whose claim was new, plus
+/// any row with no log identity (cron). The caller applies those rows on the
+/// same transaction and then commits.
+#[cfg(feature = "postgres")]
+async fn claim_fresh_rows<'a>(
+    tx: &PgTransaction<'_>,
+    table_name: &str,
+    op_ordinal: i32,
+    rows: &'a [TableRowData],
+) -> Result<Vec<&'a TableRowData>, String> {
+    let mut fresh = Vec::new();
+    let mut pending: Vec<&TableRowData> = Vec::new();
+    for row in rows {
+        if row.tx_hash.is_empty() {
+            fresh.push(row);
+        } else {
+            pending.push(row);
+        }
+    }
+    if pending.is_empty() {
+        return Ok(fresh);
+    }
+
+    let mut claimed: HashSet<(String, String, i64)> = HashSet::new();
+    for chunk in pending.chunks(5000) {
+        let mut values = Vec::with_capacity(chunk.len());
+        let mut params: Vec<EthereumSqlTypeWrapper> = Vec::with_capacity(chunk.len() * 6);
+        for (index, row) in chunk.iter().enumerate() {
+            let base = index * 6;
+            values.push(format!(
+                "(${}::varchar, ${}::char(66), ${}::bigint, ${}::varchar, ${}::int, ${}::bigint)",
+                base + 1,
+                base + 2,
+                base + 3,
+                base + 4,
+                base + 5,
+                base + 6
+            ));
+            params.push(EthereumSqlTypeWrapper::String(row.network.clone()));
+            params.push(EthereumSqlTypeWrapper::String(row.tx_hash.clone()));
+            params.push(EthereumSqlTypeWrapper::I64(row.log_index));
+            params.push(EthereumSqlTypeWrapper::String(table_name.to_string()));
+            params.push(EthereumSqlTypeWrapper::I32(op_ordinal));
+            params.push(EthereumSqlTypeWrapper::I64(row.block_number));
+        }
+        let sql = format!(
+            "INSERT INTO rindexer_internal.table_op_claim \
+             (network, tx_hash, log_index, derived_table, op_ordinal, block_number) \
+             VALUES {} \
+             ON CONFLICT (network, tx_hash, log_index, derived_table, op_ordinal) DO NOTHING \
+             RETURNING network, btrim(tx_hash::text), log_index",
+            values.join(", ")
+        );
+        let refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
+            params.iter().map(|param| param as _).collect();
+        let returned = tx.query(&sql, &refs).await.map_err(|e| pg_error_to_string(&e))?;
+        for row in returned {
+            let network: String = row.get(0);
+            let tx_hash: String = row.get(1);
+            let log_index: i64 = row.get(2);
+            claimed.insert((network, tx_hash, log_index));
+        }
+    }
+
+    fresh.extend(pending.into_iter().filter(|row| {
+        claimed.contains(&(row.network.clone(), row.tx_hash.clone(), row.log_index))
+    }));
+    Ok(fresh)
+}
+
 /// Executes a PostgreSQL operation for tables using the batch operations infrastructure.
 ///
 /// # Arguments
 /// * `sql_where` - Optional SQL WHERE condition for upsert operations.
 ///   Used when the `if`/`filter` condition contains `@table` references.
 ///   E.g., conditions like `$value > @balance` become SQL `EXCLUDED.value > table.balance`.
+#[cfg(feature = "postgres")]
 async fn execute_postgres_operation(
     mode: PgWriteMode<'_>,
     table_name: &str,
@@ -4084,18 +4200,57 @@ async fn execute_postgres_operation(
     operation: &TableOperation,
     rows: &[TableRowData],
     sql_where: Option<&str>,
+    op_ordinal: i32,
 ) -> Result<(), String> {
     if rows.is_empty() {
         return Ok(());
     }
 
+    // Eager writes own a transaction so the claim, the statement and the
+    // journal commit together. Tx writes join the caller's transaction
+    // (the atomic cursor arm).
+    if let PgWriteMode::Eager(client) = mode {
+        client
+            .batch_execute(&generate_table_op_claim_table_sql())
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut conn = client.raw_connection().await.map_err(|e| e.to_string())?;
+        let tx = conn.transaction().await.map_err(|e| pg_error_to_string(&e))?;
+        let result = Box::pin(execute_postgres_operation(
+            PgWriteMode::Tx(&tx),
+            table_name,
+            table_def,
+            operation,
+            rows,
+            sql_where,
+            op_ordinal,
+        ))
+        .await;
+        if result.is_ok() {
+            tx.commit().await.map_err(|e| pg_error_to_string(&e))?;
+        }
+        return result;
+    }
+
+    let PgWriteMode::Tx(tx) = mode else {
+        return Ok(());
+    };
+    tx.batch_execute(&generate_table_op_claim_table_sql())
+        .await
+        .map_err(|e| pg_error_to_string(&e))?;
+    let fresh = claim_fresh_rows(tx, table_name, op_ordinal, rows).await?;
+    if fresh.is_empty() {
+        return Ok(());
+    }
+    let fresh_rows: Vec<TableRowData> = fresh.into_iter().cloned().collect();
+
     // Build rows of DynamicColumnDefinition for the batch operation
-    let mut batch_rows: Vec<Vec<DynamicColumnDefinition>> = Vec::with_capacity(rows.len());
+    let mut batch_rows: Vec<Vec<DynamicColumnDefinition>> = Vec::with_capacity(fresh_rows.len());
 
     // For Insert operations, don't use Distinct behavior (no deduplication)
     let is_insert = operation.operation_type == OperationType::Insert;
 
-    for row in rows {
+    for row in &fresh_rows {
         let mut columns: Vec<DynamicColumnDefinition> = Vec::new();
 
         if !table_def.cross_chain {
@@ -4233,8 +4388,17 @@ async fn execute_postgres_operation(
     let short_table_name = table_name.split('.').next_back().unwrap_or(table_name);
     let event_name = format!("Tables::{}", short_table_name);
 
-    execute_dynamic_batch_operation(mode, table_name, op_type, batch_rows, &event_name, sql_where)
-        .await?;
+    execute_dynamic_batch_operation(
+        PgWriteMode::Tx(tx),
+        table_name,
+        op_type,
+        batch_rows,
+        &event_name,
+        sql_where,
+    )
+    .await?;
+
+    journal_non_reversible_ops_in_tx(tx, table_name, operation, &fresh_rows).await?;
 
     let op_label = match operation.operation_type {
         OperationType::Upsert => "UPSERT",
@@ -4249,6 +4413,7 @@ async fn execute_postgres_operation(
 }
 
 /// Executes a ClickHouse operation for tables using the batch operations infrastructure.
+#[cfg(feature = "clickhouse")]
 async fn execute_clickhouse_operation(
     clickhouse: &ClickhouseClient,
     table_name: &str,
@@ -4427,6 +4592,7 @@ async fn execute_clickhouse_operation(
 
 /// Internal PostgreSQL operation execution - used by cron scheduler.
 /// This is a public wrapper around `execute_postgres_operation`.
+#[cfg(feature = "postgres")]
 pub async fn execute_postgres_operation_internal(
     postgres: &PostgresClient,
     table_name: &str,
@@ -4443,12 +4609,14 @@ pub async fn execute_postgres_operation_internal(
         operation,
         rows,
         sql_where,
+        0,
     )
     .await
 }
 
 /// Internal ClickHouse operation execution - used by cron scheduler.
 /// This is a public wrapper around `execute_clickhouse_operation`.
+#[cfg(feature = "clickhouse")]
 pub async fn execute_clickhouse_operation_internal(
     clickhouse: &ClickhouseClient,
     table_name: &str,
@@ -4761,6 +4929,7 @@ fn collect_journal_values(
 /// Builds the Postgres `rindexer_internal.derived_op_log` INSERT for non-reversible
 /// (Set/Max/Min) operations, or `None` when there is nothing to journal.
 /// Batches all rows into a single statement.
+#[cfg(feature = "postgres")]
 fn build_journal_sql(
     derived_table: &str,
     operation: &TableOperation,
@@ -4779,26 +4948,6 @@ fn build_journal_sql(
     ))
 }
 
-/// Journal non-reversible (Set/Max/Min) operations to Postgres `rindexer_internal.derived_op_log`.
-/// Autocommit on its own pool checkout; a failure is logged and swallowed.
-async fn journal_non_reversible_ops(
-    postgres: &PostgresClient,
-    derived_table: &str,
-    operation: &TableOperation,
-    rows: &[TableRowData],
-) {
-    let Some(sql) = build_journal_sql(derived_table, operation, rows) else {
-        return;
-    };
-
-    if let Err(e) = postgres.batch_execute(&sql).await {
-        tracing::error!(
-            table = %derived_table,
-            "Failed to journal non-reversible ops: {:?}", e
-        );
-    }
-}
-
 /// Journals non-reversible operations inside the caller's transaction, under a SQL savepoint.
 ///
 /// Only the INSERT is best-effort: on failure it is logged with the eager path's text and
@@ -4808,6 +4957,7 @@ async fn journal_non_reversible_ops(
 /// stop before `RELEASE` and leave the transaction aborted. One savepoint per operation,
 /// released on both paths: `ROLLBACK TO` keeps the savepoint defined, and a stale one
 /// would nest the next operation's `SAVEPOINT` one subtransaction deeper.
+#[cfg(feature = "postgres")]
 async fn journal_non_reversible_ops_in_tx(
     tx: &PgTransaction<'_>,
     derived_table: &str,
@@ -4833,6 +4983,7 @@ async fn journal_non_reversible_ops_in_tx(
 
 /// Journal non-reversible (Set/Max/Min) operations to ClickHouse `rindexer_internal.derived_op_log`.
 /// Batches all rows into a single INSERT statement.
+#[cfg(feature = "clickhouse")]
 async fn journal_non_reversible_ops_clickhouse(
     clickhouse: &ClickhouseClient,
     derived_table: &str,
@@ -5243,6 +5394,38 @@ mod tests {
         assert!(!is_view_call("call(something)"));
         assert!(!is_view_call("$call("));
         assert!(!is_view_call("$call"));
+    }
+
+    /// Both loops below used to report a character index and then slice the
+    /// string by it as though it were a byte offset. With any multi-byte
+    /// character before the closing paren the slice was short - silently
+    /// mis-parsing the expression - and it panicked outright
+    /// ("byte index is not a char boundary") when the offset landed inside a
+    /// character.
+    #[test]
+    fn multi_byte_view_call_parses_at_byte_offsets() {
+        let vc = parse_view_call("$call($assét, \"decimals()\")").unwrap();
+        assert_eq!(vc.contract_address, "$assét");
+        assert_eq!(vc.function_sig, "decimals()");
+        assert_eq!(vc.accessor, None);
+
+        let vc = parse_view_call("$call($a🚀b, \"f()\")[0]").unwrap();
+        assert_eq!(vc.contract_address, "$a🚀b");
+        assert_eq!(vc.accessor, Some("[0]".to_string()));
+    }
+
+    #[test]
+    fn multi_byte_nested_return_field_parses_at_byte_offsets() {
+        let field = parse_single_return_field("(uint256 amoünt) data").unwrap();
+        assert_eq!(field.name, "data");
+        assert_eq!(field.type_str, "tuple");
+
+        let field = parse_single_return_field("(uint256 a🚀b) data").unwrap();
+        assert_eq!(field.name, "data");
+
+        // ASCII must be untouched.
+        let field = parse_single_return_field("(uint256 amount) data").unwrap();
+        assert_eq!(field.name, "data");
     }
 
     #[test]
@@ -6094,6 +6277,7 @@ events:
 
         let container = Postgres::default().start().await.expect("failed to start postgres");
         let port = container.get_host_port_ipv4(5432).await.expect("failed to get postgres port");
+        #[cfg(feature = "postgres")]
         let postgres = {
             let _guard = crate::database::postgres::client::TEST_DATABASE_URL_LOCK.lock().await;
             std::env::set_var(
@@ -6126,30 +6310,50 @@ events:
                 ),
             ]),
             network: "ethereum".to_string(),
+            tx_hash: format!("0x{seq:064x}"),
+            log_index: seq as i64,
+            block_number: seq as i64,
         };
 
         // First touch is a debit: row must be created at 50 - 30 = 20
         execute_postgres_operation(
+            #[cfg(feature = "postgres")]
             PgWriteMode::Eager(&postgres),
             "yaml_balances",
             &table,
             operation,
             &[row(30, 1)],
             None,
+            0,
         )
         .await
         .expect("first debit failed");
         // Second debit accumulates: 20 - 25 = -5
         execute_postgres_operation(
+            #[cfg(feature = "postgres")]
             PgWriteMode::Eager(&postgres),
             "yaml_balances",
             &table,
             operation,
             &[row(25, 2)],
             None,
+            0,
         )
         .await
         .expect("second debit failed");
+        // The same log again must not subtract a second time.
+        execute_postgres_operation(
+            #[cfg(feature = "postgres")]
+            PgWriteMode::Eager(&postgres),
+            "yaml_balances",
+            &table,
+            operation,
+            &[row(25, 2)],
+            None,
+            0,
+        )
+        .await
+        .expect("replayed debit failed");
 
         let stored = postgres
             .query_one("SELECT balance::TEXT AS balance FROM yaml_balances", &[])

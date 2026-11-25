@@ -1,3 +1,4 @@
+#![cfg(feature = "postgres")]
 //! PostgreSQL round-trip tests for byte array wrappers.
 //!
 //! Requires Docker:

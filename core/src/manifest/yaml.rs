@@ -1,3 +1,16 @@
+use crate::{
+    abi::ABIItem,
+    event::{parse_arithmetic_expression, parse_filter_expression},
+    helpers::{load_env_from_full_path, replace_env_variable_to_raw_name},
+    manifest::{
+        core::{Manifest, ProjectType},
+        network::{Network, RpcUrls},
+    },
+    StringOrArray,
+};
+use alloy::rpc::types::ValueOrArray;
+use regex::{Captures, Regex};
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
     env,
@@ -5,22 +18,7 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
 };
-
-use alloy::rpc::types::ValueOrArray;
-use regex::{Captures, Regex};
-use serde::{Deserialize, Serialize};
 use tracing::error;
-
-use crate::{
-    abi::ABIItem,
-    event::{parse_arithmetic_expression, parse_filter_expression},
-    helpers::{load_env_from_full_path, replace_env_variable_to_raw_name},
-    manifest::{
-        core::{Manifest, ProjectType},
-        network::Network,
-    },
-    StringOrArray,
-};
 
 pub const YAML_CONFIG_NAME: &str = "rindexer.yaml";
 
@@ -180,6 +178,9 @@ fn substitute_env_variables(contents: &str) -> Result<String, regex::Error> {
 
 #[derive(thiserror::Error, Debug)]
 pub enum ValidateManifestError {
+    #[error("{0}")]
+    MissingFeature(String),
+
     #[error("Contract names {0} must be unique")]
     ContractNameMustBeUnique(String),
 
@@ -238,9 +239,6 @@ pub enum ValidateManifestError {
     #[error("Iterate field '${0}' in event '{1}' for table '{2}' in contract '{3}' not found in event ABI")]
     CustomIndexingIterateFieldNotFound(String, String, String, String),
 
-    #[error("Tables are defined in contract '{0}' but project_type is not 'no-code'. Tables only work with 'project_type: no-code'. Either change project_type to 'no-code' or remove the tables configuration.")]
-    TablesRequireNoCodeProjectType(String),
-
     // Cron validation errors
     #[error("Table '{0}' in contract '{1}' has no triggers. Must have at least one 'events' or 'cron' entry.")]
     TableNoTriggers(String, String),
@@ -270,6 +268,7 @@ fn validate_manifest(
     project_path: &Path,
     manifest: &Manifest,
 ) -> Result<(), ValidateManifestError> {
+    super::features::validate(manifest).map_err(ValidateManifestError::MissingFeature)?;
     let mut seen = HashSet::new();
     let duplicates_contract_names: Vec<String> = manifest
         .contracts
@@ -283,15 +282,13 @@ fn validate_manifest(
         ));
     }
 
-    if manifest.project_type != ProjectType::NoCode {
-        for contract in &manifest.contracts {
-            if contract.tables.is_some() {
-                return Err(ValidateManifestError::TablesRequireNoCodeProjectType(
-                    contract.name.clone(),
-                ));
-            }
-        }
-    }
+    // Custom tables are applied by the no-code storage callbacks
+    // (`indexer::no_code::process_events`). Rust projects may declare them
+    // too: an embedding host (rflow) registers those callbacks itself.
+    // `start_rindexer` resolves column types before CREATE TABLE, and
+    // `process_events` fills any types still missing, so inferred columns
+    // work without rewriting the yaml. A rust project that never registers
+    // the callbacks gets the tables created and not written.
 
     for contract in &manifest.all_contracts() {
         if contract.name.to_lowercase().contains("filter") {
@@ -923,11 +920,14 @@ pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError>
         for network in &mut manifest_after_transform.networks {
             let raw_network =
                 manifest_networks_only.networks.iter().find(|n| n.name == network.name);
+            let raw_rpc = raw_network.map_or(&network.rpc, |n| &n.rpc);
 
-            network.rpc = raw_network.map_or_else(
-                || replace_env_variable_to_raw_name(&network.rpc),
-                |n| replace_env_variable_to_raw_name(&n.rpc),
-            );
+            // Multi-url rpc stays a list. Each url is restored to its
+            // pre-substitution form so generated Rust does not embed secrets.
+            network.rpc = RpcUrls::try_new(
+                raw_rpc.iter().map(|url| replace_env_variable_to_raw_name(url)).collect(),
+            )
+            .expect("rpc urls already validated as non-empty at deserialization");
 
             // the hypersync url and api token follow the same rules as the rpc url so
             // secrets are never embedded into generated code

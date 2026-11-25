@@ -1,19 +1,27 @@
-use crate::adaptive_concurrency::{AdaptiveConcurrency, ADAPTIVE_CONCURRENCY};
-use crate::blockclock::BlockClock;
+#[cfg(feature = "clickhouse")]
 use crate::database::clickhouse::client::ClickhouseClient;
-use crate::event::callback_registry::{EventCallbackRegistry, TraceCallbackRegistry};
-use crate::helpers::{halved_block_number, is_relevant_block};
-use crate::indexer::heartbeat::{HeartbeatAction, HeartbeatTracker};
-use crate::indexer::reorg::{
-    detect_and_handle_reorg, reorg_safe_distance_for_chain, ReorgContext, ReorgCoordinator,
-};
-use crate::indexer::tip_logs::{filter_logs_for_stream, SharedTipLogs, TipLookup};
-use crate::metrics::indexing as metrics;
+#[cfg(feature = "postgres")]
 use crate::PostgresClient;
 use crate::{
-    event::{config::EventProcessingConfig, RindexerEventFilter},
-    indexer::{reorg::handle_chain_notification, IndexingEventProgressStatus},
+    adaptive_concurrency::{AdaptiveConcurrency, ADAPTIVE_CONCURRENCY},
+    blockclock::BlockClock,
+    event::{
+        callback_registry::{EventCallbackRegistry, TraceCallbackRegistry},
+        config::EventProcessingConfig,
+        RindexerEventFilter,
+    },
+    helpers::{halved_block_number, is_relevant_block},
+    indexer::{
+        heartbeat::{HeartbeatAction, HeartbeatTracker},
+        reorg::{
+            detect_and_handle_reorg, handle_chain_notification, reorg_safe_distance_for_chain,
+            ReorgContext, ReorgCoordinator,
+        },
+        tip_logs::{filter_logs_for_stream, SharedTipLogs, TipLookup},
+        IndexingEventProgressStatus,
+    },
     is_running,
+    metrics::indexing as metrics,
     provider::{ChainProvider, ProviderError},
 };
 use alloy::{
@@ -23,12 +31,21 @@ use alloy::{
 use lru::LruCache;
 use rand::{random_bool, random_ratio};
 use regex::Regex;
-use std::collections::{BTreeMap, HashSet};
-use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
-use tokio::sync::Mutex;
-use tokio::{sync::mpsc, time::Instant};
+use std::{
+    collections::{BTreeMap, HashSet},
+    error::Error,
+    num::NonZeroUsize,
+    str::FromStr,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
+use tokio::{
+    sync::{mpsc, Mutex},
+    time::Instant,
+};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -54,9 +71,20 @@ pub struct ReorgInfo {
 pub struct FetchLogsResult {
     pub logs: Vec<Log>,
     pub from_block: U64,
+    /// The last block this batch covers; progress advances to it once the batch is handled.
     pub to_block: U64,
     /// If set, a reorg was detected. Consumer should clean up storage before re-indexing.
     pub reorg: Option<ReorgInfo>,
+}
+
+/// The last block a fetch of `..=to_block` that returned `logs` covers. With logs the stream
+/// fetches again from the block after the last log, so the blocks after it are not covered
+/// yet: reporting them would let progress (and `BlockIndexingCompleted`) pass blocks whose
+/// logs can still arrive in the next batch.
+pub(crate) fn covered_to_block(logs: &[Log], to_block: U64) -> U64 {
+    logs.last()
+        .and_then(|log| log.block_number)
+        .map_or(to_block, |block| U64::from(block).min(to_block))
 }
 
 pub fn fetch_logs_stream(
@@ -241,7 +269,9 @@ pub fn fetch_logs_stream(
                         original_max_limit,
                         config.cancel_token().clone(),
                         reorg_coordinator,
+                        #[cfg(feature = "postgres")]
                         config.postgres(),
+                        #[cfg(feature = "clickhouse")]
                         config.clickhouse(),
                         &registry,
                         trace_registry.as_deref(),
@@ -347,7 +377,9 @@ pub fn fetch_logs_stream(
                 original_max_limit,
                 config.cancel_token().clone(),
                 reorg_coordinator,
+                #[cfg(feature = "postgres")]
                 config.postgres(),
+                #[cfg(feature = "clickhouse")]
                 config.clickhouse(),
                 &registry,
                 trace_registry.as_deref(),
@@ -419,8 +451,15 @@ async fn fetch_historic_logs_stream<P: ChainProvider>(
         );
     }
 
+    let switches_before = cached_provider.endpoint_switches();
     match cached_provider.get_logs(&current_filter).await {
         Ok(logs) => {
+            if cached_provider.endpoint_switches() != switches_before {
+                return Some(ProcessHistoricLogsStreamResult {
+                    next: current_filter,
+                    max_block_range_limitation,
+                });
+            }
             debug!(
                 "{} - {} - topic_id {}, Logs: {} from {} to {}",
                 info_log_name,
@@ -434,6 +473,7 @@ async fn fetch_historic_logs_stream<P: ChainProvider>(
             let logs_empty = logs.is_empty();
             // clone here over the full logs way less overhead
             let last_log = logs.last().cloned();
+            let covered_to = covered_to_block(&logs, to_block);
 
             if !logs_empty {
                 info!(
@@ -452,7 +492,7 @@ async fn fetch_historic_logs_stream<P: ChainProvider>(
                         sender.send(Ok(FetchLogsResult {
                             logs,
                             from_block,
-                            to_block,
+                            to_block: covered_to,
                             reorg: None,
                         }));
                     }
@@ -473,7 +513,12 @@ async fn fetch_historic_logs_stream<P: ChainProvider>(
                     }
                 }
             } else {
-                sender.send(Ok(FetchLogsResult { logs, from_block, to_block, reorg: None }));
+                sender.send(Ok(FetchLogsResult {
+                    logs,
+                    from_block,
+                    to_block: covered_to,
+                    reorg: None,
+                }));
             }
 
             if logs_empty {
@@ -539,6 +584,16 @@ async fn fetch_historic_logs_stream<P: ChainProvider>(
             }
         }
         Err(err) => {
+            // Same hazard as the success path: the error (or the suggested
+            // smaller range inside it) may belong to a different endpoint
+            // than the one the range was sized for. Retry unchanged.
+            if cached_provider.endpoint_switches() != switches_before {
+                return Some(ProcessHistoricLogsStreamResult {
+                    next: current_filter,
+                    max_block_range_limitation,
+                });
+            }
+
             // This is fundamental to the rindexer flow. We intentionally fetch a large block range
             // to get information on what the ideal block range should be.
             if let Some(retry_result) = retry_with_block_range(
@@ -810,6 +865,7 @@ async fn parallel_worker(
 
         controller.wait_for_backoff().await;
 
+        let switches_before = cached_provider.endpoint_switches();
         let (maybe_result, next_state, error_kind) = fetch_logs_once(
             timestamps,
             &block_clock,
@@ -820,6 +876,39 @@ async fn parallel_worker(
             &info_log_name,
         )
         .await;
+
+        // Drop the batch when the transport failed over mid-fetch. The range
+        // was computed against the previous endpoint; a lagging replacement
+        // can return an empty log set for blocks it has not reached.
+        if cached_provider.endpoint_switches() != switches_before {
+            stuck_iterations = stuck_iterations.saturating_add(1);
+            if stuck_iterations >= MAX_STUCK_ITERATIONS {
+                error!(
+                    "{} - worker for sid={} failed over {} times on range {}-{}; \
+                     failing this sub-range so downstream can advance",
+                    info_log_name,
+                    state.sequence_id,
+                    stuck_iterations,
+                    current_filter.from_block(),
+                    current_filter.to_block()
+                );
+                results.push(Err(Box::new(std::io::Error::other(format!(
+                    "fetch_logs: endpoint failed over {} times on range {}-{}",
+                    stuck_iterations,
+                    current_filter.from_block(),
+                    current_filter.to_block()
+                ))) as Box<dyn Error + Send>));
+                break;
+            }
+            info!(
+                "{} - RPC endpoint switched during historic eth_getLogs for blocks {}-{}; discarding the result and retrying the range",
+                info_log_name,
+                current_filter.from_block(),
+                current_filter.to_block()
+            );
+            state.max_block_range_limitation = state.original_max_limit;
+            continue;
+        }
 
         match maybe_result {
             Some(fetch_result) => {
@@ -967,6 +1056,7 @@ async fn fetch_logs_once<P: ChainProvider + ?Sized>(
         Ok(logs) => {
             let logs_empty = logs.is_empty();
             let last_log = logs.last().cloned();
+            let covered_to = covered_to_block(&logs, to_block);
 
             if !logs_empty {
                 info!(
@@ -981,7 +1071,7 @@ async fn fetch_logs_once<P: ChainProvider + ?Sized>(
 
             let result = if timestamps {
                 if let Ok(logs) = block_clock.attach_log_timestamps(logs).await {
-                    Some(FetchLogsResult { logs, from_block, to_block, reorg: None })
+                    Some(FetchLogsResult { logs, from_block, to_block: covered_to, reorg: None })
                 } else {
                     return (
                         None,
@@ -995,7 +1085,7 @@ async fn fetch_logs_once<P: ChainProvider + ?Sized>(
                     );
                 }
             } else {
-                Some(FetchLogsResult { logs, from_block, to_block, reorg: None })
+                Some(FetchLogsResult { logs, from_block, to_block: covered_to, reorg: None })
             };
 
             if logs_empty {
@@ -1165,6 +1255,42 @@ async fn fetch_tip_window(
     TipWindowFetch::Fetched(fetched)
 }
 
+/// Polls a provider's endpoint switch counter so the live loop can reset
+/// endpoint-specific state and suspend parent-hash validation after a failover.
+pub(crate) struct EndpointSwitchWatcher {
+    last_seen: u64,
+}
+
+impl EndpointSwitchWatcher {
+    pub(crate) fn new<P: ChainProvider + ?Sized>(provider: &P) -> Self {
+        Self { last_seen: provider.endpoint_switches() }
+    }
+
+    pub(crate) fn switched<P: ChainProvider + ?Sized>(&mut self, provider: &P) -> bool {
+        let current = provider.endpoint_switches();
+        if current == self.last_seen {
+            return false;
+        }
+        self.last_seen = current;
+        true
+    }
+}
+
+async fn handle_live_endpoint_switch(
+    log_response_to_large_to_block: &mut Option<U64>,
+    reorg_coordinator: Option<&Arc<Mutex<ReorgCoordinator>>>,
+    info_log_name: &str,
+) {
+    *log_response_to_large_to_block = None;
+    if let Some(coordinator) = reorg_coordinator {
+        coordinator.lock().await.suspend_for_endpoint_switch();
+    }
+    info!(
+        "{} - RPC endpoint switched - resetting block range state and suspending reorg window validation until the new endpoint catches up",
+        info_log_name
+    );
+}
+
 /// Handles live indexing mode, continuously checking for new blocks, ensuring they are
 /// within a safe range, updating the filter, and sending the logs to the provided channel.
 #[allow(clippy::too_many_arguments)]
@@ -1183,8 +1309,8 @@ async fn live_indexing_stream(
     original_max_limit: Option<U64>,
     cancel_token: CancellationToken,
     reorg_coordinator: Option<Arc<Mutex<ReorgCoordinator>>>,
-    postgres: Option<Arc<PostgresClient>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    #[cfg(feature = "postgres")] postgres: Option<Arc<PostgresClient>>,
+    #[cfg(feature = "clickhouse")] clickhouse: Option<Arc<ClickhouseClient>>,
     registry: &EventCallbackRegistry,
     trace_registry: Option<&TraceCallbackRegistry>,
 ) {
@@ -1192,6 +1318,8 @@ async fn live_indexing_stream(
     let mut log_response_to_large_to_block: Option<U64> = None;
     let tip_logs = cached_provider.shared_tip_logs();
     let mut heartbeat = HeartbeatTracker::new(cached_provider.block_poll_frequency());
+    let mut consecutive_latest_block_errors: u32 = 0;
+    let mut switch_watcher = EndpointSwitchWatcher::new(cached_provider.as_ref());
     let target_iteration_duration = Duration::from_millis(200);
 
     // Channel for reth-provided reorg signals (feature-gated, None for HTTP RPC).
@@ -1227,6 +1355,15 @@ async fn live_indexing_stream(
             break;
         }
 
+        if switch_watcher.switched(cached_provider.as_ref()) {
+            handle_live_endpoint_switch(
+                &mut log_response_to_large_to_block,
+                reorg_coordinator.as_ref(),
+                info_log_name,
+            )
+            .await;
+        }
+
         // Reth reorg signal — instant detection via ExEx notification.
         if let Ok(reth_reorg) = reth_reorg_rx.try_recv() {
             let fork_block = reth_reorg.fork_block.to::<u64>();
@@ -1260,7 +1397,9 @@ async fn live_indexing_stream(
                 match guard.on_exex_reorg(fork_block, last_reverted) {
                     Ok(task) => {
                         let reorg_ctx = ReorgContext {
+                            #[cfg(feature = "postgres")]
                             postgres: postgres.as_deref(),
+                            #[cfg(feature = "clickhouse")]
                             clickhouse: clickhouse.as_ref(),
                             registry: Some(registry),
                             trace_registry,
@@ -1290,8 +1429,17 @@ async fn live_indexing_stream(
         }
 
         let latest_block = cached_provider.get_latest_block().await;
+        if switch_watcher.switched(cached_provider.as_ref()) {
+            handle_live_endpoint_switch(
+                &mut log_response_to_large_to_block,
+                reorg_coordinator.as_ref(),
+                info_log_name,
+            )
+            .await;
+        }
         match latest_block {
             Ok(latest_block) => {
+                consecutive_latest_block_errors = 0;
                 if let Some(latest_block) = latest_block {
                     // Keep block cache for timestamp lookups
                     block_cache.put(
@@ -1323,6 +1471,10 @@ async fn live_indexing_stream(
                                 latest_tip,
                                 heartbeat.stall_timeout().as_secs()
                             );
+                            cached_provider.flag_active_endpoint_degraded(&format!(
+                                "chain tip stalled at block {latest_tip} for {} seconds",
+                                heartbeat.stall_timeout().as_secs()
+                            ));
                         }
                     }
 
@@ -1334,7 +1486,9 @@ async fn live_indexing_stream(
                             IndexingEventProgressStatus::live_log()
                         );
                         let reorg_ctx = ReorgContext {
+                            #[cfg(feature = "postgres")]
                             postgres: postgres.as_deref(),
+                            #[cfg(feature = "clickhouse")]
                             clickhouse: clickhouse.as_ref(),
                             registry: Some(registry),
                             trace_registry,
@@ -1556,6 +1710,19 @@ async fn live_indexing_stream(
                                     None => cached_provider.get_logs(&current_filter).await,
                                 };
 
+                                // The range was computed from the tip fetched above. A failover
+                                // during the fetch can return an empty set for blocks a lagging
+                                // replacement has not reached. Discard it and retry.
+                                if switch_watcher.switched(cached_provider.as_ref()) {
+                                    handle_live_endpoint_switch(
+                                        &mut log_response_to_large_to_block,
+                                        reorg_coordinator.as_ref(),
+                                        info_log_name,
+                                    )
+                                    .await;
+                                    continue;
+                                }
+
                                 match fetched {
                                     Ok(logs) => {
                                         debug!(
@@ -1623,7 +1790,9 @@ async fn live_indexing_stream(
                                                 ) {
                                                     Ok(task) => {
                                                         let reorg_ctx = ReorgContext {
+                                                            #[cfg(feature = "postgres")]
                                                             postgres: postgres.as_deref(),
+                                                            #[cfg(feature = "clickhouse")]
                                                             clickhouse: clickhouse.as_ref(),
                                                             registry: Some(registry),
                                                             trace_registry,
@@ -1675,6 +1844,7 @@ async fn live_indexing_stream(
 
                                         let logs_empty = logs.is_empty();
                                         let last_log = logs.last().cloned();
+                                        let covered_to = covered_to_block(&logs, to_block);
 
                                         // Attach timestamp from cached block metadata to the logs
                                         // to prevent any further fetches.
@@ -1718,7 +1888,7 @@ async fn live_indexing_stream(
                                             .send(Ok(FetchLogsResult {
                                                 logs,
                                                 from_block,
-                                                to_block,
+                                                to_block: covered_to,
                                                 reorg: None,
                                             }))
                                             .await
@@ -1805,6 +1975,12 @@ async fn live_indexing_stream(
                 }
             }
             Err(e) => {
+                consecutive_latest_block_errors = consecutive_latest_block_errors.saturating_add(1);
+                if consecutive_latest_block_errors == 3 {
+                    cached_provider.flag_active_endpoint_degraded(&format!(
+                        "get_latest_block failed {consecutive_latest_block_errors} times in a row"
+                    ));
+                }
                 error!(
                     "Error getting latest block, will try again in 1 second - err: {}",
                     e.to_string()
@@ -2618,6 +2794,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn historic_batch_with_logs_reports_only_through_its_last_log_block() {
+        // The stream fetches 176..=200 again, so the batch must not report 200 as indexed:
+        // progress (and BlockIndexingCompleted) would claim blocks whose logs may still come.
+        let logs = vec![make_log_at_block(150), make_log_at_block(175)];
+        let mock = MockChainProvider::new(1).with_logs(logs);
+        let (tx, mut rx) = mpsc::channel(4);
+        let filter = RindexerEventFilter::empty_for_test()
+            .set_from_block(U64::from(100))
+            .set_to_block(U64::from(200));
+
+        let result = fetch_historic_logs_stream(
+            false,
+            BlockClock::new(None, None, Arc::new(MockChainProvider::new(1))),
+            &mock,
+            &tx,
+            &B256::ZERO,
+            filter,
+            None,
+            U64::from(500),
+            "test",
+        )
+        .await
+        .expect("should return next range");
+
+        let batch = rx.recv().await.expect("a dispatched batch").expect("a successful batch");
+        assert_eq!((batch.from_block, batch.to_block), (U64::from(100), U64::from(175)));
+        assert_eq!(result.next.from_block(), batch.to_block + U64::from(1));
+    }
+
+    #[tokio::test]
     async fn historic_address_chunk_merge_advances_past_highest_log() {
         let (provider, asserter) = JsonRpcCachedProvider::mock_with_asserter_and_address_filtering(
             1,
@@ -3032,7 +3238,9 @@ mod tests {
             Some(configured_max_block_range),
             cancel_token,
             None,
+            #[cfg(feature = "postgres")]
             None,
+            #[cfg(feature = "clickhouse")]
             None,
             &EventCallbackRegistry::default(),
             None,
@@ -3085,7 +3293,9 @@ mod tests {
                 Some(U64::from(500)),
                 cancel_token,
                 None,
+                #[cfg(feature = "postgres")]
                 None,
+                #[cfg(feature = "clickhouse")]
                 None,
                 &EventCallbackRegistry::default(),
                 None,
@@ -3355,7 +3565,9 @@ mod tests {
             None,
             cancel_token.clone(),
             None,
+            #[cfg(feature = "postgres")]
             None,
+            #[cfg(feature = "clickhouse")]
             None,
             &registry,
             None,
@@ -3531,6 +3743,23 @@ mod tests {
         );
         assert_eq!(source.calls(), vec![TIP]);
         assert_eq!(counter(&SHARED_TIP_LOGS_SERVED_TOTAL, &[net, "prefix_rpc_plus_tip"]), 1.0);
+    }
+
+    /// The window ends at `TIP` but its last log is in `TIP - 2`, so the stream fetches
+    /// `TIP - 1..=TIP` again. The batch must not report `TIP` as indexed: a log the first
+    /// answer missed in those blocks would arrive after the progress said they were done.
+    #[tokio::test(start_paused = true)]
+    async fn live_batch_with_logs_reports_only_through_its_last_log_block() {
+        let logs = vec![log_at(TIP - 2, hash_of(TIP - 2), stream_address(), stream_topic(), 0)];
+        let provider = Arc::new(RecordingLiveProvider::recording(
+            MockChainProvider::new(1).with_blocks(vec![busy_tip()]).with_logs(logs),
+        ));
+
+        let (batch, _) =
+            first_live_batch(&provider, stream_filter(TIP - 3), TIP - 4, false, "test").await;
+
+        assert_eq!(provider.ranges(), vec![(TIP - 3, TIP)]);
+        assert_eq!((batch.from_block, batch.to_block), (U64::from(TIP - 3), U64::from(TIP - 2)));
     }
 
     /// The RPC's head goes from `TIP - 2` straight to `TIP`, so `TIP - 1` is never polled as
@@ -4195,6 +4424,24 @@ mod tests {
             assert!(r.reorg.is_none(), "historical fetch must never emit a reorg");
             let next = next.expect("more range remaining");
             assert_eq!(next.next.from_block(), U64::from(181));
+        }
+
+        #[tokio::test]
+        async fn fetch_logs_once_with_logs_reports_only_through_its_last_log_block() {
+            let logs = vec![make_log_at_block(120), make_log_at_block(180)];
+            let mock = MockChainProvider::new(1).with_logs(logs);
+            let filter = RindexerEventFilter::empty_for_test()
+                .set_from_block(U64::from(100))
+                .set_to_block(U64::from(200));
+
+            let bc = BlockClock::new(None, None, Arc::new(MockChainProvider::new(1)));
+            let (result, next, _kind) =
+                fetch_logs_once(false, &bc, &mock, filter, None, U64::from(500), "test").await;
+
+            let r = result.expect("should return logs");
+            assert_eq!((r.from_block, r.to_block), (U64::from(100), U64::from(180)));
+            let next = next.expect("more range remaining");
+            assert_eq!(next.next.from_block(), r.to_block + U64::from(1));
         }
 
         #[tokio::test]

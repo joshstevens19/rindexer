@@ -539,6 +539,17 @@ storage:
     }
 
     #[test]
+    fn graphql_cors_change_is_picked_up() {
+        let old = manifest_from_yaml(BASE_MANIFEST);
+        let new = manifest_from_yaml(&format!(
+            "{BASE_MANIFEST}graphql:\n  cors:\n    allowed_origins:\n      - https://app.example\n"
+        ));
+        let diff = compute_diff(&old, &new);
+        assert!(diff.changes.iter().any(|c| matches!(c, ManifestChange::GraphqlChanged)));
+        assert!(matches!(diff.action, ReloadAction::HotApply));
+    }
+
+    #[test]
     fn test_storage_changed() {
         let old = manifest_from_yaml(BASE_MANIFEST);
         let new_yaml = BASE_MANIFEST.replace(

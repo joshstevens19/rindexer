@@ -1,32 +1,24 @@
-use std::path::PathBuf;
-use std::sync::Arc;
-
-use tokio::signal;
-use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
-
-use crate::database::clickhouse::setup::SetupClickhouseError;
-use crate::events::RindexerEventEmitter;
-use crate::hot_reload::orchestrator::ReloadOrchestrator;
-use crate::hot_reload::watcher::ManifestWatcher;
-use crate::indexer::start::{start_historical_indexing, start_live_indexing};
-use crate::indexer::IndexingEventsProgressState;
+#[cfg(feature = "graphql")]
+use crate::api::{start_graphql_server, stop_graphql_server, StartGraphqlServerError};
+#[cfg(feature = "postgres")]
+use crate::database::postgres::{
+    client::PostgresConnectionError,
+    indexes::{ApplyPostgresIndexesError, PostgresIndexResult},
+    relationship::{ApplyAllRelationships, Relationship},
+    setup::{setup_postgres, SetupPostgresError},
+};
+use crate::endpoint_failover::{spawn_rpc_endpoint_event_forwarder, RpcEndpointEvent};
 use crate::{
-    api::{
-        start_graphql_server, stop_graphql_server, GraphqlOverrideSettings, StartGraphqlServerError,
-    },
-    database::postgres::{
-        client::PostgresConnectionError,
-        indexes::{ApplyPostgresIndexesError, PostgresIndexResult},
-        relationship::{ApplyAllRelationships, Relationship},
-        setup::{setup_postgres, SetupPostgresError},
-    },
+    api::GraphqlOverrideSettings,
     event::callback_registry::{EventCallbackRegistry, TraceCallbackRegistry},
+    events::RindexerEventEmitter,
     health::start_health_server,
+    hot_reload::{orchestrator::ReloadOrchestrator, watcher::ManifestWatcher},
     indexer::{
         no_code::{setup_no_code, SetupNoCodeError},
-        start::StartIndexingError,
+        start::{start_historical_indexing, start_live_indexing, StartIndexingError},
         ContractEventDependencies, ContractEventDependenciesMapFromRelationshipsError,
+        IndexingEventsProgressState,
     },
     initiate_shutdown,
     logger::mark_shutdown_started,
@@ -35,8 +27,14 @@ use crate::{
         storage::RelationshipsAndIndexersError,
         yaml::{read_manifest, ReadManifestError},
     },
-    setup_clickhouse, setup_info_logger, RindexerEventStream,
+    setup_info_logger, RindexerEventStream,
 };
+#[cfg(feature = "clickhouse")]
+use crate::{database::clickhouse::setup::SetupClickhouseError, setup_clickhouse};
+use std::{path::PathBuf, sync::Arc};
+use tokio::signal;
+use tokio_util::sync::CancellationToken;
+use tracing::{error, info};
 
 pub struct IndexingDetails {
     pub registry: EventCallbackRegistry,
@@ -50,10 +48,22 @@ pub struct StartDetails<'a> {
     pub graphql_details: GraphqlOverrideSettings,
     pub cron_scheduler_handle: Option<tokio::task::JoinHandle<Result<(), String>>>,
     pub watch: bool,
+    /// When false, rindexer will not register process signal handlers (SIGTERM/SIGINT/etc.)
+    /// so an embedding host application can own signal handling itself.
+    pub manage_process_signals: bool,
+    /// When true, the health server is never started (useful when embedding rindexer
+    /// inside another application which exposes its own health endpoints).
+    pub disable_health_server: bool,
+    /// Optional sender the embedding host supplies to observe RPC endpoint
+    /// failover events (`Switched`/`Degraded`/`Recovered`) across every
+    /// network. Urls in the events are credential-redacted.
+    pub rpc_endpoint_events: Option<tokio::sync::broadcast::Sender<RpcEndpointEvent>>,
 }
 
 #[derive(thiserror::Error, Debug)]
 pub enum StartRindexerError {
+    #[error("GraphQL requires the graphql Cargo feature")]
+    GraphqlFeatureDisabled,
     #[error("Could not work out project path from the parent of the manifest")]
     NoProjectPathFoundUsingParentOfManifestPath,
 
@@ -61,27 +71,33 @@ pub enum StartRindexerError {
     CouldNotReadManifest(#[from] ReadManifestError),
 
     #[error("Could not start graphql error {0}")]
+    #[cfg(feature = "graphql")]
     CouldNotStartGraphqlServer(#[from] StartGraphqlServerError),
 
     #[error("Failed to listen to graphql socket")]
     FailedToListenToGraphqlSocket,
 
     #[error("Could not setup postgres: {0}")]
+    #[cfg(feature = "postgres")]
     SetupPostgresError(#[from] SetupPostgresError),
 
     #[error("Could not setup clickhouse: {0}")]
+    #[cfg(feature = "clickhouse")]
     SetupClickhouseError(#[from] SetupClickhouseError),
 
     #[error("Could not start indexing: {0}")]
     CouldNotStartIndexing(#[from] StartIndexingError),
 
     #[error("{0}")]
+    #[cfg(feature = "postgres")]
     PostgresConnectionError(#[from] PostgresConnectionError),
 
     #[error("{0}")]
+    #[cfg(feature = "postgres")]
     ApplyRelationshipError(#[from] ApplyAllRelationships),
 
     #[error("Could not apply indexes: {0}")]
+    #[cfg(feature = "postgres")]
     ApplyPostgresIndexesError(#[from] ApplyPostgresIndexesError),
 
     #[error("{0}")]
@@ -98,6 +114,9 @@ pub enum StartRindexerError {
     #[error("Port conflict: {0}")]
     PortConflict(String),
 
+    #[error("Could not resolve custom table column types: {0}")]
+    CouldNotResolveTableColumnTypes(String),
+
     #[error("Could not start Reth node: {0}")]
     CouldNotStartRethNode(#[from] eyre::Error),
 
@@ -110,11 +129,38 @@ async fn handle_shutdown(signal: &str) {
     mark_shutdown_started();
     info!("Received {} signal gracefully shutting down...", signal);
     // Signal GraphQL server to stop its restart loop
+    #[cfg(feature = "graphql")]
     stop_graphql_server();
     initiate_shutdown().await;
     // These info! calls work because they're before/after the shutdown process
     info!("Graceful shutdown completed for {}", signal);
     std::process::exit(0);
+}
+
+async fn wait_for_shutdown_handle(
+    shutdown_handle: Option<tokio::task::JoinHandle<()>>,
+) -> Result<(), tokio::task::JoinError> {
+    match shutdown_handle {
+        Some(handle) => handle.await,
+        // Signals are managed by the embedding host, so never resolve here
+        None => {
+            std::future::pending::<()>().await;
+            Ok(())
+        }
+    }
+}
+
+/// True when a custom table column was left for ABI inference. `CREATE TABLE`
+/// panics on an unresolved type, so rust startup resolves before setup.
+fn manifest_has_unresolved_table_columns(manifest: &crate::manifest::core::Manifest) -> bool {
+    let unresolved = |tables: &[crate::manifest::contract::Table]| {
+        tables.iter().any(|table| table.columns.iter().any(|column| column.column_type.is_none()))
+    };
+    manifest
+        .contracts
+        .iter()
+        .any(|contract| contract.tables.as_ref().is_some_and(|tables| unresolved(tables)))
+        || manifest.native_transfers.tables.as_ref().is_some_and(|tables| unresolved(tables))
 }
 
 #[allow(clippy::result_large_err, reason = "preserve existing error API")]
@@ -123,12 +169,21 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
         "🚀 start_rindexer called with indexing_details.is_some() = {}",
         details.indexing_details.is_some()
     );
+    if details.graphql_details.enabled && !cfg!(feature = "graphql") {
+        return Err(StartRindexerError::GraphqlFeatureDisabled);
+    }
     let project_path = details.manifest_path.parent();
+
+    // Surface RPC endpoint failover events to the embedding host when it
+    // supplied a sender.
+    if let Some(host_events) = details.rpc_endpoint_events.clone() {
+        spawn_rpc_endpoint_event_forwarder(host_events);
+    }
 
     match project_path {
         Some(project_path) => {
             #[cfg(unix)]
-            let shutdown_handle = {
+            let shutdown_handle = if details.manage_process_signals {
                 let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
                     .map_err(|e| StartRindexerError::ShutdownHandlerFailed(e.to_string()))?;
                 let mut sigint = signal::unix::signal(signal::unix::SignalKind::interrupt())
@@ -136,26 +191,44 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                 let mut sigquit = signal::unix::signal(signal::unix::SignalKind::quit())
                     .map_err(|e| StartRindexerError::ShutdownHandlerFailed(e.to_string()))?;
 
-                tokio::spawn(async move {
+                Some(tokio::spawn(async move {
                     tokio::select! {
                         _ = sigterm.recv() => handle_shutdown("SIGTERM").await,
                         _ = sigint.recv() => handle_shutdown("SIGINT (Ctrl+C)").await,
                         _ = sigquit.recv() => handle_shutdown("SIGQUIT").await,
                     }
-                })
+                }))
+            } else {
+                None
             };
 
             // On Windows, we just use Ctrl+C to trigger shutdown
             #[cfg(windows)]
-            let shutdown_handle = tokio::spawn(async move {
-                if let Err(e) = signal::ctrl_c().await {
-                    error!("Failed to register Ctrl+C handler: {}", e);
-                    panic!("Ctrl+C handler failed: {}", e);
-                }
-                handle_shutdown("Ctrl+C").await
-            });
+            let shutdown_handle = if details.manage_process_signals {
+                Some(tokio::spawn(async move {
+                    if let Err(e) = signal::ctrl_c().await {
+                        error!("Failed to register Ctrl+C handler: {}", e);
+                        panic!("Ctrl+C handler failed: {}", e);
+                    }
+                    handle_shutdown("Ctrl+C").await
+                }))
+            } else {
+                None
+            };
 
-            let manifest = Arc::new(read_manifest(details.manifest_path)?);
+            let mut manifest = read_manifest(details.manifest_path)?;
+            // Rust projects skip the no-code startup that infers table column
+            // types. CREATE TABLE calls `resolved_type()` and panics when a
+            // column was left for ABI inference, so resolve here before
+            // setup_postgres. No-code already resolved; a second pass only
+            // fills types that are still missing.
+            if manifest_has_unresolved_table_columns(&manifest) {
+                crate::indexer::no_code::resolve_table_column_types(project_path, &mut manifest)
+                    .map_err(|error| {
+                        StartRindexerError::CouldNotResolveTableColumnTypes(error.to_string())
+                    })?;
+            }
+            let manifest = Arc::new(manifest);
 
             if manifest.project_type != ProjectType::NoCode {
                 setup_info_logger();
@@ -163,6 +236,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
             }
 
             // Spawn a separate task for the GraphQL server if specified
+            #[cfg(feature = "graphql")]
             let graphql_server_handle =
                 if details.graphql_details.enabled && manifest.storage.postgres_enabled() {
                     let manifest_clone = Arc::clone(&manifest);
@@ -184,6 +258,9 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                     None
                 };
 
+            #[cfg(not(feature = "graphql"))]
+            let graphql_server_handle: Option<tokio::task::JoinHandle<()>> = None;
+
             // Check for port conflicts between GraphQL and health servers
             let graphql_port = if details.graphql_details.enabled {
                 let mut graphql_settings = manifest.graphql.clone().unwrap_or_default();
@@ -197,21 +274,26 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
 
             let health_port = manifest.global.health_port;
 
-            if let Some(graphql_port) = graphql_port {
-                if graphql_port == health_port {
-                    return Err(StartRindexerError::PortConflict(format!(
-                        "GraphQL and health servers cannot use the same port: {}",
-                        graphql_port
-                    )));
+            if !details.disable_health_server {
+                if let Some(graphql_port) = graphql_port {
+                    if graphql_port == health_port {
+                        return Err(StartRindexerError::PortConflict(format!(
+                            "GraphQL and health servers cannot use the same port: {}",
+                            graphql_port
+                        )));
+                    }
                 }
             }
 
             // Health server follows the indexer lifecycle - only runs when indexer is running
-            let health_server_handle = if details.indexing_details.is_some() {
+            let health_server_handle = if details.indexing_details.is_some()
+                && !details.disable_health_server
+            {
                 let manifest_clone = Arc::clone(&manifest);
 
                 Some(tokio::spawn(async move {
                     info!("🩺 Starting health server on port {}", health_port);
+                    #[cfg(feature = "postgres")]
                     let postgres_client = if manifest_clone.storage.postgres_enabled() {
                         match crate::indexer::start::initialize_database(&manifest_clone).await {
                             Ok(Some(client)) => Some(client),
@@ -228,8 +310,13 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                         None
                     };
 
-                    if let Err(e) =
-                        start_health_server(health_port, manifest_clone, postgres_client).await
+                    if let Err(e) = start_health_server(
+                        health_port,
+                        manifest_clone,
+                        #[cfg(feature = "postgres")]
+                        postgres_client,
+                    )
+                    .await
                     {
                         error!("Failed to start health server: {:?}", e);
                     }
@@ -243,19 +330,24 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
             }
 
             if let Some(mut indexing_details) = details.indexing_details {
+                #[cfg(feature = "postgres")]
                 let postgres_enabled = &manifest.storage.postgres_enabled();
+                #[cfg(feature = "clickhouse")]
                 let clickhouse_enabled = &manifest.storage.clickhouse_enabled();
 
                 // setup postgres is already called in no-code startup
+                #[cfg(feature = "postgres")]
                 if manifest.project_type != ProjectType::NoCode && *postgres_enabled {
                     setup_postgres(project_path, &manifest).await?;
                 }
 
                 // setup clickhouse is already called in no-code startup
+                #[cfg(feature = "clickhouse")]
                 if manifest.project_type != ProjectType::NoCode && *clickhouse_enabled {
                     setup_clickhouse(project_path, &manifest).await?;
                 }
 
+                #[cfg(feature = "postgres")]
                 let (relationships, postgres_indexes) = manifest
                     .storage
                     .create_relationships_and_indexes(
@@ -265,6 +357,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                     )
                     .await?;
 
+                #[allow(unused_mut)]
                 let mut dependencies: Vec<ContractEventDependencies> =
                     ContractEventDependencies::parse(&manifest);
 
@@ -302,12 +395,15 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                 }
 
                 // TODO if graphql isn't up yet, and we apply this on graphql wont refresh we need to handle this
+                #[cfg(feature = "postgres")]
                 PostgresIndexResult::apply_indexes(postgres_indexes).await?;
 
+                #[cfg(feature = "postgres")]
                 if !relationships.is_empty() {
                     // TODO if graphql isn't up yet, and we apply this on graphql wont refresh we
                     // need to handle this
                     info!("Applying constraints relationships back to the database as historic resync is complete");
+
                     Relationship::apply_all(&relationships).await?;
                 }
 
@@ -343,6 +439,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                 }
 
                 if manifest.has_any_live_indexing() {
+                    #[cfg(feature = "postgres")]
                     if dependencies.is_empty() {
                         dependencies =
                             ContractEventDependencies::map_from_relationships(&relationships)?;
@@ -392,7 +489,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                                 error!("Health server task failed: {:?}", e);
                             }
                         }
-                        result = shutdown_handle => {
+                        result = wait_for_shutdown_handle(shutdown_handle) => {
                             result.map_err(|e| {
                                 error!("Shutdown handler failed: {:?}", e);
                                 StartRindexerError::ShutdownHandlerFailed(e.to_string())
@@ -408,7 +505,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                                 error!("GraphQL server task failed: {:?}", e);
                             }
                         }
-                        result = shutdown_handle => {
+                        result = wait_for_shutdown_handle(shutdown_handle) => {
                             result.map_err(|e| {
                                 error!("Shutdown handler failed: {:?}", e);
                                 StartRindexerError::ShutdownHandlerFailed(e.to_string())
@@ -424,7 +521,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                                 error!("Health server task failed: {:?}", e);
                             }
                         }
-                        result = shutdown_handle => {
+                        result = wait_for_shutdown_handle(shutdown_handle) => {
                             result.map_err(|e| {
                                 error!("Shutdown handler failed: {:?}", e);
                                 StartRindexerError::ShutdownHandlerFailed(e.to_string())
@@ -434,7 +531,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                 }
                 (None, None, shutdown_handle) => {
                     info!("Waiting for shutdown signal...");
-                    shutdown_handle.await.map_err(|e| {
+                    wait_for_shutdown_handle(shutdown_handle).await.map_err(|e| {
                         error!("Shutdown handler failed: {:?}", e);
                         StartRindexerError::ShutdownHandlerFailed(e.to_string())
                     })?;
@@ -456,6 +553,10 @@ pub struct StartNoCodeDetails<'a> {
     pub indexing_details: IndexerNoCodeDetails,
     pub graphql_details: GraphqlOverrideSettings,
     pub watch: bool,
+    /// Optional sender the embedding host supplies to observe RPC endpoint
+    /// failover events (`Switched`/`Degraded`/`Recovered`) across every
+    /// network. Urls in the events are credential-redacted.
+    pub rpc_endpoint_events: Option<tokio::sync::broadcast::Sender<RpcEndpointEvent>>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -474,4 +575,22 @@ pub async fn start_rindexer_no_code(
     let start_details = setup_no_code(details).await?;
 
     start_rindexer(start_details).await.map_err(StartRindexerNoCode::StartRindexerError)
+}
+
+#[cfg(all(test, not(feature = "graphql")))]
+mod feature_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn graphql_request_fails_before_startup_without_feature() {
+        let result = start_rindexer(StartDetails {
+            manifest_path: &PathBuf::from("missing/rindexer.yaml"),
+            indexing_details: None,
+            graphql_details: GraphqlOverrideSettings { enabled: true, override_port: None },
+            cron_scheduler_handle: None,
+            watch: false,
+        })
+        .await;
+        assert!(matches!(result, Err(StartRindexerError::GraphqlFeatureDisabled)));
+    }
 }

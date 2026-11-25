@@ -1,8 +1,8 @@
-use crate::database::generate::compact_table_name_if_needed;
-use crate::helpers::parse_solidity_integer_type;
+#![cfg_attr(not(feature = "postgres"), allow(dead_code))]
 use crate::{
     abi::{ABIInput, GenerateAbiPropertiesType},
-    helpers::camel_to_snake,
+    database::generate::compact_table_name_if_needed,
+    helpers::{camel_to_snake, parse_solidity_integer_type},
 };
 
 fn generate_columns(inputs: &[ABIInput], property_type: &GenerateAbiPropertiesType) -> Vec<String> {
@@ -44,6 +44,32 @@ pub fn generate_reorg_block_hashes_table_sql() -> String {
         PRIMARY KEY (network, block_number)
     );"#
     .to_string()
+}
+
+/// One row per table operation applied to one log. The insert and the
+/// arithmetic commit together (`ON CONFLICT DO NOTHING`), so a crash that
+/// retries the log does not add or subtract again. `derived_table` and
+/// `op_ordinal` are part of the key because one log drives several
+/// operations (a transfer both credits `$to` and debits `$from`).
+/// `block_number` is not part of the key; a reorg deletes the range so the
+/// same log can be applied again if it is re-included.
+pub fn generate_table_op_claim_table_sql() -> String {
+    // `setup_postgres` also creates the schema. The claim path runs on its
+    // own in tests and on a database created before custom tables existed,
+    // so the schema has to be created here too.
+    r#"CREATE SCHEMA IF NOT EXISTS rindexer_internal;
+    CREATE TABLE IF NOT EXISTS rindexer_internal.table_op_claim (
+        network VARCHAR(50) NOT NULL,
+        tx_hash CHAR(66) NOT NULL,
+        log_index BIGINT NOT NULL,
+        derived_table VARCHAR(200) NOT NULL,
+        op_ordinal INTEGER NOT NULL,
+        block_number BIGINT NOT NULL,
+        PRIMARY KEY (network, tx_hash, log_index, derived_table, op_ordinal)
+    );
+    CREATE INDEX IF NOT EXISTS idx_table_op_claim_reorg
+        ON rindexer_internal.table_op_claim (network, block_number);"#
+        .to_string()
 }
 
 pub fn generate_derived_op_log_table_sql() -> String {
@@ -88,6 +114,7 @@ pub fn generate_internal_cron_table_name(
 }
 
 /// Generate internal table name for tracking cron sync state (without shortening).
+#[cfg(feature = "clickhouse")]
 pub fn generate_internal_cron_table_name_no_shorten(
     schema_name: &str,
     table_name: &str,
