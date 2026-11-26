@@ -1813,9 +1813,9 @@ if let Some(ch) = clickhouse {
         };
 
         // Update the in-memory window after all DB changes succeed.
-        // When canonical blocks are available (parent-hash detection), overwrite with corrected hashes.
+        // When canonical blocks are available (RPC hash detection), overwrite with corrected hashes.
         // When canonical blocks are empty (removed-logs / ExEx detection), remove stale entries
-        // so the next parent-hash check doesn't immediately re-trigger.
+        // so the next reorg hash check doesn't immediately re-trigger.
         if !canonical.is_empty() {
             window.update_range(&canonical);
         } else {

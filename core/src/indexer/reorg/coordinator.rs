@@ -19,6 +19,20 @@ use tracing::{debug, info, warn};
 /// Balances write frequency against data-loss risk on crash.
 const FLUSH_INTERVAL: u64 = 50;
 
+enum MismatchKind {
+    HeadReplaced,
+    ParentMismatch,
+}
+
+impl MismatchKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MismatchKind::HeadReplaced => "Head",
+            MismatchKind::ParentMismatch => "Parent",
+        }
+    }
+}
+
 pub struct ReorgCoordinator {
     network: String,
     window: BlockChainWindow,
@@ -38,10 +52,10 @@ pub struct ReorgCoordinator {
     /// expected to pre-filter out `None`-valued entries at construction time.
     streams_clients: Vec<Arc<Option<StreamsClients>>>,
     blocks_since_flush: u64,
-    /// When `Some(watermark)`, parent-hash validation is suspended following
+    /// When `Some(watermark)`, reorg hash validation is suspended following
     /// an RPC endpoint switch. A lagging replacement endpoint can serve
     /// different-but-canonical hashes for blocks the previous endpoint
-    /// already validated; treating those as parent-hash mismatches would
+    /// already validated; treating those as hash mismatches would
     /// trigger a spurious rollback (DB deletes + stream retractions). While
     /// suspended, tips at or below the watermark (the last validated window
     /// block at switch time) are ignored; the first tip past it revalidates
@@ -76,7 +90,7 @@ impl ReorgCoordinator {
         })
     }
 
-    /// Suspend parent-hash validation because the provider failed over to a
+    /// Suspend reorg hash validation because the provider failed over to a
     /// different RPC endpoint. The watermark is the last validated window
     /// block: tips at or below it are ignored (a lagging replacement
     /// endpoint must not be compared against blocks the previous endpoint
@@ -134,6 +148,22 @@ impl ReorgCoordinator {
             }
         }
 
+        // Only a height the window already holds matters: a new height (`None`) or the same
+        // hash again falls through to parent validation, while a different hash at a stored
+        // height means the head was replaced, which is a reorg.
+        if let Some(&(stored_block_hash, _)) = self.window.get(block_number) {
+            if block_hash != stored_block_hash {
+                return self
+                    .handle_mismatch(
+                        block_number,
+                        stored_block_hash,
+                        block_hash,
+                        MismatchKind::HeadReplaced,
+                    )
+                    .await;
+            }
+        }
+
         match self.window.validate_parent(block_number, parent_hash) {
             ParentValidation::Valid => {
                 self.window.insert(block_number, block_hash, parent_hash);
@@ -179,7 +209,12 @@ impl ReorgCoordinator {
                                 {
                                     ParentValidation::Mismatch { expected, got } => {
                                         return self
-                                            .handle_mismatch(block_number, expected, got)
+                                            .handle_mismatch(
+                                                block_number,
+                                                expected,
+                                                got,
+                                                MismatchKind::ParentMismatch,
+                                            )
                                             .await;
                                     }
                                     _ => {
@@ -205,13 +240,14 @@ impl ReorgCoordinator {
                 self.insert_or_detect_reorg(block_number, block_hash, parent_hash).await
             }
             ParentValidation::Mismatch { expected, got } => {
-                self.handle_mismatch(block_number, expected, got).await
+                self.handle_mismatch(block_number, expected, got, MismatchKind::ParentMismatch)
+                    .await
             }
         }
     }
 
     /// The new endpoint's tip passed the suspension watermark: revalidate the
-    /// whole window against its canonical view before resuming parent-hash
+    /// whole window against its canonical view before resuming reorg hash
     /// validation.
     ///
     /// - Every window hash the new endpoint confirms → resume cleanly.
@@ -322,7 +358,8 @@ impl ReorgCoordinator {
                 Ok(None)
             }
             ParentValidation::Mismatch { expected, got } => {
-                self.handle_mismatch(block_number, expected, got).await
+                self.handle_mismatch(block_number, expected, got, MismatchKind::ParentMismatch)
+                    .await
             }
         }
     }
@@ -363,19 +400,21 @@ impl ReorgCoordinator {
         }
     }
 
-    /// Common path for parent-hash mismatch: log, find fork point, return ReorgTask.
+    /// Common path for hash mismatch: log, find fork point, return ReorgTask.
     async fn handle_mismatch(
         &mut self,
         block_number: u64,
         expected: B256,
         got: B256,
+        kind: MismatchKind,
     ) -> anyhow::Result<Option<ReorgTask>> {
         warn!(
             network = %self.network,
             block_number,
             %expected,
             %got,
-            "Parent hash mismatch — reorg detected"
+            "{} hash mismatch — reorg detected",
+            kind.as_str()
         );
         metrics::record_reorg_detection_source(&self.network, "rpc");
 
@@ -879,7 +918,7 @@ mod tests {
     }
 
     // ======================================================================
-    // Endpoint-switch suspension of parent-hash validation
+    // Endpoint-switch suspension of reorg hash validation
     //
     // Failing over near the tip can hand the window different-but-canonical
     // hashes from a lagging replacement endpoint. These tests lock in the
@@ -1327,6 +1366,79 @@ mod tests {
         assert_eq!(task.fork_point, 101);
         assert_eq!(task.detection_point, 110);
         assert_eq!(task.event_tables.len(), 1);
+    }
+
+    // ======================================================================
+    // Same-height head replacement
+    //
+    // A head at a height already in the window is replaced by a sibling with
+    // the same parent. Parent-hash validation alone cannot see this, so the
+    // stored hash at that height must be compared too.
+    // ======================================================================
+
+    #[tokio::test]
+    async fn test_same_height_different_hash_is_detected_as_reorg() {
+        // A later poll reports a different hash at a height the window already
+        // holds, with the same parent: a 1-block sibling reorg where 12 = A is
+        // replaced by 12 = B, both children of 11. `validate_parent` only checks
+        // block 11, so before the fix this passed as Valid and `window.insert`
+        // silently overwrote A with B, keeping A's rows in the database.
+        //
+        // The provider's canonical chain is 10, 11, 12 = B (hash(12)).
+        let canonical: Vec<AnyRpcBlock> =
+            (10..=12).map(|n| make_canonical_block(n, hash(n as u8), hash(n as u8 - 1))).collect();
+        let provider: Arc<dyn ChainProvider> =
+            Arc::new(MockChainProvider::new(1).with_blocks(canonical));
+
+        let window = make_window_with_blocks(&[(10, 10, 9), (11, 11, 10)]);
+        let mut coordinator = make_coordinator_with_provider(window, provider);
+
+        // Two sibling heads at height 12, both children of 11: A was seen first,
+        // B is the canonical one the provider now returns.
+        let head_a = hash(13);
+        let head_b = hash(12);
+
+        // First poll sees head 12 = A; its parent matches 11, so it is clean.
+        let first = coordinator.on_new_block(12, head_a, hash(11)).await.unwrap();
+        assert!(first.is_none(), "first insert should be clean");
+        assert!(coordinator.window.get(12).is_some(), "block 12 should be in window");
+
+        // Second poll at the SAME height and parent, but a different head (B).
+        // It must not be an idempotent overwrite: a reorg is reported, the fork
+        // point is 12 (11 still matches canonical), and A is not overwritten
+        // before the rollback runs.
+        let second = coordinator.on_new_block(12, head_b, hash(11)).await.unwrap();
+        let task = second.expect("a replaced head must be detected");
+        assert_eq!(task.fork_point, 12, "window matches canonical through 11");
+        assert_eq!(task.detection_point, 12);
+        assert_eq!(coordinator.window.get(12), Some(&(head_a, hash(11))));
+    }
+
+    #[tokio::test]
+    async fn test_replaced_head_finds_deeper_fork_point() {
+        // A replaced head is not always a one-block reorg. The window holds
+        // 10, 11, 12, and the chain then replaces both 11 and 12 (11' and 12').
+        // The poll for 12' hits the head-replaced check first, and the fork
+        // point must still come from comparing the window with the chain: 11,
+        // not the polled height 12.
+        let new_11 = hash(21);
+        let new_12 = hash(22);
+        let canonical: Vec<AnyRpcBlock> = vec![
+            make_canonical_block(10, hash(10), hash(9)),
+            make_canonical_block(11, new_11, hash(10)),
+            make_canonical_block(12, new_12, new_11),
+        ];
+        let provider: Arc<dyn ChainProvider> =
+            Arc::new(MockChainProvider::new(1).with_blocks(canonical));
+
+        let window = make_window_with_blocks(&[(10, 10, 9), (11, 11, 10), (12, 12, 11)]);
+        let mut coordinator = make_coordinator_with_provider(window, provider);
+
+        let result = coordinator.on_new_block(12, new_12, new_11).await.unwrap();
+        let task = result.expect("a deep reorg (2 blocks) must be detected");
+        assert_eq!(task.fork_point, 11, "only 10 still matches canonical");
+        assert_eq!(task.detection_point, 12);
+        assert_eq!(coordinator.window.get(12), Some(&(hash(12), hash(11))));
     }
 
     // ======================================================================

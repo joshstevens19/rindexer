@@ -512,7 +512,7 @@ async fn live_indexing_for_contract_event_dependencies(
         let iteration_start = Instant::now();
 
         // A probe can fail the transport over between iterations. Suspend
-        // parent-hash validation before the next tip is compared against the
+        // reorg hash validation before the next tip is compared against the
         // window the previous endpoint built.
         if switch_watcher.switched(cached_provider.as_ref()) {
             if let Some(coordinator) = reorg_coordinator.as_ref() {

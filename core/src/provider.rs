@@ -85,7 +85,7 @@ pub trait ChainProvider: Send + Sync + Debug {
     /// Monotonic count of endpoint failovers performed by the underlying
     /// transport since boot. The indexing loops poll this to notice a switch
     /// and reset endpoint-specific state (block range shrink state, the
-    /// reorg parent-hash window). Always 0 for single-endpoint providers.
+    /// reorg hash window). Always 0 for single-endpoint providers.
     fn endpoint_switches(&self) -> u64 {
         0
     }
