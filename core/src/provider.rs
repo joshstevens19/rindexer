@@ -824,6 +824,17 @@ impl JsonRpcCachedProvider {
         Self::mock_with_asserter_and_filtering(chain_id, Some(address_filtering))
     }
 
+    #[cfg(all(test, feature = "hypersync"))]
+    pub fn mock_with_shared_tip_logs(
+        chain_id: u64,
+        shared_tip_logs: Arc<SharedTipLogs>,
+    ) -> (Arc<Self>, Asserter) {
+        let (cached, asserter) = Self::mock_with_asserter(chain_id);
+        let mut cached = Arc::into_inner(cached).expect("a freshly built mock has one owner");
+        cached.shared_tip_logs = Some(shared_tip_logs);
+        (Arc::new(cached), asserter)
+    }
+
     #[cfg(test)]
     fn mock_with_asserter_and_filtering(
         chain_id: u64,

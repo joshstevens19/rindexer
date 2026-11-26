@@ -1,6 +1,10 @@
 //! RPC-specific metrics helpers.
 
-use super::definitions::{RPC_REQUESTS_IN_FLIGHT, RPC_REQUESTS_TOTAL, RPC_REQUEST_DURATION};
+use super::definitions::{
+    HYPERSYNC_ARCHIVE_HEIGHT, HYPERSYNC_HEAD_FALLBACK_TOTAL,
+    HYPERSYNC_HEIGHT_STREAM_RECONNECTS_TOTAL, RPC_REQUESTS_IN_FLIGHT, RPC_REQUESTS_TOTAL,
+    RPC_REQUEST_DURATION,
+};
 use super::timer::TimerGuard;
 
 /// Record a completed RPC request.
@@ -25,6 +29,21 @@ pub fn record_rpc_error(network: &str, method: &str, duration_secs: f64) {
 /// Create a timer for an RPC request. Records duration on drop.
 pub fn time_rpc_request<'a>(network: &str, method: &str) -> TimerGuard<'a> {
     TimerGuard::new(&RPC_REQUEST_DURATION, &[network, method])
+}
+
+/// Record the archive height pushed by a HyperSync height stream.
+pub fn set_hypersync_archive_height(network: &str, height: u64) {
+    HYPERSYNC_ARCHIVE_HEIGHT.with_label_values(&[network]).set(height as f64);
+}
+
+/// Record a HyperSync height stream reconnect.
+pub fn record_hypersync_stream_reconnect(network: &str) {
+    HYPERSYNC_HEIGHT_STREAM_RECONNECTS_TOTAL.with_label_values(&[network]).inc();
+}
+
+/// Record a head-range log request that fell back from HyperSync to RPC.
+pub fn record_hypersync_head_fallback(network: &str, reason: &str) {
+    HYPERSYNC_HEAD_FALLBACK_TOTAL.with_label_values(&[network, reason]).inc();
 }
 
 /// Increment in-flight RPC requests for a network.

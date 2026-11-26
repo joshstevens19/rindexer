@@ -95,7 +95,7 @@ pub async fn execute_migrations_for_indexer_sql(
             // Run migrations on every raw event table that exists — the same
             // predicate DDL creation uses (include_events plus table events)
             let raw_events: Vec<_> =
-                events.iter().filter(|e| contract.stores_raw_events(&e.name)).collect();
+                events.iter().filter(|e| contract.stores_raw_events(e.abi_name())).collect();
 
             for event_info in raw_events {
                 let table_name = format!("{}.{}", schema_name, camel_to_snake(&event_info.name));

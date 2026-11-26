@@ -467,6 +467,17 @@ storage:
         assert!(diff.changes.iter().any(
             |c| matches!(c, ManifestChange::NetworkConfigChanged(name) if name == "ethereum")
         ));
+
+        // Changing `for` changes where head logs come from, so it restarts too.
+        let live_yaml = BASE_MANIFEST.replace(
+            "rpc: https://eth.rpc.example.com",
+            "rpc: https://eth.rpc.example.com\n    hypersync:\n      for: realtime",
+        );
+        let live = manifest_from_yaml(&live_yaml);
+        let diff = compute_diff(&new, &live);
+        assert!(diff.changes.iter().any(
+            |c| matches!(c, ManifestChange::NetworkConfigChanged(name) if name == "ethereum")
+        ));
     }
 
     #[test]
@@ -524,6 +535,17 @@ storage:
         let diff = compute_diff(&old, &new);
 
         assert!(diff.changes.iter().any(|c| matches!(c, ManifestChange::ConfigChanged)));
+        assert!(matches!(diff.action, ReloadAction::HotApply));
+    }
+
+    #[test]
+    fn graphql_cors_change_is_picked_up() {
+        let old = manifest_from_yaml(BASE_MANIFEST);
+        let new = manifest_from_yaml(&format!(
+            "{BASE_MANIFEST}graphql:\n  cors:\n    allowed_origins:\n      - https://app.example\n"
+        ));
+        let diff = compute_diff(&old, &new);
+        assert!(diff.changes.iter().any(|c| matches!(c, ManifestChange::GraphqlChanged)));
         assert!(matches!(diff.action, ReloadAction::HotApply));
     }
 

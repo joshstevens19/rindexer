@@ -105,3 +105,39 @@ graphql:
   filter_only_on_indexed_columns: true // [!code focus]
 ```
 
+## cors.allowed_origins
+
+By default the GraphQL server sends `Access-Control-Allow-Origin: *`, so a browser on any site can call it. Set `cors.allowed_origins` to restrict that to a list of origins. Leave the field out, or omit `allowed_origins`, and every origin is still allowed.
+
+An empty list allows no cross-origin browser calls. Do not put `*` in the list — that is not a wildcard here. Omit the field instead.
+
+```yaml
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+contracts:
+  - name: RocketPoolETH
+    details:
+      - network: ethereum
+        address: "0xae78736cd615f374d3085123a210448e74fc6393"
+        start_block: 18600000
+        end_block: 18718056
+    abi: ./abis/RocketTokenRETH.abi.json
+    include_events:
+      - Transfer
+      - Approval
+graphql:
+  cors:
+    allowed_origins: # [!code focus]
+      - https://app.example.com # [!code focus]
+      - http://localhost:3000 # [!code focus]
+```
+

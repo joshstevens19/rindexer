@@ -3586,6 +3586,90 @@ mod tests {
         batch
     }
 
+    /// Runs the live loop over a HyperSync-wrapped RPC provider with the shared tip cache on,
+    /// where the cache and HyperSync answer the tip with different logs, and returns the first
+    /// batch delivered.
+    #[cfg(feature = "hypersync")]
+    async fn first_tip_batch_behind_hypersync(
+        realtime: bool,
+        network: &str,
+    ) -> (Vec<Log>, Arc<ScriptedTipSource>) {
+        let source = ScriptedTipSource::new();
+        source.script(TIP, vec![(Duration::ZERO, Ok(vec![tip_log(7)]))]);
+        let tip_logs = SharedTipLogs::new(network, source.clone(), settings());
+        let (rpc, asserter) = JsonRpcCachedProvider::mock_with_shared_tip_logs(1, tip_logs);
+        asserter.push_success(&busy_tip());
+
+        let mut provider =
+            crate::hypersync::test_support::realtime_provider_serving(rpc, &tip_log(0));
+        if !realtime {
+            provider.disable_head_serving();
+        }
+        let provider: Arc<dyn ChainProvider> = Arc::new(provider);
+
+        let filter = stream_filter(TIP);
+        let topic_id = filter.event_signature();
+        let reorg_safe_distance = U64::ZERO;
+        let cancel_token = CancellationToken::new();
+        let (tx, mut rx) = mpsc::channel(4);
+        let registry = EventCallbackRegistry::default();
+        let stream = live_indexing_stream(
+            false,
+            BlockClock::new(None, None, provider.clone()),
+            provider.clone(),
+            &tx,
+            U64::from(TIP - 1),
+            &topic_id,
+            &reorg_safe_distance,
+            filter,
+            "test",
+            network,
+            false,
+            None,
+            cancel_token.clone(),
+            None,
+            #[cfg(feature = "postgres")]
+            None,
+            #[cfg(feature = "clickhouse")]
+            None,
+            &registry,
+            None,
+        );
+        let first_batch = async {
+            let batch = rx.recv().await.expect("the live loop sends a batch");
+            cancel_token.cancel();
+            batch.expect("a batch rather than an error").logs
+        };
+        let (_, logs) = tokio::time::timeout(Duration::from_secs(30), async {
+            tokio::join!(stream, first_batch)
+        })
+        .await
+        .expect("the live loop stops after its first batch");
+
+        (logs, source)
+    }
+
+    /// `hypersync.for: realtime` must supply live tips itself: the default shared tip cache
+    /// reads from the RPC node and would bypass HyperSync.
+    #[cfg(feature = "hypersync")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn realtime_hypersync_supplies_the_live_tip_with_shared_tip_logs_enabled() {
+        let (logs, rpc_source) = first_tip_batch_behind_hypersync(true, "hypersync-rt").await;
+
+        assert_eq!(block_and_index(&logs), vec![(Some(TIP), Some(0))], "the HyperSync log");
+        assert!(rpc_source.calls().is_empty(), "the shared RPC fetch must not run");
+    }
+
+    /// With `for: backfill` live tips keep coming from the shared RPC fetch.
+    #[cfg(feature = "hypersync")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn backfill_hypersync_keeps_the_shared_tip_logs() {
+        let (logs, rpc_source) = first_tip_batch_behind_hypersync(false, "hypersync-bf").await;
+
+        assert_eq!(block_and_index(&logs), vec![(Some(TIP), Some(7))], "the shared RPC log");
+        assert_eq!(rpc_source.calls(), vec![TIP]);
+    }
+
     #[tokio::test(start_paused = true)]
     async fn live_tip_window_is_served_from_shared_cache() {
         let net = "live-tip-served";
