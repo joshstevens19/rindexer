@@ -50,7 +50,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
-/// Metadata for a processed block, used for reorg detection via parent hash chain validation.
+/// Metadata for a processed block, used for reorg detection via hash chain validation.
 #[allow(dead_code)]
 pub struct BlockMeta {
     pub hash: B256,
@@ -1256,7 +1256,7 @@ async fn fetch_tip_window(
 }
 
 /// Polls a provider's endpoint switch counter so the live loop can reset
-/// endpoint-specific state and suspend parent-hash validation after a failover.
+/// endpoint-specific state and suspend reorg hash validation after a failover.
 pub(crate) struct EndpointSwitchWatcher {
     last_seen: u64,
 }
@@ -1343,9 +1343,9 @@ async fn live_indexing_stream(
     }
 
     // Local cache of recent block metadata (hash, parent_hash, timestamp).
-    // Used for: (1) cheap timestamp lookups for logs, (2) reorg detection via parent hash
-    // chain validation. 1024 entries at ~100KB memory cost and would cover worst case scenariots
-    // for rollups having long-mechanisms like Polygon 1 epoch.
+    // Used for: (1) cheap timestamp lookups for logs, (2) reorg detection via hash chain validation.
+    // 1024 entries at ~100KB memory cost and would cover worst case scenariots for rollups having
+    // long-mechanisms like Polygon 1 epoch.
     let mut block_cache: LruCache<u64, BlockMeta> = LruCache::new(NonZeroUsize::new(1024).unwrap());
 
     loop {
@@ -1478,7 +1478,7 @@ async fn live_indexing_stream(
                         }
                     }
 
-                    // Reorg detection via coordinator (parent hash validation)
+                    // Reorg detection via coordinator (hash validation)
                     if let Some(coordinator) = reorg_coordinator.as_ref() {
                         let log_prefix = format!(
                             "{} - {}",

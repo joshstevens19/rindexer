@@ -274,7 +274,7 @@ pub async fn native_transfer_block_fetch(
         let latest_block = publisher.get_latest_block().await;
 
         // A failover inside get_latest_block means `latest_block` already
-        // comes from the replacement. Suspend before parent-hash validation
+        // comes from the replacement. Suspend before reorg hash validation
         // so a lagging endpoint cannot force a spurious rollback.
         if switch_watcher.switched(publisher.as_ref()) {
             if let Some(coordinator) = reorg_coordinator.as_ref() {

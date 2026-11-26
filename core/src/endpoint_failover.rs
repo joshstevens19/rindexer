@@ -16,7 +16,7 @@
 //! indexer that is dangerous, not just wasteful — a lagging endpoint can win
 //! the race for `eth_getBlockByNumber(latest)` and hand the reorg coordinator
 //! an alternating view of the chain tip, which manifests as spurious
-//! parent-hash mismatches (and it multiplies compute-unit spend on `eth_getLogs`
+//! head- or parent-hash mismatches (and it multiplies compute-unit spend on `eth_getLogs`
 //! volume). Its sequential mode only applies to an explicit method allow-list,
 //! and `active_transport_count = 1` suffers a cold-start tie (untried and
 //! all-failing transports both score 0.0, so a dead primary is never
