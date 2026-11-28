@@ -213,9 +213,8 @@ fn generate_csv_instance(
     event_info: &EventInfo,
     csv: &Option<CsvDetails>,
 ) -> Result<Code, CreateCsvFileForEvent> {
-    let csv_relative = csv.as_ref().map_or(PathBuf::from("generated_csv"), |c| {
-        PathBuf::from(c.path.strip_prefix("./").unwrap())
-    });
+    let csv_relative =
+        csv.as_ref().map_or(PathBuf::from("generated_csv"), |c| super::csv_path(&c.path));
 
     let csv_path = project_path.join(&csv_relative);
 
