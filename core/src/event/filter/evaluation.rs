@@ -385,6 +385,11 @@ fn evaluate_arithmetic_expr_with_table<'a>(
     }
 }
 
+/// Whether a value that did not fit U256 is a negative integer (e.g. "-100").
+fn is_negative_integer(s: &str) -> bool {
+    string_to_i256(s).is_ok_and(|v| v.is_negative())
+}
+
 /// Helper to get kind from a string value (for literals)
 fn get_kind_from_str(s: &str) -> String {
     // Check if it looks like an address
@@ -428,6 +433,24 @@ fn evaluate_condition_with_table<'a>(
                 ComparisonOperator::Lte => l <= r,
             };
             Ok(result)
+        }
+        (ArithmeticValue::Other { value: lv, .. }, ArithmeticValue::Number(_))
+            if is_negative_integer(lv) =>
+        {
+            // A negative left side is always below the unsigned right side
+            Ok(matches!(
+                condition.operator,
+                ComparisonOperator::Ne | ComparisonOperator::Lt | ComparisonOperator::Lte
+            ))
+        }
+        (ArithmeticValue::Number(_), ArithmeticValue::Other { value: rv, .. })
+            if is_negative_integer(rv) =>
+        {
+            // An unsigned left side is always above a negative right side
+            Ok(matches!(
+                condition.operator,
+                ComparisonOperator::Ne | ComparisonOperator::Gt | ComparisonOperator::Gte
+            ))
         }
         (ArithmeticValue::Other { kind: lk, value: lv }, ArithmeticValue::Number(r)) => {
             // Left is non-numeric, right is numeric - compare as before
@@ -1015,6 +1038,28 @@ mod tests {
 
         let expr_fail = parse("value > 0").unwrap();
         assert!(!evaluate(&expr_fail, &data).unwrap());
+    }
+
+    #[test]
+    fn test_evaluate_non_negative_value_against_negative_literal() {
+        // int24 tick above zero compared with a negative bound
+        for data in [json!({"value": "50"}), json!({"value": 50}), json!({"value": "0"})] {
+            assert!(evaluate(&parse("value > -100").unwrap(), &data).unwrap());
+            assert!(evaluate(&parse("value >= -100").unwrap(), &data).unwrap());
+            assert!(evaluate(&parse("value != -100").unwrap(), &data).unwrap());
+            assert!(!evaluate(&parse("value < -100").unwrap(), &data).unwrap());
+            assert!(!evaluate(&parse("value <= -100").unwrap(), &data).unwrap());
+            assert!(!evaluate(&parse("value == -100").unwrap(), &data).unwrap());
+            assert!(evaluate(&parse("value > -100 && value < 100").unwrap(), &data).unwrap());
+            assert!(evaluate(&parse("-100 < value").unwrap(), &data).unwrap());
+            assert!(!evaluate(&parse("-100 >= value").unwrap(), &data).unwrap());
+        }
+
+        // negative values keep comparing as signed integers
+        let data = json!({"value": "-50"});
+        assert!(evaluate(&parse("value > -100").unwrap(), &data).unwrap());
+        assert!(!evaluate(&parse("value < -100").unwrap(), &data).unwrap());
+        assert!(evaluate(&parse("value == -50").unwrap(), &data).unwrap());
     }
 
     #[test]
