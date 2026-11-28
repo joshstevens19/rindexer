@@ -9,6 +9,11 @@ mod trace_bindings;
 
 pub use docker::generate_docker_file;
 
+/// Return a CSV path safe to use in generated code.
+pub(crate) fn csv_path(path: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(path.strip_prefix("./").unwrap_or(path))
+}
+
 /// Header for generated files. Emitted once at the top of each generated `.rs` file.
 pub(crate) const GENERATED_FILE_HEADER: &str = "\
 // THIS IS A GENERATED FILE. DO NOT MODIFY MANUALLY.
@@ -18,3 +23,17 @@ pub(crate) const GENERATED_FILE_HEADER: &str = "\
 
 /// Standard `#![allow]` attributes for generated binding files.
 pub(crate) const GENERATED_ALLOW_ATTRS: &str = "#![allow(non_camel_case_types, clippy::enum_variant_names, clippy::too_many_arguments, clippy::upper_case_acronyms, clippy::type_complexity, dead_code)]";
+
+#[cfg(test)]
+mod tests {
+    use super::csv_path;
+    use std::path::PathBuf;
+
+    #[test]
+    fn csv_path_tolerates_missing_dot_slash() {
+        assert_eq!(csv_path("./generated_csv"), PathBuf::from("generated_csv"));
+        assert_eq!(csv_path("generated_csv"), PathBuf::from("generated_csv"));
+        assert_eq!(csv_path("data/csv"), PathBuf::from("data/csv"));
+        assert_eq!(csv_path("/tmp/csv"), PathBuf::from("/tmp/csv"));
+    }
+}

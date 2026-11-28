@@ -1418,7 +1418,7 @@ async fn process_contract(
         if contract.generate_csv.unwrap_or(true) && manifest.storage.csv_enabled() {
             let csv_path =
                 manifest.storage.csv.as_ref().map_or(PathBuf::from("generated_csv"), |c| {
-                    PathBuf::from(c.path.strip_prefix("./").unwrap())
+                    crate::generator::csv_path(&c.path)
                 });
 
             let headers: Vec<String> = event_info.csv_headers_for_event();
@@ -1569,7 +1569,7 @@ pub async fn process_trace_events(
         if contract.generate_csv.unwrap_or(true) && manifest.storage.csv_enabled() {
             let csv_path =
                 manifest.storage.csv.as_ref().map_or(PathBuf::from("generated_csv"), |c| {
-                    PathBuf::from(c.path.strip_prefix("./").unwrap())
+                    crate::generator::csv_path(&c.path)
                 });
 
             let headers: Vec<String> = event_info.csv_headers_for_event();
